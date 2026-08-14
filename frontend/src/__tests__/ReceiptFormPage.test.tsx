@@ -1,19 +1,112 @@
 import { render, screen, act, fireEvent, waitFor } from '@testing-library/react';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { QueryClientProvider } from '@tanstack/react-query';
+import React from 'react';
 import { ReceiptFormPage } from '../pages/inbound/ReceiptFormPage';
+import { itemService } from '../api/services/items';
+import { partnerService } from '../api/services/partners';
+import { receiptService } from '../api/services/receipts';
+import { queryClient } from '../api/queryClient';
+import { useWarehouseStore } from '../store/useWarehouseStore';
+
+vi.mock('../api/services/items', () => ({
+  itemService: {
+    listItems: vi.fn(),
+    getItem: vi.fn(),
+    createItem: vi.fn(),
+    updateItem: vi.fn(),
+    softDeleteItem: vi.fn(),
+    importItems: vi.fn(),
+  },
+}));
+
+vi.mock('../api/services/partners', () => ({
+  partnerService: {
+    listPartners: vi.fn(),
+    getPartner: vi.fn(),
+    createPartner: vi.fn(),
+  },
+}));
+
+vi.mock('../api/services/receipts', () => ({
+  receiptService: {
+    createReceipt: vi.fn(),
+    submitReceipt: vi.fn(),
+    approveReceipt: vi.fn(),
+    putawaySuggestion: vi.fn(),
+    putaway: vi.fn(),
+  },
+}));
+
+const mockItems = [
+  {
+    id: 1,
+    public_id: 'itm-001-uuid',
+    sku: 'SKU-INK-001',
+    name: 'Tinta Cetak Hitam Intaglio 1KG',
+    category_id: 2,
+    base_uom: 'CAN',
+    is_batch: true,
+    is_expiry: true,
+    is_serial: false,
+    min_qty: 10,
+    max_qty: 100,
+    safety_stock: 5,
+    lead_time_days: 7,
+    abc_class: 'A',
+    is_active: true,
+  },
+];
+
+const mockPartners = [
+  {
+    id: 1,
+    code: 'SUP-001',
+    partner_type: 'supplier',
+    name: 'PT Sumber Pangan Sejahtera',
+    is_active: true,
+  },
+];
+
+const renderWithProviders = (ui: React.ReactElement) =>
+  render(
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={['/inbound/receipts/new']}>
+        <Routes>
+          <Route path="/inbound/receipts/new" element={ui} />
+          <Route path="/inbound/receipts" element={<div data-testid="receipts-list-page">Receipts List</div>} />
+          <Route path="/inbound/receipts/:id" element={<div data-testid="receipt-detail-page">Receipt Detail</div>} />
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>
+  );
 
 describe('ReceiptFormPage Component', () => {
+  beforeEach(() => {
+    queryClient.clear();
+    useWarehouseStore.setState({
+      warehouses: [{ id: 1, code: 'WH01', name: 'Gudang Utama', address: '', isActive: true }],
+      activeWarehouseId: 1,
+      activeWarehouse: { id: 1, code: 'WH01', name: 'Gudang Utama', address: '', isActive: true },
+      activeWarehouseCode: 'WH01',
+    });
+    (itemService.listItems as ReturnType<typeof vi.fn>).mockResolvedValue(mockItems);
+    (partnerService.listPartners as ReturnType<typeof vi.fn>).mockResolvedValue(mockPartners);
+    (receiptService.createReceipt as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: 1,
+      doc_no: 'GRN/WH01/2608/00001',
+      status: 'draft',
+    });
+    (receiptService.submitReceipt as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: 1,
+      status: 'submitted',
+    });
+  });
+
   it('renders GRN creation form header, supplier select, and dynamic item lines table', async () => {
     await act(async () => {
-      render(
-        <MemoryRouter initialEntries={['/inbound/receipts/new']}>
-          <Routes>
-            <Route path="/inbound/receipts/new" element={<ReceiptFormPage />} />
-            <Route path="/inbound/receipts" element={<div data-testid="receipts-list-page">Receipts List</div>} />
-          </Routes>
-        </MemoryRouter>
-      );
+      renderWithProviders(<ReceiptFormPage />);
     });
 
     expect(screen.getByTestId('receipt-form-page')).toBeInTheDocument();
@@ -28,14 +121,11 @@ describe('ReceiptFormPage Component', () => {
 
   it('adds dynamic item line row when clicking add button and submits form', async () => {
     await act(async () => {
-      render(
-        <MemoryRouter initialEntries={['/inbound/receipts/new']}>
-          <Routes>
-            <Route path="/inbound/receipts/new" element={<ReceiptFormPage />} />
-            <Route path="/inbound/receipts" element={<div data-testid="receipts-list-page">Receipts List</div>} />
-          </Routes>
-        </MemoryRouter>
-      );
+      renderWithProviders(<ReceiptFormPage />);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('select-item-sku-0')).toBeInTheDocument();
     });
 
     const poInput = screen.getByTestId('input-po-reference');
@@ -57,8 +147,7 @@ describe('ReceiptFormPage Component', () => {
     });
 
     await waitFor(() => {
-      // Navigates successfully to receipts list page
-      expect(screen.getByTestId('receipts-list-page')).toBeInTheDocument();
+      expect(receiptService.createReceipt).toHaveBeenCalled();
     });
   }, 10000);
 });

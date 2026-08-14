@@ -14,7 +14,6 @@ import {
   DatePicker,
   Table,
   Tag,
-  notification,
 } from 'antd';
 import {
   ArrowLeftOutlined,
@@ -27,15 +26,15 @@ import {
 import { useForm, useFieldArray, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useNavigate, useParams } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import dayjs from 'dayjs';
-import {
-  receiptFormSchema,
-  ReceiptFormValues,
-  MOCK_GRN_LIST,
-} from '../../types/inbound';
-import { MOCK_ITEMS } from '../../types/item';
-import { MOCK_PARTNERS } from '../../types/partner';
-import { MOCK_WAREHOUSES } from '../../types/location';
+import { receiptFormSchema, ReceiptFormValues } from '../../types/inbound';
+import { useWarehouseStore } from '../../store/useWarehouseStore';
+import { useMutationWithToast } from '../../hooks/useMutationWithToast';
+import { itemService } from '../../api/services/items';
+import { partnerService } from '../../api/services/partners';
+import { receiptService } from '../../api/services/receipts';
+import { mapItemDTO } from '../../api/mappers';
 
 const { Title, Paragraph, Text } = Typography;
 
@@ -43,39 +42,39 @@ export const ReceiptFormPage: React.FC = () => {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
   const isEditMode = Boolean(id && id !== 'new');
+  const { warehouses, activeWarehouseId } = useWarehouseStore();
 
-  const existingGrn = isEditMode ? MOCK_GRN_LIST.find((g) => g.id === Number(id)) : null;
+  const { data: items = [] } = useQuery({
+    queryKey: ['items'],
+    queryFn: async () => {
+      const dtos = await itemService.listItems();
+      return dtos.map(mapItemDTO);
+    },
+  });
+
+  const { data: partners = [] } = useQuery({
+    queryKey: ['partners'],
+    queryFn: async () => {
+      const dtos = await partnerService.listPartners();
+      return dtos.filter((d) => d.partner_type === 'supplier');
+    },
+  });
 
   const {
     control,
     handleSubmit,
     setValue,
-    reset,
     watch,
     formState: { errors, isSubmitting },
   } = useForm<ReceiptFormValues>({
     resolver: zodResolver(receiptFormSchema),
     defaultValues: {
       poReference: '',
-      supplierId: 1,
-      warehouseId: 1,
+      supplierId: undefined,
+      warehouseId: activeWarehouseId,
       receiptDate: dayjs().format('YYYY-MM-DD'),
       notes: '',
-      items: [
-        {
-          itemId: 1,
-          sku: 'SKU-INK-001',
-          itemName: 'Tinta Cetak Hitam Intaglio 1KG',
-          uom: 'CAN',
-          qtyExpected: 10,
-          qtyReceived: 10,
-          qtyRejected: 0,
-          isExpiry: true,
-          batchNo: 'LOT-2026-001',
-          expiryDate: dayjs().add(1, 'year').format('YYYY-MM-DD'),
-          targetLocationCode: 'JKT01-Z1-R01-B01',
-        },
-      ],
+      items: [],
     },
   });
 
@@ -87,33 +86,33 @@ export const ReceiptFormPage: React.FC = () => {
   // Watch items for field array changes
   const watchItems = watch('items');
 
+  // Auto-select first supplier once partners load
   useEffect(() => {
-    if (existingGrn) {
-      reset({
-        poReference: existingGrn.poReference,
-        supplierId: existingGrn.supplierId,
-        warehouseId: existingGrn.warehouseId,
-        receiptDate: existingGrn.receiptDate,
-        notes: existingGrn.notes || '',
-        items: existingGrn.items.map((i) => ({
-          itemId: i.itemId,
-          sku: i.sku,
-          itemName: i.itemName,
-          uom: i.uom,
-          qtyExpected: i.qtyExpected,
-          qtyReceived: i.qtyReceived,
-          qtyRejected: i.qtyRejected,
-          isExpiry: i.expiryDate ? true : false,
-          batchNo: i.batchNo || '',
-          expiryDate: i.expiryDate || '',
-          targetLocationCode: i.targetLocationCode || '',
-        })),
+    if (partners.length > 0 && !watch('supplierId')) {
+      setValue('supplierId', partners[0].id);
+    }
+  }, [partners]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (items.length > 0 && fields.length === 0) {
+      append({
+        itemId: items[0].id,
+        sku: items[0].sku,
+        itemName: items[0].name,
+        uom: items[0].baseUom,
+        qtyExpected: 1,
+        qtyReceived: 1,
+        qtyRejected: 0,
+        isExpiry: items[0].isExpiry,
+        batchNo: items[0].isExpiry ? 'LOT-NEW-01' : '',
+        expiryDate: items[0].isExpiry ? dayjs().add(1, 'year').format('YYYY-MM-DD') : '',
+        targetLocationCode: '',
       });
     }
-  }, [existingGrn, reset]);
+  }, [items]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleItemSelect = (index: number, selectedItemId: number) => {
-    const foundItem = MOCK_ITEMS.find((i) => i.id === selectedItemId);
+    const foundItem = items.find((i) => i.id === selectedItemId);
     if (foundItem) {
       setValue(`items.${index}.itemId`, foundItem.id);
       setValue(`items.${index}.sku`, foundItem.sku);
@@ -128,27 +127,79 @@ export const ReceiptFormPage: React.FC = () => {
   };
 
   const handleAddRow = () => {
+    if (items.length === 0) return;
+    const first = items[0];
     append({
-      itemId: MOCK_ITEMS[0].id,
-      sku: MOCK_ITEMS[0].sku,
-      itemName: MOCK_ITEMS[0].name,
-      uom: MOCK_ITEMS[0].baseUom,
+      itemId: first.id,
+      sku: first.sku,
+      itemName: first.name,
+      uom: first.baseUom,
       qtyExpected: 1,
       qtyReceived: 1,
       qtyRejected: 0,
-      isExpiry: MOCK_ITEMS[0].isExpiry,
-      batchNo: MOCK_ITEMS[0].isExpiry ? 'LOT-NEW-01' : '',
-      expiryDate: MOCK_ITEMS[0].isExpiry ? dayjs().add(1, 'year').format('YYYY-MM-DD') : '',
-      targetLocationCode: 'JKT01-STG-IN',
+      isExpiry: first.isExpiry,
+      batchNo: first.isExpiry ? 'LOT-NEW-01' : '',
+      expiryDate: first.isExpiry ? dayjs().add(1, 'year').format('YYYY-MM-DD') : '',
+      targetLocationCode: '',
     });
   };
 
+  const createMutation = useMutationWithToast({
+    mutationFn: async (values: ReceiptFormValues) => {
+      const receipt = await receiptService.createReceipt({
+        warehouse_id: values.warehouseId,
+        partner_id: values.supplierId || null,
+        notes: values.poReference
+          ? `PO Ref: ${values.poReference}${values.notes ? ` | ${values.notes}` : ''}`
+          : values.notes || undefined,
+        lines: values.items.map((line) => ({
+          item_id: line.itemId,
+          qty: line.qtyReceived || line.qtyExpected,
+          uom: line.uom || undefined,
+          batch_no: line.batchNo || undefined,
+          expiry_date: line.expiryDate || null,
+          status: line.qtyRejected > 0 ? 'damaged' : 'available',
+          notes: undefined,
+        })),
+      });
+      return receipt;
+    },
+    successTitle: 'Draft GRN Berhasil Disimpan',
+    successMessage: 'Dokumen penerimaan telah dibuat di backend.',
+    invalidateKeys: [['receipts']],
+  });
+
+  const submitMutation = useMutationWithToast({
+    mutationFn: async (values: ReceiptFormValues) => {
+      const receipt = await receiptService.createReceipt({
+        warehouse_id: values.warehouseId,
+        partner_id: values.supplierId || null,
+        notes: values.poReference
+          ? `PO Ref: ${values.poReference}${values.notes ? ` | ${values.notes}` : ''}`
+          : values.notes || undefined,
+        lines: values.items.map((line) => ({
+          item_id: line.itemId,
+          qty: line.qtyReceived || line.qtyExpected,
+          uom: line.uom || undefined,
+          batch_no: line.batchNo || undefined,
+          expiry_date: line.expiryDate || null,
+          status: line.qtyRejected > 0 ? 'damaged' : 'available',
+          notes: undefined,
+        })),
+      });
+      await receiptService.submitReceipt(receipt.id);
+      return receipt;
+    },
+    successTitle: 'Dokumen GRN Berhasil Diajukan',
+    successMessage: 'Dokumen penerimaan telah dibuat dan diajukan untuk persetujuan.',
+    invalidateKeys: [['receipts']],
+  });
+
   const onSubmit = (values: ReceiptFormValues, submitStatus: 'draft' | 'submitted') => {
-    notification.success({
-      message: submitStatus === 'submitted' ? 'Dokumen GRN Berhasil Diajukan' : 'Draft GRN Berhasil Disimpan',
-      description: `Dokumen penerimaan PO Ref: ${values.poReference} berstatus '${submitStatus}'.`,
+    const mut = submitStatus === 'submitted' ? submitMutation : createMutation;
+    mut.mutate(values, {
+      onSuccess: (receipt) => navigate(`/inbound/receipts/${receipt.id}`),
     });
-    navigate('/inbound/receipts');
   };
 
   const tableColumns = [
@@ -161,21 +212,21 @@ export const ReceiptFormPage: React.FC = () => {
           <Controller
             name={`items.${index}.itemId`}
             control={control}
-            render={({ field }) => (
-              <Select
-                {...field}
-                style={{ width: '100%' }}
-                options={MOCK_ITEMS.map((item) => ({
-                  value: item.id,
-                  label: `${item.sku} - ${item.name}`,
-                }))}
-                onChange={(val) => {
-                  field.onChange(val);
-                  handleItemSelect(index, val);
-                }}
-                data-testid={`select-item-sku-${index}`}
-              />
-            )}
+                  render={({ field }) => (
+                    <Select
+                      {...field}
+                      style={{ width: '100%' }}
+                      options={items.map((item) => ({
+                        value: item.id,
+                        label: `${item.sku} - ${item.name}`,
+                      }))}
+                      onChange={(val) => {
+                        field.onChange(val);
+                        handleItemSelect(index, val);
+                      }}
+                      data-testid={`select-item-sku-${index}`}
+                    />
+                  )}
           />
           {watchItems?.[index]?.isExpiry && (
             <Tag color="warning" style={{ marginTop: 4, fontSize: 10 }}>
@@ -350,7 +401,7 @@ export const ReceiptFormPage: React.FC = () => {
               <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/inbound/receipts')} />
               <div>
                 <Title level={3} style={{ margin: 0 }}>
-                  {isEditMode ? `Edit Draft Dokumen GRN: ${existingGrn?.documentNo}` : 'Buat Dokumen Penerimaan (GRN) Baru'}
+                  {isEditMode ? `Edit Draft Dokumen GRN: #${id}` : 'Buat Dokumen Penerimaan (GRN) Baru'}
                 </Title>
                 <Paragraph type="secondary" style={{ margin: 0 }}>
                   Input data fisik penerimaan dari Pemasok, nomor batch, tanggal kedaluwarsa, dan inspeksi QC.
@@ -389,18 +440,18 @@ export const ReceiptFormPage: React.FC = () => {
                 <Controller
                   name="supplierId"
                   control={control}
-                  render={({ field }) => (
-                    <Select
-                      {...field}
-                      style={{ width: '100%' }}
-                      options={MOCK_PARTNERS.filter((p) => p.type === 'supplier').map((s) => ({
-                        value: s.id,
-                        label: s.name,
-                      }))}
-                      placeholder="Pilih Pemasok"
-                      data-testid="select-supplier"
-                    />
-                  )}
+              render={({ field }) => (
+                <Select
+                  {...field}
+                  style={{ width: '100%' }}
+                  options={partners.map((s) => ({
+                    value: s.id,
+                    label: s.name,
+                  }))}
+                  placeholder="Pilih Pemasok"
+                  data-testid="select-supplier"
+                />
+              )}
                 />
                 {errors.supplierId && <Text type="danger" style={{ fontSize: 12 }}>{errors.supplierId.message}</Text>}
               </Col>
@@ -416,7 +467,7 @@ export const ReceiptFormPage: React.FC = () => {
                     <Select
                       {...field}
                       style={{ width: '100%' }}
-                      options={MOCK_WAREHOUSES.map((w) => ({ value: w.id, label: w.name }))}
+                      options={warehouses.map((w) => ({ value: w.id, label: `${w.code} - ${w.name}` }))}
                       placeholder="Pilih Gudang Tujuan"
                       data-testid="select-warehouse"
                     />

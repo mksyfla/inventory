@@ -13,13 +13,16 @@ import {
   Alert,
   Divider,
   Tabs,
-  notification,
 } from 'antd';
 import { ArrowLeftOutlined, SaveOutlined, AppstoreOutlined, BarcodeOutlined } from '@ant-design/icons';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useNavigate, useParams } from 'react-router-dom';
-import { itemSchema, ItemFormValues, MOCK_ITEMS, MOCK_CATEGORIES } from '../../types/item';
+import { useQuery } from '@tanstack/react-query';
+import { itemSchema, ItemFormValues, MOCK_CATEGORIES } from '../../types/item';
+import { useMutationWithToast } from '../../hooks/useMutationWithToast';
+import { itemService } from '../../api/services/items';
+import { mapItemDTO } from '../../api/mappers';
 import { ItemUomTab } from '../../components/master/ItemUomTab';
 
 const { Title, Paragraph, Text } = Typography;
@@ -28,8 +31,16 @@ export const ItemFormPage: React.FC = () => {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
   const isEditMode = Boolean(id && id !== 'new');
+  const itemId = isEditMode ? Number(id) : undefined;
 
-  const existingItem = isEditMode ? MOCK_ITEMS.find((i) => i.id === Number(id)) : null;
+  const { data: existingItem } = useQuery({
+    queryKey: ['item', itemId],
+    queryFn: async () => {
+      const dto = await itemService.getItem(itemId as number);
+      return mapItemDTO(dto.item);
+    },
+    enabled: Boolean(isEditMode && itemId),
+  });
 
   const {
     control,
@@ -72,7 +83,7 @@ export const ItemFormPage: React.FC = () => {
       reset({
         sku: existingItem.sku,
         name: existingItem.name,
-        categoryId: existingItem.categoryId,
+        categoryId: existingItem.categoryId || 1,
         baseUom: existingItem.baseUom,
         minQty: existingItem.minQty,
         maxQty: existingItem.maxQty,
@@ -86,14 +97,35 @@ export const ItemFormPage: React.FC = () => {
     }
   }, [existingItem, reset]);
 
-  const onSubmit = (values: ItemFormValues) => {
-    notification.success({
-      message: isEditMode ? 'SKU Berhasil Diperbarui' : 'SKU Baru Berhasil Dibuat',
-      description: `Data barang ${values.sku} - ${values.name} telah disimpan ke database master.`,
-      placement: 'topRight',
-    });
+  const saveMutation = useMutationWithToast({
+    mutationFn: async (values: ItemFormValues) => {
+      const payload = {
+        sku: values.sku,
+        name: values.name,
+        category_id: values.categoryId || null,
+        base_uom: values.baseUom,
+        is_batch: values.isBatch,
+        is_expiry: values.isExpiry,
+        is_serial: values.isSerial,
+        min_qty: values.minQty,
+        max_qty: values.maxQty ?? null,
+        safety_stock: values.safetyStock,
+        lead_time_days: values.leadTimeDays,
+        abc_class: values.abcClass ?? null,
+      };
+      if (isEditMode && itemId) {
+        return itemService.updateItem(itemId, payload);
+      }
+      return itemService.createItem(payload);
+    },
+    successTitle: isEditMode ? 'SKU Berhasil Diperbarui' : 'SKU Baru Berhasil Dibuat',
+    successMessage: 'Data barang telah disimpan ke database master.',
+    invalidateKeys: [['items'], ['item']],
+    onSuccess: () => navigate('/master/items'),
+  });
 
-    navigate('/master/items');
+  const onSubmit = (values: ItemFormValues) => {
+    saveMutation.mutate(values);
   };
 
   const formTabContent = (

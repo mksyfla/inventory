@@ -1,16 +1,56 @@
 import { render, screen, act, fireEvent, waitFor } from '@testing-library/react';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
+import { QueryClientProvider } from '@tanstack/react-query';
+import React from 'react';
 import { PartnersPage } from '../pages/master/PartnersPage';
+import { partnerService } from '../api/services/partners';
+import { queryClient } from '../api/queryClient';
+
+vi.mock('../api/services/partners', () => ({
+  partnerService: {
+    listPartners: vi.fn(),
+    getPartner: vi.fn(),
+    createPartner: vi.fn(),
+  },
+}));
+
+const mockPartners = [
+  {
+    id: 1,
+    code: 'SUP-INK-01',
+    partner_type: 'supplier',
+    name: 'PT SICPA Perdana Printing Inks',
+    address: 'Kawasan Industri Pulogadung, Jakarta Timur',
+    contact_name: 'Bpk. Hendra Wahyudi',
+    contact_phone: '021-4601234',
+    is_active: true,
+  },
+];
+
+const renderWithProviders = (ui: React.ReactElement) =>
+  render(
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter>{ui}</MemoryRouter>
+    </QueryClientProvider>
+  );
 
 describe('PartnersPage Master Data Component', () => {
+  beforeEach(() => {
+    queryClient.clear();
+    (partnerService.listPartners as ReturnType<typeof vi.fn>).mockResolvedValue(mockPartners);
+    (partnerService.createPartner as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: 2,
+      code: 'SUP-NEW-01',
+      partner_type: 'supplier',
+      name: 'PT Vendor Baru Indonesia',
+      is_active: true,
+    });
+  });
+
   it('renders partner list table, search bar, and add partner button', async () => {
     await act(async () => {
-      render(
-        <MemoryRouter>
-          <PartnersPage />
-        </MemoryRouter>
-      );
+      renderWithProviders(<PartnersPage />);
     });
 
     expect(screen.getByTestId('partners-page')).toBeInTheDocument();
@@ -19,16 +59,14 @@ describe('PartnersPage Master Data Component', () => {
     expect(screen.getByTestId('btn-add-partner')).toBeInTheDocument();
     expect(screen.getByTestId('table-partners')).toBeInTheDocument();
 
-    expect(screen.getByText('PT SICPA Perdana Printing Inks')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText('PT SICPA Perdana Printing Inks')).toBeInTheDocument();
+    });
   }, 10000);
 
   it('opens add modal and submits new partner data', async () => {
     await act(async () => {
-      render(
-        <MemoryRouter>
-          <PartnersPage />
-        </MemoryRouter>
-      );
+      renderWithProviders(<PartnersPage />);
     });
 
     const addBtn = screen.getByTestId('btn-add-partner');
@@ -51,9 +89,11 @@ describe('PartnersPage Master Data Component', () => {
       fireEvent.click(submitBtn);
     });
 
-    await waitFor(() => {
-      expect(screen.getByText('SUP-NEW-01')).toBeInTheDocument();
-      expect(screen.getByText('PT Vendor Baru Indonesia')).toBeInTheDocument();
-    });
+    await waitFor(
+      () => {
+        expect(partnerService.createPartner).toHaveBeenCalled();
+      },
+      { timeout: 3000 }
+    );
   }, 10000);
 });

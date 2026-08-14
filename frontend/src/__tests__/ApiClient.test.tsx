@@ -11,6 +11,7 @@ describe('ApiClient Interceptors & Headers', () => {
     });
     useWarehouseStore.setState({
       activeWarehouseId: 1,
+      activeWarehouseCode: 'WH01',
     });
   });
 
@@ -25,7 +26,7 @@ describe('ApiClient Interceptors & Headers', () => {
     });
 
     expect(config.headers.Authorization).toBe('Bearer test-jwt-token-123');
-    expect(config.headers['X-Warehouse-Id']).toBe('1');
+    expect(config.headers['X-Warehouse-Id']).toBe('WH01');
     expect(config.headers['X-Request-Id']).toBeDefined();
     expect(typeof config.headers['X-Request-Id']).toBe('string');
   });

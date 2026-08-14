@@ -6,7 +6,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuthStore } from '../store/useAuthStore';
-import { MOCK_CURRENT_USER } from '../types/user';
+import { authService } from '../api/services/auth';
 
 const { Title, Text } = Typography;
 
@@ -26,7 +26,7 @@ export const LoginPage: React.FC = () => {
 
   const navigate = useNavigate();
   const location = useLocation();
-  const login = useAuthStore((state) => state.login);
+  const setSession = useAuthStore((state) => state.setSession);
 
   const from = (location.state as any)?.from?.pathname || '/dashboard';
 
@@ -37,8 +37,8 @@ export const LoginPage: React.FC = () => {
   } = useForm<LoginFormValues>({
     resolver: zodResolver(loginSchema),
     defaultValues: {
-      username: 'dipo.inventory',
-      password: 'password123',
+      username: 'admin',
+      password: 'Admin@123456',
       rememberMe: true,
     },
   });
@@ -48,20 +48,11 @@ export const LoginPage: React.FC = () => {
     setErrorMsg(null);
 
     try {
-      // Simulate API Auth Request
-      await new Promise((resolve) => setTimeout(resolve, 800));
-
-      if (values.username === 'invalid') {
-        setErrorMsg('Username atau kata sandi tidak sesuai.');
-        setLoading(false);
-        return;
-      }
-
-      // Successful Auth
-      login(MOCK_CURRENT_USER, 'jwt-access-token-live-999', 'jwt-refresh-token-live-888');
+      const pair = await authService.login({ username: values.username, password: values.password });
+      setSession(pair.access_token, pair.refresh_token);
       navigate(from, { replace: true });
     } catch {
-      setErrorMsg('Terjadi kesalahan pada server saat login.');
+      setErrorMsg('Username atau kata sandi tidak sesuai.');
     } finally {
       setLoading(false);
     }

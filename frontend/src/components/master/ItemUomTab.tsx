@@ -11,12 +11,14 @@ import {
   Alert,
   Popconfirm,
   Tooltip,
-  notification,
 } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, BarcodeOutlined, SwapOutlined } from '@ant-design/icons';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { ItemUom, itemUomSchema, ItemUomFormValues, MOCK_ITEM_UOMS } from '../../types/uom';
+import { useQuery } from '@tanstack/react-query';
+import { ItemUom, itemUomSchema, ItemUomFormValues } from '../../types/uom';
+import { itemService } from '../../api/services/items';
+import { mapItemUoMDTO } from '../../api/mappers';
 
 const { Text, Title, Paragraph } = Typography;
 
@@ -25,10 +27,24 @@ export interface ItemUomTabProps {
   baseUom: string;
 }
 
-export const ItemUomTab: React.FC<ItemUomTabProps> = ({ itemId = 1, baseUom = 'PCS' }) => {
-  const [uomList, setUomList] = useState<ItemUom[]>(() => {
-    return MOCK_ITEM_UOMS.filter((u) => u.itemId === itemId);
+export const ItemUomTab: React.FC<ItemUomTabProps> = ({ itemId, baseUom = 'PCS' }) => {
+  const { data: apiUoms = [] } = useQuery({
+    queryKey: ['item', itemId, 'uoms'],
+    queryFn: async () => {
+      const dto = await itemService.getItem(itemId as number);
+      return dto.uoms.map(mapItemUoMDTO);
+    },
+    enabled: Boolean(itemId),
   });
+
+  const [uomList, setUomList] = useState<ItemUom[]>([]);
+
+  // Keep local list in sync with the fetched UoMs (no standalone UoM CRUD endpoints).
+  React.useEffect(() => {
+    if (apiUoms.length > 0) {
+      setUomList(apiUoms);
+    }
+  }, [apiUoms]);
 
   const [modalOpen, setModalOpen] = useState<boolean>(false);
   const [editingUom, setEditingUom] = useState<ItemUom | null>(null);
@@ -71,18 +87,10 @@ export const ItemUomTab: React.FC<ItemUomTabProps> = ({ itemId = 1, baseUom = 'P
   const handleDeleteUom = (id: number) => {
     const target = uomList.find((u) => u.id === id);
     if (target?.isBaseUom) {
-      notification.error({
-        message: 'Gagal Menghapus Satuan',
-        description: 'Satuan dasar (Base UoM) tidak dapat dihapus dari daftar konversi.',
-      });
       return;
     }
 
     setUomList((prev) => prev.filter((u) => u.id !== id));
-    notification.success({
-      message: 'Satuan Berhasil Dihapus',
-      description: `Konversi ${target?.uomName} telah dihapus.`,
-    });
   };
 
   const onSubmit = (values: ItemUomFormValues) => {
@@ -126,19 +134,17 @@ export const ItemUomTab: React.FC<ItemUomTabProps> = ({ itemId = 1, baseUom = 'P
             : u
         )
       );
-      notification.success({ message: 'Konversi Satuan Berhasil Diperbarui' });
     } else {
       // Create new UoM
       const newUom: ItemUom = {
         id: Date.now(),
-        itemId,
+        itemId: itemId || 0,
         uomName: values.uomName,
         conversionFactor: values.conversionFactor,
         barcode: values.barcode || undefined,
         isBaseUom: false,
       };
       setUomList((prev) => [...prev, newUom]);
-      notification.success({ message: 'Konversi Satuan Baru Berhasil Ditambahkan' });
     }
 
     setModalOpen(false);

@@ -1,8 +1,32 @@
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 import { LoginPage } from '../pages/LoginPage';
 import { useAuthStore } from '../store/useAuthStore';
+import { authService } from '../api/services/auth';
+import { useWarehouseStore } from '../store/useWarehouseStore';
+
+vi.mock('../api/services/auth', () => ({
+  authService: {
+    login: vi.fn(),
+    register: vi.fn(),
+    refresh: vi.fn(),
+    logout: vi.fn(),
+  },
+}));
+
+// A real JWT whose payload contains user_id 1, username "dipo.inventory",
+// roles [sysadmin], warehouses [WH01] — decoded by setSession.
+const b64 = (s: string) => btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const MOCK_ACCESS_TOKEN = `${b64('{"alg":"HS256"}')}.${b64(
+  JSON.stringify({
+    user_id: 1,
+    username: 'dipo.inventory',
+    roles: ['sysadmin'],
+    warehouses: ['WH01'],
+    exp: Math.floor(Date.now() / 1000) + 3600,
+  })
+)}.${b64('sig')}`;
 
 describe('LoginPage Component', () => {
   beforeEach(() => {
@@ -10,6 +34,17 @@ describe('LoginPage Component', () => {
       isAuthenticated: false,
       user: null,
       token: null,
+    });
+    useWarehouseStore.setState({
+      warehouses: [],
+      activeWarehouseId: 0,
+      activeWarehouse: undefined,
+      activeWarehouseCode: undefined,
+    });
+    (authService.login as ReturnType<typeof vi.fn>).mockResolvedValue({
+      access_token: MOCK_ACCESS_TOKEN,
+      refresh_token: 'refresh-abc',
+      token_type: 'Bearer',
     });
   });
 
