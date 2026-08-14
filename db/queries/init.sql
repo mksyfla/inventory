@@ -207,6 +207,19 @@ DO UPDATE SET qty_onhand = EXCLUDED.qty_onhand, qty_reserved = EXCLUDED.qty_rese
 INSERT INTO inv.stock_movements (item_id, location_id, batch_id, status, movement_type, qty, qty_after, doc_line_id, doc_no, created_by, moved_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW());
 
+-- ============ Dokumen (Fase 5.1 - BR-04) ============
+
+-- name: UpsertDocumentNumber :one
+-- Atomic sequence bump: returns the next sequence for (doc_type, period).
+-- Must run inside the same transaction that creates the document (FSD 4.3).
+-- Period is computed by the application from the same clock as the document
+-- number so the sequence and the formatted number can never diverge.
+INSERT INTO doc.document_numbers (doc_type, period, last_seq)
+VALUES ($1, $2, 1)
+ON CONFLICT (doc_type, period)
+DO UPDATE SET last_seq = doc.document_numbers.last_seq + 1
+RETURNING last_seq;
+
 -- ============ RBAC (Fase 2.4) ============
 
 -- name: ListRolePermissions :many

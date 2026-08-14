@@ -615,6 +615,17 @@ components:
             in: path
             required: true
             schema: { type: integer, format: int64, minimum: 1 }
+        IdempotencyKey:
+            name: Idempotency-Key
+            in: header
+            required: false
+            description: |
+                UUIDv4 idempotency key (FSD 4.5) — wajib pada semua POST yang
+                memposting stok. Kunci disimpan di `doc.documents.idempotency_key`
+                (UNIQUE); kirim ulang kunci yang sama mengembalikan dokumen yang
+                sudah ada (200) alih-alih membuat duplikat. Nilai non-UUIDv4
+                ditolak dengan 422 ERR_VALIDATION oleh middleware idempotensi.
+            schema: { type: string, format: uuid, example: 3f7c1b2e-6a4d-4f8e-9c2b-1d5a8e7f3a41 }
 
     responses:
         Error:

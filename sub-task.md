@@ -162,7 +162,7 @@ Jantung dari aplikasi inventori. Mengimplementasikan double-entry ledger pembuku
 
 Mengatur alur hidup seluruh transaksi dokumen, penomoran terpusat yang aman, dan penegakan idempoten transaksi.
 
-- [ ] **5.1 Generator Nomor Dokumen Terpusat (BR-04)**
+- [x] **5.1 Generator Nomor Dokumen Terpusat (BR-04)**
     - Membuat fungsi generator nomor dokumen yang berjalan secara atomik menggunakan transaksi database:
         ```sql
         INSERT INTO doc.document_numbers (doc_type, period, last_seq)
@@ -173,15 +173,15 @@ Mengatur alur hidup seluruh transaksi dokumen, penomoran terpusat yang aman, dan
         ```
     - Format keluaran nomor: `{TIPE}/{KODE_GUDANG}/{YYMM}/{SEQ:5}` (contoh: `GRN/JKT01/2608/00042`).
 
-- [ ] **5.2 Implementasi State Machine Dokumen**
+- [x] **5.2 Implementasi State Machine Dokumen**
     - Menerapkan transisi status dokumen: `draft -> submitted -> approved -> in_progress -> completed -> cancelled`.
     - Mencegah perubahan status tidak valid (transisi di luar diagram status harus mengembalikan error `ERR_INVALID_STATE`).
     - Dokumen yang berstatus `completed` bersifat final and mutlak tidak boleh diubah atau dibatalkan (BR-10). Koreksi wajib menggunakan dokumen pembalik/retur.
 
-- [ ] **5.3 Penegakan Aturan Pembuat & Penyetuju (Maker-Checker - BR-05)**
+- [x] **5.3 Penegakan Aturan Pembuat & Penyetuju (Maker-Checker - BR-05)**
     - Pada usecase persetujuan dokumen (`/approve`), lakukan validasi untuk memastikan user ID penyetuju tidak sama dengan user ID pembuat dokumen (`approved_by != created_by`). Jika sama, gagalkan and kembalikan error `ERR_SELF_APPROVAL`.
 
-- [ ] **5.4 Mekanisme Idempotensi API**
+- [x] **5.4 Mekanisme Idempotensi API**
     - Membuat middleware idempotensi yang mengevaluasi header `Idempotency-Key` (UUID).
     - Menyimpan kunci idempotensi pada kolom `doc.documents.idempotency_key` (UNIQUE).
     - Jika kunci yang sama dikirim ulang, server mengembalikan status HTTP 200 beserta payload dokumen yang sudah ada di database, alih-alih membuat transaksi baru.

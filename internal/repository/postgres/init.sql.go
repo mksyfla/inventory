@@ -1301,6 +1301,32 @@ func (q *Queries) UpdateStockBalanceQty(ctx context.Context, arg UpdateStockBala
 	return i, err
 }
 
+const upsertDocumentNumber = `-- name: UpsertDocumentNumber :one
+
+INSERT INTO doc.document_numbers (doc_type, period, last_seq)
+VALUES ($1, $2, 1)
+ON CONFLICT (doc_type, period)
+DO UPDATE SET last_seq = doc.document_numbers.last_seq + 1
+RETURNING last_seq
+`
+
+type UpsertDocumentNumberParams struct {
+	DocType interface{} `json:"doc_type"`
+	Period  string      `json:"period"`
+}
+
+// ============ Dokumen (Fase 5.1 - BR-04) ============
+// Atomic sequence bump: returns the next sequence for (doc_type, period).
+// Must run inside the same transaction that creates the document (FSD 4.3).
+// Period is computed by the application from the same clock as the document
+// number so the sequence and the formatted number can never diverge.
+func (q *Queries) UpsertDocumentNumber(ctx context.Context, arg UpsertDocumentNumberParams) (int32, error) {
+	row := q.db.QueryRow(ctx, upsertDocumentNumber, arg.DocType, arg.Period)
+	var last_seq int32
+	err := row.Scan(&last_seq)
+	return last_seq, err
+}
+
 const upsertStockBalance = `-- name: UpsertStockBalance :one
 
 INSERT INTO inv.stock_balances (item_id, location_id, batch_id, status, qty_onhand, qty_reserved, updated_at)

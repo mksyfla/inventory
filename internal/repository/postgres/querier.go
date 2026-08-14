@@ -50,6 +50,12 @@ type Querier interface {
 	UpdateLocation(ctx context.Context, arg UpdateLocationParams) (MasterLocations, error)
 	UpdatePartner(ctx context.Context, arg UpdatePartnerParams) (MasterPartners, error)
 	UpdateStockBalanceQty(ctx context.Context, arg UpdateStockBalanceQtyParams) (UpdateStockBalanceQtyRow, error)
+	// ============ Dokumen (Fase 5.1 - BR-04) ============
+	// Atomic sequence bump: returns the next sequence for (doc_type, period).
+	// Must run inside the same transaction that creates the document (FSD 4.3).
+	// Period is computed by the application from the same clock as the document
+	// number so the sequence and the formatted number can never diverge.
+	UpsertDocumentNumber(ctx context.Context, arg UpsertDocumentNumberParams) (int32, error)
 	// ============ STOCK BALANCES & MOVEMENTS ============
 	UpsertStockBalance(ctx context.Context, arg UpsertStockBalanceParams) (UpsertStockBalanceRow, error)
 	UpsertStockBalanceFull(ctx context.Context, arg UpsertStockBalanceFullParams) error
