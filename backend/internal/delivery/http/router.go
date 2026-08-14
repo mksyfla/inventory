@@ -88,7 +88,7 @@ func NewRouter(cfg ...RouterConfig) *echo.Echo {
 			// Items
 			protected.GET("/items", itemHandler.ListItems, rbacMW(c, "item", "read")...)
 			protected.POST("/items", itemHandler.CreateItem, append(rbacMW(c, "item", "write"), echoMiddleware.BodyLimit("1M"))...)
-			protected.PUT("/items/:id", itemHandler.UpdateItem, append(rbacMW(c, "item", "write"), echoMiddleware.BodyLimit("1M"))...)
+			protected.PATCH("/items/:id", itemHandler.UpdateItem, append(rbacMW(c, "item", "write"), echoMiddleware.BodyLimit("1M"))...)
 			protected.GET("/items/:id", itemHandler.GetItem, rbacMW(c, "item", "read")...)
 			protected.DELETE("/items/:id", itemHandler.SoftDeleteItem, rbacMW(c, "item", "write")...)
 			protected.POST("/items/import", itemHandler.ImportItems, append(rbacMW(c, "item", "import"), echoMiddleware.BodyLimit("10M"))...)

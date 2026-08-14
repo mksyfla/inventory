@@ -11,6 +11,27 @@ services:
             - 5432:5432
         volumes:
             - postgres_data:/var/lib/postgresql/data
+        healthcheck:
+            test: ["CMD-SHELL", "pg_isready -U user -d dbname"]
+            interval: 5s
+            timeout: 5s
+            retries: 5
+
+    # DB migrations (golang-migrate)
+    migrate:
+        container_name: inventory_migrate
+        image: migrate/migrate:v4.17.1
+        depends_on:
+            db:
+                condition: service_healthy
+        environment:
+            - MIGRATE_DATABASE_URL=postgres://user:password@db:5432/dbname?sslmode=disable
+        volumes:
+            - ./backend/db/migrations:/migrations
+        command:
+            - -path=/migrations
+            - -database=$${MIGRATE_DATABASE_URL}
+            - up
 
     # Redis Cache
     redis:

@@ -305,7 +305,7 @@ paths:
                 "403": { $ref: "#/components/responses/Error" }
                 "404": { $ref: "#/components/responses/Error" }
                 "422": { $ref: "#/components/responses/ValidationError" }
-        put:
+        patch:
             tags: [Items]
             summary: Update an item
             description: Requires `item.write`. Body limited to 1 MB.
@@ -1180,11 +1180,7 @@ components:
                         description: "Wajib, >= 0",
                     }
                 lead_time_days:
-                    {
-                        type: integer,
-                        minimum: 0,
-                        description: "Wajib, >= 0",
-                    }
+                    { type: integer, minimum: 0, description: "Wajib, >= 0" }
                 abc_class:
                     {
                         type: string,
