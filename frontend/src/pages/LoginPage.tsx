@@ -1,12 +1,13 @@
 import React, { useState } from 'react';
-import { Card, Input, Button, Typography, Alert, Checkbox, Space } from 'antd';
-import { UserOutlined, LockOutlined, SafetyOutlined, AuditOutlined } from '@ant-design/icons';
+import { Card, Input, Button, Typography, Alert, Checkbox, Space, Tag } from 'antd';
+import { UserOutlined, LockOutlined, SafetyOutlined, AuditOutlined, InfoCircleOutlined } from '@ant-design/icons';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuthStore } from '../store/useAuthStore';
-import { MOCK_CURRENT_USER } from '../types/user';
+import { loginApi } from '../api/auth';
+import { ApiErrorDetail } from '../api/types';
 
 const { Title, Text } = Typography;
 
@@ -26,7 +27,7 @@ export const LoginPage: React.FC = () => {
 
   const navigate = useNavigate();
   const location = useLocation();
-  const login = useAuthStore((state) => state.login);
+  const loginWithTokens = useAuthStore((state) => state.loginWithTokens);
 
   const from = (location.state as any)?.from?.pathname || '/dashboard';
 
@@ -48,20 +49,27 @@ export const LoginPage: React.FC = () => {
     setErrorMsg(null);
 
     try {
-      // Simulate API Auth Request
-      await new Promise((resolve) => setTimeout(resolve, 800));
+      // Direct Integration with Backend: POST /api/v1/auth/login
+      const response = await loginApi({
+        username: values.username,
+        password: values.password,
+      });
 
-      if (values.username === 'invalid') {
-        setErrorMsg('Username atau kata sandi tidak sesuai.');
-        setLoading(false);
-        return;
-      }
+      // Initialize session with returned access & refresh tokens
+      loginWithTokens(response.access_token, response.refresh_token);
 
-      // Successful Auth
-      login(MOCK_CURRENT_USER, 'jwt-access-token-live-999', 'jwt-refresh-token-live-888');
+      // Navigate to requested page or dashboard
       navigate(from, { replace: true });
-    } catch {
-      setErrorMsg('Terjadi kesalahan pada server saat login.');
+    } catch (err: any) {
+      // Map standard API error response
+      const apiErr = err as ApiErrorDetail;
+      if (apiErr?.code === 'ERR_UNAUTHENTICATED' || apiErr?.message?.toLowerCase().includes('invalid credentials')) {
+        setErrorMsg('Username atau kata sandi tidak sesuai.');
+      } else if (apiErr?.message) {
+        setErrorMsg(apiErr.message);
+      } else {
+        setErrorMsg('Terjadi kesalahan pada server saat login. Silakan coba lagi.');
+      }
     } finally {
       setLoading(false);
     }
@@ -159,9 +167,15 @@ export const LoginPage: React.FC = () => {
           </div>
 
           {/* Optional MFA / 2FA TOTP Toggle */}
+          {/* [BACKEND INTEGRATION NOTE]: 2FA/TOTP verification is kept in UI, waiting for Backend 2FA endpoint implementation */}
           {showMfa && (
             <div style={{ marginBottom: 16 }}>
-              <label style={{ display: 'block', marginBottom: 6, fontWeight: 500 }}>Kode 2FA / TOTP (6 Digit)</label>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                <label style={{ fontWeight: 500 }}>Kode 2FA / TOTP (6 Digit)</label>
+                <Tag color="orange" icon={<InfoCircleOutlined />} style={{ margin: 0, fontSize: 11 }}>
+                  Backend 2FA Segera Hadir
+                </Tag>
+              </div>
               <Controller
                 name="mfaCode"
                 control={control}
