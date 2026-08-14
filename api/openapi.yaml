@@ -1,780 +1,926 @@
 openapi: 3.1.0
 info:
-  title: SIMBAR - Sistem Manajemen Inventori
-  version: 0.2.0
-  description: |
-    API contract for Sistem Manajemen Inventori (SIMBAR) per FSD v0.1.
+    title: SIMBAR - Sistem Manajemen Inventori
+    version: 0.2.0
+    description: |
+        API contract for Sistem Manajemen Inventori (SIMBAR) per FSD v0.1.
 
-    - Base path: `/api/v1`, JSON, `Content-Type: application/json`.
-    - Protected endpoints require `Authorization: Bearer <access-token>` (JWT, 15 min)
-      and the `X-Warehouse-Id` header with a warehouse code the user is assigned to.
-    - Every response uses the `ApiResponse` envelope; errors carry a machine-readable
-      `code` (see FSD §5.4) plus optional per-field `details`.
-    - All client input failures return `422 ERR_VALIDATION` with field details.
-    - `POST /auth/login` is rate limited to 5 attempts / 15 min per IP; `POST /auth/register` to 10 / 15 min.
+        - Base path: `/api/v1`, JSON, `Content-Type: application/json`.
+        - Protected endpoints require `Authorization: Bearer <access-token>` (JWT, 15 min)
+          and the `X-Warehouse-Id` header with a warehouse code the user is assigned to.
+        - Every response uses the `ApiResponse` envelope; errors carry a machine-readable
+          `code` (see FSD §5.4) plus optional per-field `details`.
+        - All client input failures return `422 ERR_VALIDATION` with field details.
+        - `POST /auth/login` is rate limited to 5 attempts / 15 min per IP; `POST /auth/register` to 10 / 15 min.
 
 servers:
-  - url: /api/v1
-    description: Same origin (behind reverse proxy)
+    - url: /api/v1
+      description: Same origin (behind reverse proxy)
 
 tags:
-  - name: System
-  - name: Auth
-  - name: Items
-  - name: Locations
-  - name: Partners
-  - name: Stock
-  - name: API Docs
+    - name: System
+    - name: Auth
+    - name: Items
+    - name: Locations
+    - name: Partners
+    - name: Stock
+    - name: API Docs
 
 security:
-  - bearerAuth: []
-  - cookieAuth: []
+    - bearerAuth: []
+    - cookieAuth: []
 
 paths:
-  /ping:
-    get:
-      tags: [System]
-      summary: Health ping
-      security: []
-      responses:
-        '200':
-          description: pong
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/ApiResponse' }
+    /ping:
+        get:
+            tags: [System]
+            summary: Health ping
+            security: []
+            responses:
+                "200":
+                    description: pong
+                    content:
+                        application/json:
+                            schema: { $ref: "#/components/schemas/ApiResponse" }
 
-  /auth/login:
-    post:
-      tags: [Auth]
-      summary: Login and issue access + refresh tokens
-      description: |
-        Sets HttpOnly cookies on success: `access_token` (path `/`, 15 min) and
-        `refresh_token` (path `/api/v1/auth`, 7 days), SameSite=Lax, Secure over TLS.
-        The tokens are also returned in the JSON body for non-browser clients.
-      security: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/LoginRequest' }
-      responses:
-        '200':
-          description: Token pair issued (also as Set-Cookie headers)
-          headers:
-            Set-Cookie:
-              description: HttpOnly auth cookies (access_token, refresh_token)
-              schema: { type: string }
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - { $ref: '#/components/schemas/ApiResponse' }
-                  - type: object
-                    properties:
-                      data: { $ref: '#/components/schemas/TokenPair' }
-        '401':
-          $ref: '#/components/responses/Error'
-        '422':
-          $ref: '#/components/responses/ValidationError'
-        '429':
-          $ref: '#/components/responses/RateLimited'
+    /auth/login:
+        post:
+            tags: [Auth]
+            summary: Login and issue access + refresh tokens
+            description: |
+                Sets HttpOnly cookies on success: `access_token` (path `/`, 15 min) and
+                `refresh_token` (path `/api/v1/auth`, 7 days), SameSite=Lax, Secure over TLS.
+                The tokens are also returned in the JSON body for non-browser clients.
+            security: []
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema: { $ref: "#/components/schemas/LoginRequest" }
+            responses:
+                "200":
+                    description: Token pair issued (also as Set-Cookie headers)
+                    headers:
+                        Set-Cookie:
+                            description: HttpOnly auth cookies (access_token, refresh_token)
+                            schema: { type: string }
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              {
+                                                  $ref: "#/components/schemas/TokenPair",
+                                              }
+                "401":
+                    $ref: "#/components/responses/Error"
+                "422":
+                    $ref: "#/components/responses/ValidationError"
+                "429":
+                    $ref: "#/components/responses/RateLimited"
 
-  /auth/register:
-    post:
-      tags: [Auth]
-      summary: Register a new user (Argon2id password, min 12 chars)
-      security: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/RegisterRequest' }
-      responses:
-        '201':
-          description: User created
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - { $ref: '#/components/schemas/ApiResponse' }
-                  - type: object
-                    properties:
-                      data: { $ref: '#/components/schemas/RegisterResponse' }
-        '409':
-          $ref: '#/components/responses/Error'
-        '422':
-          $ref: '#/components/responses/ValidationError'
-        '429':
-          $ref: '#/components/responses/RateLimited'
+    /auth/register:
+        post:
+            tags: [Auth]
+            summary: Register a new user (Argon2id password, min 12 chars)
+            security: []
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema: { $ref: "#/components/schemas/RegisterRequest" }
+            responses:
+                "201":
+                    description: User created
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              {
+                                                  $ref: "#/components/schemas/RegisterResponse",
+                                              }
+                "409":
+                    $ref: "#/components/responses/Error"
+                "422":
+                    $ref: "#/components/responses/ValidationError"
+                "429":
+                    $ref: "#/components/responses/RateLimited"
 
-  /auth/refresh:
-    post:
-      tags: [Auth]
-      summary: Rotate refresh token and issue a new pair
-      description: |
-        Rotates the auth cookies as well: new access_token/refresh_token are
-        sent via Set-Cookie alongside the JSON body.
-      security: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/RefreshRequest' }
-      responses:
-        '200':
-          description: New token pair issued (old refresh token revoked; cookies rotated)
-          headers:
-            Set-Cookie:
-              description: Rotated HttpOnly auth cookies
-              schema: { type: string }
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - { $ref: '#/components/schemas/ApiResponse' }
-                  - type: object
-                    properties:
-                      data: { $ref: '#/components/schemas/TokenPair' }
-        '401':
-          $ref: '#/components/responses/Error'
-        '422':
-          $ref: '#/components/responses/ValidationError'
+    /auth/refresh:
+        post:
+            tags: [Auth]
+            summary: Rotate refresh token and issue a new pair
+            security: []
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema: { $ref: "#/components/schemas/RefreshRequest" }
+            responses:
+                "200":
+                    description: New token pair issued (old refresh token revoked)
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              {
+                                                  $ref: "#/components/schemas/TokenPair",
+                                              }
+                "401":
+                    $ref: "#/components/responses/Error"
+                "422":
+                    $ref: "#/components/responses/ValidationError"
 
-  /auth/logout:
-    post:
-      tags: [Auth]
-      summary: Revoke the refresh token
-      description: Expires the auth cookies (Max-Age=0) in addition to revoking the token.
-      security: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/RefreshRequest' }
-      responses:
-        '200':
-          description: Logged out (idempotent; auth cookies expired)
-          headers:
-            Set-Cookie:
-              description: Expired auth cookies
-              schema: { type: string }
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/ApiResponse' }
-        '422':
-          $ref: '#/components/responses/ValidationError'
+    /auth/logout:
+        post:
+            tags: [Auth]
+            summary: Revoke the refresh token
+            security: []
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema: { $ref: "#/components/schemas/RefreshRequest" }
+            responses:
+                "200":
+                    description: Logged out (idempotent)
+                    content:
+                        application/json:
+                            schema: { $ref: "#/components/schemas/ApiResponse" }
+                "422":
+                    $ref: "#/components/responses/ValidationError"
 
-  /items:
-    get:
-      tags: [Items]
-      summary: List all items
-      description: Requires `item.read`.
-      parameters: [{ $ref: '#/components/parameters/XWarehouseId' }]
-      responses:
-        '200':
-          description: Item list
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - { $ref: '#/components/schemas/ApiResponse' }
-                  - type: object
-                    properties:
-                      data:
-                        type: array
-                        items: { $ref: '#/components/schemas/Item' }
-        '401': { $ref: '#/components/responses/Error' }
-        '403': { $ref: '#/components/responses/Error' }
-    post:
-      tags: [Items]
-      summary: Create an item
-      description: Requires `item.write`. Body limited to 1 MB.
-      parameters: [{ $ref: '#/components/parameters/XWarehouseId' }]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/CreateItemRequest' }
-      responses:
-        '201':
-          description: Item created
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - { $ref: '#/components/schemas/ApiResponse' }
-                  - type: object
-                    properties:
-                      data: { $ref: '#/components/schemas/ItemDetail' }
-        '401': { $ref: '#/components/responses/Error' }
-        '403': { $ref: '#/components/responses/Error' }
-        '409': { $ref: '#/components/responses/Error' }
-        '422': { $ref: '#/components/responses/ValidationError' }
+    /items:
+        get:
+            tags: [Items]
+            summary: List all items
+            description: Requires `item.read`.
+            parameters: [{ $ref: "#/components/parameters/XWarehouseId" }]
+            responses:
+                "200":
+                    description: Item list
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              type: array
+                                              items:
+                                                  {
+                                                      $ref: "#/components/schemas/Item",
+                                                  }
+                "401": { $ref: "#/components/responses/Error" }
+                "403": { $ref: "#/components/responses/Error" }
+        post:
+            tags: [Items]
+            summary: Create an item
+            description: Requires `item.write`. Body limited to 1 MB.
+            parameters: [{ $ref: "#/components/parameters/XWarehouseId" }]
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            { $ref: "#/components/schemas/CreateItemRequest" }
+            responses:
+                "201":
+                    description: Item created
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              {
+                                                  $ref: "#/components/schemas/ItemDetail",
+                                              }
+                "401": { $ref: "#/components/responses/Error" }
+                "403": { $ref: "#/components/responses/Error" }
+                "409": { $ref: "#/components/responses/Error" }
+                "422": { $ref: "#/components/responses/ValidationError" }
 
-  /items/import:
-    post:
-      tags: [Items]
-      summary: Import items from CSV (async)
-      description: |
-        Requires `item.import`. Multipart upload (10 MB max) with field `file`
-        containing a CSV whose header must include `sku`, `name`, `base_uom`.
-        Returns 202 with a `job_id` immediately.
-      parameters: [{ $ref: '#/components/parameters/XWarehouseId' }]
-      requestBody:
-        required: true
-        content:
-          multipart/form-data:
-            schema:
-              type: object
-              required: [file]
-              properties:
-                file: { type: string, format: binary }
-      responses:
-        '202':
-          description: Import job queued
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - { $ref: '#/components/schemas/ApiResponse' }
-                  - type: object
-                    properties:
-                      data: { $ref: '#/components/schemas/ImportJobResponse' }
-        '401': { $ref: '#/components/responses/Error' }
-        '403': { $ref: '#/components/responses/Error' }
-        '413': { $ref: '#/components/responses/Error' }
-        '422': { $ref: '#/components/responses/ValidationError' }
+    /items/import:
+        post:
+            tags: [Items]
+            summary: Import items from CSV (async)
+            description: |
+                Requires `item.import`. Multipart upload (10 MB max) with field `file`
+                containing a CSV whose header must include `sku`, `name`, `base_uom`.
+                Returns 202 with a `job_id` immediately.
+            parameters: [{ $ref: "#/components/parameters/XWarehouseId" }]
+            requestBody:
+                required: true
+                content:
+                    multipart/form-data:
+                        schema:
+                            type: object
+                            required: [file]
+                            properties:
+                                file: { type: string, format: binary }
+            responses:
+                "202":
+                    description: Import job queued
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              {
+                                                  $ref: "#/components/schemas/ImportJobResponse",
+                                              }
+                "401": { $ref: "#/components/responses/Error" }
+                "403": { $ref: "#/components/responses/Error" }
+                "413": { $ref: "#/components/responses/Error" }
+                "422": { $ref: "#/components/responses/ValidationError" }
 
-  /items/{id}:
-    get:
-      tags: [Items]
-      summary: Get item by ID with its UoMs
-      description: Requires `item.read`.
-      parameters:
-        - { $ref: '#/components/parameters/XWarehouseId' }
-        - { $ref: '#/components/parameters/ItemID' }
-      responses:
-        '200':
-          description: Item with UoMs
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - { $ref: '#/components/schemas/ApiResponse' }
-                  - type: object
-                    properties:
-                      data:
-                        type: object
-                        properties:
-                          item: { $ref: '#/components/schemas/ItemDetail' }
-                          uoms:
-                            type: array
-                            items: { $ref: '#/components/schemas/ItemUoM' }
-        '401': { $ref: '#/components/responses/Error' }
-        '403': { $ref: '#/components/responses/Error' }
-        '404': { $ref: '#/components/responses/Error' }
-        '422': { $ref: '#/components/responses/ValidationError' }
-    put:
-      tags: [Items]
-      summary: Update an item
-      description: Requires `item.write`. Body limited to 1 MB.
-      parameters:
-        - { $ref: '#/components/parameters/XWarehouseId' }
-        - { $ref: '#/components/parameters/ItemID' }
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/UpdateItemRequest' }
-      responses:
-        '200':
-          description: Item updated
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - { $ref: '#/components/schemas/ApiResponse' }
-                  - type: object
-                    properties:
-                      data: { $ref: '#/components/schemas/ItemDetail' }
-        '401': { $ref: '#/components/responses/Error' }
-        '403': { $ref: '#/components/responses/Error' }
-        '404': { $ref: '#/components/responses/Error' }
-        '422': { $ref: '#/components/responses/ValidationError' }
-    delete:
-      tags: [Items]
-      summary: Soft-delete an item (set is_active=false)
-      description: Requires `item.write`.
-      parameters:
-        - { $ref: '#/components/parameters/XWarehouseId' }
-        - { $ref: '#/components/parameters/ItemID' }
-      responses:
-        '200':
-          description: Item deactivated
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/ApiResponse' }
-        '401': { $ref: '#/components/responses/Error' }
-        '403': { $ref: '#/components/responses/Error' }
-        '422': { $ref: '#/components/responses/ValidationError' }
+    /items/{id}:
+        get:
+            tags: [Items]
+            summary: Get item by ID with its UoMs
+            description: Requires `item.read`.
+            parameters:
+                - { $ref: "#/components/parameters/XWarehouseId" }
+                - { $ref: "#/components/parameters/ItemID" }
+            responses:
+                "200":
+                    description: Item with UoMs
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              type: object
+                                              properties:
+                                                  item:
+                                                      {
+                                                          $ref: "#/components/schemas/ItemDetail",
+                                                      }
+                                                  uoms:
+                                                      type: array
+                                                      items:
+                                                          {
+                                                              $ref: "#/components/schemas/ItemUoM",
+                                                          }
+                "401": { $ref: "#/components/responses/Error" }
+                "403": { $ref: "#/components/responses/Error" }
+                "404": { $ref: "#/components/responses/Error" }
+                "422": { $ref: "#/components/responses/ValidationError" }
+        put:
+            tags: [Items]
+            summary: Update an item
+            description: Requires `item.write`. Body limited to 1 MB.
+            parameters:
+                - { $ref: "#/components/parameters/XWarehouseId" }
+                - { $ref: "#/components/parameters/ItemID" }
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            { $ref: "#/components/schemas/UpdateItemRequest" }
+            responses:
+                "200":
+                    description: Item updated
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              {
+                                                  $ref: "#/components/schemas/ItemDetail",
+                                              }
+                "401": { $ref: "#/components/responses/Error" }
+                "403": { $ref: "#/components/responses/Error" }
+                "404": { $ref: "#/components/responses/Error" }
+                "422": { $ref: "#/components/responses/ValidationError" }
+        delete:
+            tags: [Items]
+            summary: Soft-delete an item (set is_active=false)
+            description: Requires `item.write`.
+            parameters:
+                - { $ref: "#/components/parameters/XWarehouseId" }
+                - { $ref: "#/components/parameters/ItemID" }
+            responses:
+                "200":
+                    description: Item deactivated
+                    content:
+                        application/json:
+                            schema: { $ref: "#/components/schemas/ApiResponse" }
+                "401": { $ref: "#/components/responses/Error" }
+                "403": { $ref: "#/components/responses/Error" }
+                "422": { $ref: "#/components/responses/ValidationError" }
 
-  /locations:
-    get:
-      tags: [Locations]
-      summary: List locations of a warehouse
-      description: Requires `location.read`.
-      parameters:
-        - { $ref: '#/components/parameters/XWarehouseId' }
-        - name: warehouse_id
-          in: query
-          required: true
-          description: Numeric warehouse ID (BigInt)
-          schema: { type: integer, format: int64, minimum: 1 }
-      responses:
-        '200':
-          description: Location list
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - { $ref: '#/components/schemas/ApiResponse' }
-                  - type: object
-                    properties:
-                      data:
-                        type: array
-                        items: { $ref: '#/components/schemas/Location' }
-        '401': { $ref: '#/components/responses/Error' }
-        '403': { $ref: '#/components/responses/Error' }
-        '422': { $ref: '#/components/responses/ValidationError' }
-    post:
-      tags: [Locations]
-      summary: Create a location bin
-      description: Requires `location.write`. Body limited to 1 MB.
-      parameters: [{ $ref: '#/components/parameters/XWarehouseId' }]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/CreateLocationRequest' }
-      responses:
-        '201':
-          description: Location created
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - { $ref: '#/components/schemas/ApiResponse' }
-                  - type: object
-                    properties:
-                      data: { $ref: '#/components/schemas/Location' }
-        '401': { $ref: '#/components/responses/Error' }
-        '403': { $ref: '#/components/responses/Error' }
-        '409': { $ref: '#/components/responses/Error' }
-        '422': { $ref: '#/components/responses/ValidationError' }
+    /locations:
+        get:
+            tags: [Locations]
+            summary: List locations of a warehouse
+            description: Requires `location.read`.
+            parameters:
+                - { $ref: "#/components/parameters/XWarehouseId" }
+                - name: warehouse_id
+                  in: query
+                  required: true
+                  description: Numeric warehouse ID (BigInt)
+                  schema: { type: integer, format: int64, minimum: 1 }
+            responses:
+                "200":
+                    description: Location list
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              type: array
+                                              items:
+                                                  {
+                                                      $ref: "#/components/schemas/Location",
+                                                  }
+                "401": { $ref: "#/components/responses/Error" }
+                "403": { $ref: "#/components/responses/Error" }
+                "422": { $ref: "#/components/responses/ValidationError" }
+        post:
+            tags: [Locations]
+            summary: Create a location bin
+            description: Requires `location.write`. Body limited to 1 MB.
+            parameters: [{ $ref: "#/components/parameters/XWarehouseId" }]
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            {
+                                $ref: "#/components/schemas/CreateLocationRequest",
+                            }
+            responses:
+                "201":
+                    description: Location created
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              {
+                                                  $ref: "#/components/schemas/Location",
+                                              }
+                "401": { $ref: "#/components/responses/Error" }
+                "403": { $ref: "#/components/responses/Error" }
+                "409": { $ref: "#/components/responses/Error" }
+                "422": { $ref: "#/components/responses/ValidationError" }
 
-  /partners:
-    get:
-      tags: [Partners]
-      summary: List all partners
-      description: Requires `partner.read`.
-      parameters: [{ $ref: '#/components/parameters/XWarehouseId' }]
-      responses:
-        '200':
-          description: Partner list
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - { $ref: '#/components/schemas/ApiResponse' }
-                  - type: object
-                    properties:
-                      data:
-                        type: array
-                        items: { $ref: '#/components/schemas/Partner' }
-        '401': { $ref: '#/components/responses/Error' }
-        '403': { $ref: '#/components/responses/Error' }
-    post:
-      tags: [Partners]
-      summary: Create a partner
-      description: Requires `partner.write`. Body limited to 1 MB. Contact name/phone are encrypted at rest.
-      parameters: [{ $ref: '#/components/parameters/XWarehouseId' }]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/CreatePartnerRequest' }
-      responses:
-        '201':
-          description: Partner created
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - { $ref: '#/components/schemas/ApiResponse' }
-                  - type: object
-                    properties:
-                      data: { $ref: '#/components/schemas/Partner' }
-        '401': { $ref: '#/components/responses/Error' }
-        '403': { $ref: '#/components/responses/Error' }
-        '409': { $ref: '#/components/responses/Error' }
-        '422': { $ref: '#/components/responses/ValidationError' }
+    /partners:
+        get:
+            tags: [Partners]
+            summary: List all partners
+            description: Requires `partner.read`.
+            parameters: [{ $ref: "#/components/parameters/XWarehouseId" }]
+            responses:
+                "200":
+                    description: Partner list
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              type: array
+                                              items:
+                                                  {
+                                                      $ref: "#/components/schemas/Partner",
+                                                  }
+                "401": { $ref: "#/components/responses/Error" }
+                "403": { $ref: "#/components/responses/Error" }
+        post:
+            tags: [Partners]
+            summary: Create a partner
+            description: Requires `partner.write`. Body limited to 1 MB. Contact name/phone are encrypted at rest.
+            parameters: [{ $ref: "#/components/parameters/XWarehouseId" }]
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            {
+                                $ref: "#/components/schemas/CreatePartnerRequest",
+                            }
+            responses:
+                "201":
+                    description: Partner created
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              {
+                                                  $ref: "#/components/schemas/Partner",
+                                              }
+                "401": { $ref: "#/components/responses/Error" }
+                "403": { $ref: "#/components/responses/Error" }
+                "409": { $ref: "#/components/responses/Error" }
+                "422": { $ref: "#/components/responses/ValidationError" }
 
-  /partners/{id}:
-    get:
-      tags: [Partners]
-      summary: Get partner by ID
-      description: Requires `partner.read`.
-      parameters:
-        - { $ref: '#/components/parameters/XWarehouseId' }
-        - name: id
-          in: path
-          required: true
-          schema: { type: integer, format: int64, minimum: 1 }
-      responses:
-        '200':
-          description: Partner
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - { $ref: '#/components/schemas/ApiResponse' }
-                  - type: object
-                    properties:
-                      data: { $ref: '#/components/schemas/Partner' }
-        '401': { $ref: '#/components/responses/Error' }
-        '403': { $ref: '#/components/responses/Error' }
-        '404': { $ref: '#/components/responses/Error' }
-        '422': { $ref: '#/components/responses/ValidationError' }
+    /partners/{id}:
+        get:
+            tags: [Partners]
+            summary: Get partner by ID
+            description: Requires `partner.read`.
+            parameters:
+                - { $ref: "#/components/parameters/XWarehouseId" }
+                - name: id
+                  in: path
+                  required: true
+                  schema: { type: integer, format: int64, minimum: 1 }
+            responses:
+                "200":
+                    description: Partner
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              {
+                                                  $ref: "#/components/schemas/Partner",
+                                              }
+                "401": { $ref: "#/components/responses/Error" }
+                "403": { $ref: "#/components/responses/Error" }
+                "404": { $ref: "#/components/responses/Error" }
+                "422": { $ref: "#/components/responses/ValidationError" }
 
-  /stock/movements:
-    get:
-      tags: [Stock]
-      summary: Stock movements ledger (keyset pagination)
-      description: |
-        Requires `stock.read`. Date range is mandatory (partition pruning).
-        Pagination is keyset-based via `cursor` / `next_cursor`.
-      parameters:
-        - { $ref: '#/components/parameters/XWarehouseId' }
-        - name: start_time
-          in: query
-          required: true
-          description: RFC3339 timestamp (inclusive)
-          schema: { type: string, format: date-time }
-        - name: end_time
-          in: query
-          required: true
-          description: RFC3339 timestamp (inclusive), must be >= start_time
-          schema: { type: string, format: date-time }
-        - name: item_id
-          in: query
-          required: false
-          description: Optional item filter
-          schema: { type: integer, format: int64, minimum: 1 }
-        - name: limit
-          in: query
-          required: false
-          description: Page size, 1-100, default 50
-          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
-        - name: cursor
-          in: query
-          required: false
-          description: Opaque keyset cursor from previous `next_cursor`
-          schema: { type: string }
-      responses:
-        '200':
-          description: Movements page
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - { $ref: '#/components/schemas/ApiResponse' }
-                  - type: object
-                    properties:
-                      data: { $ref: '#/components/schemas/StockMovementList' }
-        '401': { $ref: '#/components/responses/Error' }
-        '403': { $ref: '#/components/responses/Error' }
-        '422': { $ref: '#/components/responses/ValidationError' }
+    /stock/movements:
+        get:
+            tags: [Stock]
+            summary: Stock movements ledger (keyset pagination)
+            description: |
+                Requires `stock.read`. Date range is mandatory (partition pruning).
+                Pagination is keyset-based via `cursor` / `next_cursor`.
+            parameters:
+                - { $ref: "#/components/parameters/XWarehouseId" }
+                - name: start_time
+                  in: query
+                  required: true
+                  description: RFC3339 timestamp (inclusive)
+                  schema: { type: string, format: date-time }
+                - name: end_time
+                  in: query
+                  required: true
+                  description: RFC3339 timestamp (inclusive), must be >= start_time
+                  schema: { type: string, format: date-time }
+                - name: item_id
+                  in: query
+                  required: false
+                  description: Optional item filter
+                  schema: { type: integer, format: int64, minimum: 1 }
+                - name: limit
+                  in: query
+                  required: false
+                  description: Page size, 1-100, default 50
+                  schema:
+                      { type: integer, minimum: 1, maximum: 100, default: 50 }
+                - name: cursor
+                  in: query
+                  required: false
+                  description: Opaque keyset cursor from previous `next_cursor`
+                  schema: { type: string }
+            responses:
+                "200":
+                    description: Movements page
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              {
+                                                  $ref: "#/components/schemas/StockMovementList",
+                                              }
+                "401": { $ref: "#/components/responses/Error" }
+                "403": { $ref: "#/components/responses/Error" }
+                "422": { $ref: "#/components/responses/ValidationError" }
 
-  /openapi.yaml:
-    get:
-      tags: [API Docs]
-      summary: This OpenAPI spec (YAML)
-      security: []
-      responses:
-        '200':
-          description: OpenAPI 3.1 YAML document
-          content:
-            application/yaml:
-              schema: { type: string }
+    /openapi.yaml:
+        get:
+            tags: [API Docs]
+            summary: This OpenAPI spec (YAML)
+            security: []
+            responses:
+                "200":
+                    description: OpenAPI 3.1 YAML document
+                    content:
+                        application/yaml:
+                            schema: { type: string }
 
-  /openapi.json:
-    get:
-      tags: [API Docs]
-      summary: This OpenAPI spec (JSON)
-      security: []
-      responses:
-        '200':
-          description: OpenAPI 3.1 JSON document
-          content:
-            application/json:
-              schema: { type: object }
+    /openapi.json:
+        get:
+            tags: [API Docs]
+            summary: This OpenAPI spec (JSON)
+            security: []
+            responses:
+                "200":
+                    description: OpenAPI 3.1 JSON document
+                    content:
+                        application/json:
+                            schema: { type: object }
 
 components:
-  securitySchemes:
-    bearerAuth:
-      type: http
-      scheme: bearer
-      bearerFormat: JWT
-    cookieAuth:
-      type: apiKey
-      in: cookie
-      name: access_token
-      description: |
-        HttpOnly cookie set automatically by POST /auth/login and POST /auth/refresh
-        (alternative to the Authorization header for browser clients).
+    securitySchemes:
+        bearerAuth:
+            type: http
+            scheme: bearer
+            bearerFormat: JWT
+        cookieAuth:
+            type: apiKey
+            in: cookie
+            name: access_token
+            description: |
+                HttpOnly cookie set automatically by POST /auth/login and POST /auth/refresh
+                (alternative to the Authorization header for browser clients).
 
-  parameters:
-    XWarehouseId:
-      name: X-Warehouse-Id
-      in: header
-      required: true
-      description: Active warehouse code (must be one of the user's assigned warehouses)
-      schema: { type: string, example: WH01 }
-    ItemID:
-      name: id
-      in: path
-      required: true
-      schema: { type: integer, format: int64, minimum: 1 }
+    parameters:
+        XWarehouseId:
+            name: X-Warehouse-Id
+            in: header
+            required: true
+            description: Active warehouse code (must be one of the user's assigned warehouses)
+            schema: { type: string, example: WH01 }
+        ItemID:
+            name: id
+            in: path
+            required: true
+            schema: { type: integer, format: int64, minimum: 1 }
 
-  responses:
-    Error:
-      description: Error response (FSD §5.4 envelope)
-      content:
-        application/json:
-          schema: { $ref: '#/components/schemas/ApiResponse' }
-    ValidationError:
-      description: Input validation failed (422 ERR_VALIDATION with field details)
-      content:
-        application/json:
-          schema: { $ref: '#/components/schemas/ApiResponse' }
-    RateLimited:
-      description: Rate limit exceeded (429)
-      content:
-        application/json:
-          schema: { $ref: '#/components/schemas/ApiResponse' }
+    responses:
+        Error:
+            description: Error response (FSD §5.4 envelope)
+            content:
+                application/json:
+                    schema: { $ref: "#/components/schemas/ApiResponse" }
+        ValidationError:
+            description: Input validation failed (422 ERR_VALIDATION with field details)
+            content:
+                application/json:
+                    schema: { $ref: "#/components/schemas/ApiResponse" }
+        RateLimited:
+            description: Rate limit exceeded (429)
+            content:
+                application/json:
+                    schema: { $ref: "#/components/schemas/ApiResponse" }
 
-  schemas:
-    ApiResponse:
-      type: object
-      required: [success, data, error]
-      properties:
-        success: { type: boolean }
-        data: {}
-        meta:
-          type: object
-          properties:
-            page_size: { type: integer }
-            next_cursor: { type: string }
-        error:
-          nullable: true
-          allOf: [{ $ref: '#/components/schemas/ApiError' }]
-    ApiError:
-      type: object
-      properties:
-        code: { type: string, example: ERR_VALIDATION }
-        message: { type: string }
-        details:
-          type: array
-          items: { $ref: '#/components/schemas/ErrorDetail' }
-        request_id: { type: string, format: uuid }
-    ErrorDetail:
-      type: object
-      properties:
-        field: { type: string, example: password }
-        message: { type: string, example: must be at least 12 characters long }
-        sku: { type: string }
-        requested: {}
-        available: {}
+    schemas:
+        ApiResponse:
+            type: object
+            required: [success, data, error]
+            properties:
+                success: { type: boolean }
+                data: {}
+                meta:
+                    type: object
+                    properties:
+                        page_size: { type: integer }
+                        next_cursor: { type: string }
+                error:
+                    nullable: true
+                    allOf: [{ $ref: "#/components/schemas/ApiError" }]
+        ApiError:
+            type: object
+            properties:
+                code: { type: string, example: ERR_VALIDATION }
+                message: { type: string }
+                details:
+                    type: array
+                    items: { $ref: "#/components/schemas/ErrorDetail" }
+                request_id: { type: string, format: uuid }
+        ErrorDetail:
+            type: object
+            properties:
+                field: { type: string, example: password }
+                message:
+                    {
+                        type: string,
+                        example: must be at least 12 characters long,
+                    }
+                sku: { type: string }
+                requested: {}
+                available: {}
 
-    LoginRequest:
-      type: object
-      required: [username, password]
-      properties:
-        username: { type: string, minLength: 3, maxLength: 50 }
-        password: { type: string }
-    RegisterRequest:
-      type: object
-      required: [username, email, full_name, password]
-      properties:
-        username: { type: string, minLength: 3, maxLength: 50 }
-        email: { type: string, format: email, maxLength: 150 }
-        full_name: { type: string, minLength: 1, maxLength: 150 }
-        password: { type: string, minLength: 12, maxLength: 72, description: Argon2id hashed server-side }
-    RefreshRequest:
-      type: object
-      required: [refresh_token]
-      properties:
-        refresh_token: { type: string }
-    TokenPair:
-      type: object
-      properties:
-        access_token: { type: string, description: JWT, 15 min TTL }
-        refresh_token: { type: string, description: Rotating JWT, 7 day TTL }
-        token_type: { type: string, example: Bearer }
-    RegisterResponse:
-      type: object
-      properties:
-        id: { type: integer, format: int64 }
-        username: { type: string }
-        full_name: { type: string }
+        LoginRequest:
+            type: object
+            required: [username, password]
+            properties:
+                username: { type: string, minLength: 3, maxLength: 50 }
+                password: { type: string }
+        RegisterRequest:
+            type: object
+            required: [username, email, full_name, password]
+            properties:
+                username: { type: string, minLength: 3, maxLength: 50 }
+                email: { type: string, format: email, maxLength: 150 }
+                full_name: { type: string, minLength: 1, maxLength: 150 }
+                password:
+                    {
+                        type: string,
+                        minLength: 12,
+                        maxLength: 72,
+                        description: Argon2id hashed server-side,
+                    }
+        RefreshRequest:
+            type: object
+            required: [refresh_token]
+            properties:
+                refresh_token: { type: string }
+        TokenPair:
+            type: object
+            properties:
+                access_token: { type: string, description: JWT, 15 min TTL }
+                refresh_token:
+                    { type: string, description: Rotating JWT, 7 day TTL }
+                token_type: { type: string, example: Bearer }
+        RegisterResponse:
+            type: object
+            properties:
+                id: { type: integer, format: int64 }
+                username: { type: string }
+                full_name: { type: string }
 
-    ItemUoMInput:
-      type: object
-      required: [uom, conv_factor]
-      properties:
-        uom: { type: string, minLength: 1, maxLength: 20 }
-        conv_factor: { type: number, format: double, exclusiveMinimum: 0 }
-        barcode: { type: string, nullable: true, maxLength: 64 }
-    CreateItemRequest:
-      type: object
-      required: [sku, name, base_uom]
-      properties:
-        sku: { type: string, minLength: 1, maxLength: 50 }
-        name: { type: string, minLength: 1, maxLength: 150 }
-        category_id: { type: integer, format: int64, nullable: true }
-        base_uom: { type: string, minLength: 1, maxLength: 20 }
-        is_batch: { type: boolean, default: false }
-        is_expiry: { type: boolean, default: false, description: Requires is_batch=true }
-        is_serial: { type: boolean, default: false }
-        min_qty: { type: number, format: double, minimum: 0 }
-        max_qty: { type: number, format: double, nullable: true, minimum: 0, description: Must be >= min_qty }
-        safety_stock: { type: number, format: double, minimum: 0 }
-        lead_time_days: { type: integer, minimum: 0 }
-        abc_class: { type: string, nullable: true, enum: [A, B, C] }
-        uoms:
-          type: array
-          items: { $ref: '#/components/schemas/ItemUoMInput' }
-    UpdateItemRequest:
-      type: object
-      required: [name, base_uom]
-      properties:
-        name: { type: string, minLength: 1, maxLength: 150 }
-        category_id: { type: integer, format: int64, nullable: true }
-        base_uom: { type: string, minLength: 1, maxLength: 20 }
-        is_batch: { type: boolean }
-        is_expiry: { type: boolean }
-        is_serial: { type: boolean }
-        min_qty: { type: number, format: double, minimum: 0 }
-        max_qty: { type: number, format: double, nullable: true, minimum: 0 }
-        safety_stock: { type: number, format: double, minimum: 0 }
-        lead_time_days: { type: integer, minimum: 0 }
-        abc_class: { type: string, nullable: true, enum: [A, B, C] }
-        is_active: { type: boolean }
-    Item:
-      type: object
-      properties:
-        id: { type: integer, format: int64 }
-        public_id: { type: string, format: uuid }
-        sku: { type: string }
-        name: { type: string }
-        category_id: { type: integer, format: int64, nullable: true }
-        base_uom: { type: string }
-        is_batch: { type: boolean }
-        is_expiry: { type: boolean }
-        is_serial: { type: boolean }
-        min_qty: { type: number, format: double }
-        max_qty: { type: number, format: double, nullable: true }
-        safety_stock: { type: number, format: double }
-        lead_time_days: { type: integer }
-        abc_class: { type: string, nullable: true }
-        is_active: { type: boolean }
-    ItemDetail:
-      allOf:
-        - { $ref: '#/components/schemas/Item' }
-        - type: object
-          properties:
-            created_at: { type: string, format: date-time }
-            created_by: { type: integer, format: int64 }
-    ItemUoM:
-      type: object
-      properties:
-        id: { type: integer, format: int64 }
-        item_id: { type: integer, format: int64 }
-        uom: { type: string }
-        conv_factor: { type: number, format: double }
-        barcode: { type: string, nullable: true }
+        ItemUoMInput:
+            type: object
+            required: [uom, conv_factor]
+            properties:
+                uom: { type: string, minLength: 1, maxLength: 20 }
+                conv_factor:
+                    { type: number, format: double, exclusiveMinimum: 0 }
+                barcode: { type: string, nullable: true, maxLength: 64 }
+        CreateItemRequest:
+            type: object
+            required: [sku, name, base_uom]
+            properties:
+                sku: { type: string, minLength: 1, maxLength: 50 }
+                name: { type: string, minLength: 1, maxLength: 150 }
+                category_id: { type: integer, format: int64, nullable: true }
+                base_uom: { type: string, minLength: 1, maxLength: 20 }
+                is_batch: { type: boolean, default: false }
+                is_expiry:
+                    {
+                        type: boolean,
+                        default: false,
+                        description: Requires is_batch=true,
+                    }
+                is_serial: { type: boolean, default: false }
+                min_qty: { type: number, format: double, minimum: 0 }
+                max_qty:
+                    {
+                        type: number,
+                        format: double,
+                        nullable: true,
+                        minimum: 0,
+                        description: Must be >= min_qty,
+                    }
+                safety_stock: { type: number, format: double, minimum: 0 }
+                lead_time_days: { type: integer, minimum: 0 }
+                abc_class: { type: string, nullable: true, enum: [A, B, C] }
+                uoms:
+                    type: array
+                    items: { $ref: "#/components/schemas/ItemUoMInput" }
+        UpdateItemRequest:
+            type: object
+            required: [name, base_uom]
+            properties:
+                name: { type: string, minLength: 1, maxLength: 150 }
+                category_id: { type: integer, format: int64, nullable: true }
+                base_uom: { type: string, minLength: 1, maxLength: 20 }
+                is_batch: { type: boolean }
+                is_expiry: { type: boolean }
+                is_serial: { type: boolean }
+                min_qty: { type: number, format: double, minimum: 0 }
+                max_qty:
+                    { type: number, format: double, nullable: true, minimum: 0 }
+                safety_stock: { type: number, format: double, minimum: 0 }
+                lead_time_days: { type: integer, minimum: 0 }
+                abc_class: { type: string, nullable: true, enum: [A, B, C] }
+                is_active: { type: boolean }
+        Item:
+            type: object
+            properties:
+                id: { type: integer, format: int64 }
+                public_id: { type: string, format: uuid }
+                sku: { type: string }
+                name: { type: string }
+                category_id: { type: integer, format: int64, nullable: true }
+                base_uom: { type: string }
+                is_batch: { type: boolean }
+                is_expiry: { type: boolean }
+                is_serial: { type: boolean }
+                min_qty: { type: number, format: double }
+                max_qty: { type: number, format: double, nullable: true }
+                safety_stock: { type: number, format: double }
+                lead_time_days: { type: integer }
+                abc_class: { type: string, nullable: true }
+                is_active: { type: boolean }
+        ItemDetail:
+            allOf:
+                - { $ref: "#/components/schemas/Item" }
+                - type: object
+                  properties:
+                      created_at: { type: string, format: date-time }
+                      created_by: { type: integer, format: int64 }
+        ItemUoM:
+            type: object
+            properties:
+                id: { type: integer, format: int64 }
+                item_id: { type: integer, format: int64 }
+                uom: { type: string }
+                conv_factor: { type: number, format: double }
+                barcode: { type: string, nullable: true }
 
-    CreateLocationRequest:
-      type: object
-      required: [warehouse_id, code, loc_type]
-      properties:
-        warehouse_id: { type: integer, format: int64, minimum: 1 }
-        code: { type: string, minLength: 1, maxLength: 30 }
-        zone: { type: string, nullable: true, maxLength: 20 }
-        rack: { type: string, nullable: true, maxLength: 20 }
-        level: { type: string, nullable: true, maxLength: 20 }
-        loc_type: { type: string, enum: [staging, pick, bulk, quarantine, damaged, transit] }
-        pick_seq: { type: integer, nullable: true, minimum: 0 }
-        capacity: { type: number, format: double, nullable: true, minimum: 0 }
-    Location:
-      type: object
-      properties:
-        id: { type: integer, format: int64 }
-        warehouse_id: { type: integer, format: int64 }
-        code: { type: string }
-        zone: { type: string, nullable: true }
-        rack: { type: string, nullable: true }
-        level: { type: string, nullable: true }
-        loc_type: { type: string }
-        pick_seq: { type: integer, nullable: true }
-        capacity: { type: number, format: double, nullable: true }
-        is_active: { type: boolean }
+        CreateLocationRequest:
+            type: object
+            required: [warehouse_id, code, loc_type]
+            properties:
+                warehouse_id: { type: integer, format: int64, minimum: 1 }
+                code: { type: string, minLength: 1, maxLength: 30 }
+                zone: { type: string, nullable: true, maxLength: 20 }
+                rack: { type: string, nullable: true, maxLength: 20 }
+                level: { type: string, nullable: true, maxLength: 20 }
+                loc_type:
+                    {
+                        type: string,
+                        enum:
+                            [staging, pick, bulk, quarantine, damaged, transit],
+                    }
+                pick_seq: { type: integer, nullable: true, minimum: 0 }
+                capacity:
+                    { type: number, format: double, nullable: true, minimum: 0 }
+        Location:
+            type: object
+            properties:
+                id: { type: integer, format: int64 }
+                warehouse_id: { type: integer, format: int64 }
+                code: { type: string }
+                zone: { type: string, nullable: true }
+                rack: { type: string, nullable: true }
+                level: { type: string, nullable: true }
+                loc_type: { type: string }
+                pick_seq: { type: integer, nullable: true }
+                capacity: { type: number, format: double, nullable: true }
+                is_active: { type: boolean }
 
-    CreatePartnerRequest:
-      type: object
-      required: [code, partner_type, name]
-      properties:
-        code: { type: string, minLength: 1, maxLength: 30 }
-        partner_type: { type: string, enum: [supplier, customer, internal_unit] }
-        name: { type: string, minLength: 1, maxLength: 150 }
-        address: { type: string, maxLength: 500 }
-        contact_name: { type: string, maxLength: 100, description: Encrypted at rest (UU PDP) }
-        contact_phone: { type: string, maxLength: 30, description: Encrypted at rest (UU PDP) }
-    Partner:
-      type: object
-      properties:
-        id: { type: integer, format: int64 }
-        code: { type: string }
-        partner_type: { type: string }
-        name: { type: string }
-        address: { type: string, nullable: true }
-        contact_name: { type: string, nullable: true }
-        contact_phone: { type: string, nullable: true }
-        is_active: { type: boolean }
+        CreatePartnerRequest:
+            type: object
+            required: [code, partner_type, name]
+            properties:
+                code: { type: string, minLength: 1, maxLength: 30 }
+                partner_type:
+                    { type: string, enum: [supplier, customer, internal_unit] }
+                name: { type: string, minLength: 1, maxLength: 150 }
+                address: { type: string, maxLength: 500 }
+                contact_name:
+                    {
+                        type: string,
+                        maxLength: 100,
+                        description: Encrypted at rest (UU PDP),
+                    }
+                contact_phone:
+                    {
+                        type: string,
+                        maxLength: 30,
+                        description: Encrypted at rest (UU PDP),
+                    }
+        Partner:
+            type: object
+            properties:
+                id: { type: integer, format: int64 }
+                code: { type: string }
+                partner_type: { type: string }
+                name: { type: string }
+                address: { type: string, nullable: true }
+                contact_name: { type: string, nullable: true }
+                contact_phone: { type: string, nullable: true }
+                is_active: { type: boolean }
 
-    StockMovement:
-      type: object
-      properties:
-        id: { type: integer, format: int64 }
-        moved_at: { type: string, format: date-time }
-        item_id: { type: integer, format: int64 }
-        location_id: { type: integer, format: int64 }
-        batch_id: { type: integer, format: int64, nullable: true }
-        status: { type: string, enum: [available, quarantine, damaged, expired, in_transit] }
-        movement_type: { type: string, enum: [receipt, issue, transfer_out, transfer_in, adjustment, putaway, internal_move, return_in, return_out, opening] }
-        qty: { type: number, format: double, description: (+) in, (-) out }
-        qty_after: { type: number, format: double }
-        doc_no: { type: string }
-    StockMovementList:
-      type: object
-      properties:
-        data:
-          type: array
-          items: { $ref: '#/components/schemas/StockMovement' }
-        next_cursor: { type: string, description: Empty when no more pages }
+        StockMovement:
+            type: object
+            properties:
+                id: { type: integer, format: int64 }
+                moved_at: { type: string, format: date-time }
+                item_id: { type: integer, format: int64 }
+                location_id: { type: integer, format: int64 }
+                batch_id: { type: integer, format: int64, nullable: true }
+                status:
+                    {
+                        type: string,
+                        enum:
+                            [
+                                available,
+                                quarantine,
+                                damaged,
+                                expired,
+                                in_transit,
+                            ],
+                    }
+                movement_type:
+                    {
+                        type: string,
+                        enum:
+                            [
+                                receipt,
+                                issue,
+                                transfer_out,
+                                transfer_in,
+                                adjustment,
+                                putaway,
+                                internal_move,
+                                return_in,
+                                return_out,
+                                opening,
+                            ],
+                    }
+                qty:
+                    {
+                        type: number,
+                        format: double,
+                        description: (+) in,
+                        (-) out,
+                    }
+                qty_after: { type: number, format: double }
+                doc_no: { type: string }
+        StockMovementList:
+            type: object
+            properties:
+                data:
+                    type: array
+                    items: { $ref: "#/components/schemas/StockMovement" }
+                next_cursor:
+                    { type: string, description: Empty when no more pages }
 
-    ImportJobResponse:
-      type: object
-      properties:
-        job_id: { type: string }
-        status: { type: string, example: queued }
+        ImportJobResponse:
+            type: object
+            properties:
+                job_id: { type: string }
+                status: { type: string, example: queued }
