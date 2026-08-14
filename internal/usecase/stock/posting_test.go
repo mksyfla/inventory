@@ -9,6 +9,7 @@ import (
 	"inventory/internal/pkg/apperr"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type mockStockRepo struct {
@@ -294,4 +295,149 @@ func TestPostStockMovement_DeterministicSorting(t *testing.T) {
 	assert.Equal(t, int64(2), repo.locked[3].ItemID)
 	assert.Equal(t, int64(20), repo.locked[3].LocationID)
 	assert.Equal(t, int64(80), *repo.locked[3].BatchID)
+}
+
+// TestPostStockMovement_MultiLineKeepsPerLineLedgerMetadata guards the ledger
+// integrity requirement: every ledger row must reference its own document line.
+// A regression would copy inputs[0] metadata (doc_line_id / movement_type /
+// created_by) onto every movement in a multi-line posting.
+func TestPostStockMovement_MultiLineKeepsPerLineLedgerMetadata(t *testing.T) {
+	repo := newMockStockRepo()
+	tx := &mockTxRunner{}
+	usecase := NewPostingUsecase(repo, tx)
+
+	var batchA int64 = 100
+	var batchB int64 = 101
+	inputs := []stock.StockMovementInput{
+		{ItemID: 1, LocationID: 10, BatchID: &batchA, Status: stock.StatusAvailable, MovementType: stock.TypeReceipt, Qty: 50, DocLineID: 501, CreatedBy: 99},
+		{ItemID: 2, LocationID: 11, BatchID: &batchB, Status: stock.StatusQuarantine, MovementType: stock.TypeReceipt, Qty: 20, DocLineID: 502, CreatedBy: 99},
+		{ItemID: 3, LocationID: 12, BatchID: nil, Status: stock.StatusAvailable, MovementType: stock.TypeAdjustment, Qty: 5, DocLineID: 503, CreatedBy: 77},
+	}
+
+	err := usecase.PostStockMovement(context.Background(), "GRN-009", inputs)
+	require.NoError(t, err)
+	require.Len(t, repo.movements, len(inputs))
+
+	for i, in := range inputs {
+		mov := repo.movements[i]
+		assert.Equal(t, in.DocLineID, mov.DocLineID, "movement %d must carry its own doc_line_id", i)
+		assert.Equal(t, in.MovementType, mov.MovementType, "movement %d must carry its own movement_type", i)
+		assert.Equal(t, in.CreatedBy, mov.CreatedBy, "movement %d must carry its own created_by", i)
+		assert.Equal(t, "GRN-009", mov.DocNo, "movement %d must carry the document number", i)
+	}
+}
+
+func TestPostStockMovement_EmptyInputs_IsNoop(t *testing.T) {
+	repo := newMockStockRepo()
+	tx := &mockTxRunner{}
+	usecase := NewPostingUsecase(repo, tx)
+
+	err := usecase.PostStockMovement(context.Background(), "GRN-NONE", nil)
+	assert.NoError(t, err)
+	assert.Empty(t, repo.locked, "no balance keys may be locked")
+	assert.Empty(t, repo.movements, "no ledger rows may be written")
+	assert.False(t, tx.shouldRollback)
+}
+
+// TestPostStockMovement_SameKeyAccumulatesInBatch verifies running qty_after:
+// two lines touching the same balance key must record per-line post-computed
+// balances (30 then 20), not both the final one.
+func TestPostStockMovement_SameKeyAccumulatesInBatch(t *testing.T) {
+	repo := newMockStockRepo()
+	tx := &mockTxRunner{}
+	usecase := NewPostingUsecase(repo, tx)
+
+	inputs := []stock.StockMovementInput{
+		{ItemID: 1, LocationID: 10, Status: stock.StatusAvailable, MovementType: stock.TypeReceipt, Qty: 30, DocLineID: 1, CreatedBy: 1},
+		{ItemID: 1, LocationID: 10, Status: stock.StatusAvailable, MovementType: stock.TypeIssue, Qty: -10, DocLineID: 2, CreatedBy: 1},
+	}
+
+	err := usecase.PostStockMovement(context.Background(), "DOC-ACC", inputs)
+	assert.NoError(t, err)
+
+	bal := repo.balances["1-10-0-available"]
+	require.NotNil(t, bal)
+	assert.Equal(t, 20.0, bal.QtyOnhand)
+
+	require.Len(t, repo.movements, 2)
+	assert.Equal(t, 30.0, repo.movements[0].QtyAfter, "first movement after = 30")
+	assert.Equal(t, 20.0, repo.movements[1].QtyAfter, "second movement after = 20")
+}
+
+// TestPostStockMovement_ShortageAccumulatesAcrossLines: every deficient line
+// must surface in the shortage detail, not just the first one.
+func TestPostStockMovement_ShortageAccumulatesAcrossLines(t *testing.T) {
+	repo := newMockStockRepo()
+	tx := &mockTxRunner{}
+	usecase := NewPostingUsecase(repo, tx)
+
+	repo.balances["1-10-0-available"] = &stock.StockBalance{ID: 1, ItemID: 1, LocationID: 10, Status: stock.StatusAvailable, QtyOnhand: 10}
+	repo.balances["2-11-0-available"] = &stock.StockBalance{ID: 2, ItemID: 2, LocationID: 11, Status: stock.StatusAvailable, QtyOnhand: 10}
+
+	inputs := []stock.StockMovementInput{
+		{ItemID: 1, LocationID: 10, Status: stock.StatusAvailable, MovementType: stock.TypeIssue, Qty: -30, DocLineID: 1, CreatedBy: 1},
+		{ItemID: 2, LocationID: 11, Status: stock.StatusAvailable, MovementType: stock.TypeIssue, Qty: -50, DocLineID: 2, CreatedBy: 1},
+	}
+
+	err := usecase.PostStockMovement(context.Background(), "DO-ERR", inputs)
+	require.Error(t, err)
+
+	appErr, ok := err.(*apperr.AppError)
+	require.True(t, ok)
+	assert.Equal(t, "ERR_STOCK_INSUFFICIENT", appErr.Code)
+
+	details, ok := appErr.Details.([]ShortageDetail)
+	require.True(t, ok)
+	require.Len(t, details, 2)
+	assert.Equal(t, "lines[0].qty", details[0].Field)
+	assert.Equal(t, "lines[1].qty", details[1].Field)
+}
+
+// TestPostStockMovement_NoPartialWriteWhenAnyLineFails: a valid first line must
+// NOT be persisted if a later line is deficient — the whole transaction rolls back.
+func TestPostStockMovement_NoPartialWriteWhenAnyLineFails(t *testing.T) {
+	repo := newMockStockRepo()
+	tx := &mockTxRunner{}
+	usecase := NewPostingUsecase(repo, tx)
+
+	repo.balances["1-10-0-available"] = &stock.StockBalance{ID: 1, ItemID: 1, LocationID: 10, Status: stock.StatusAvailable, QtyOnhand: 0}
+	repo.balances["2-11-0-available"] = &stock.StockBalance{ID: 2, ItemID: 2, LocationID: 11, Status: stock.StatusAvailable, QtyOnhand: 5}
+
+	inputs := []stock.StockMovementInput{
+		{ItemID: 1, LocationID: 10, Status: stock.StatusAvailable, MovementType: stock.TypeReceipt, Qty: 10, DocLineID: 1, CreatedBy: 1},
+		{ItemID: 2, LocationID: 11, Status: stock.StatusAvailable, MovementType: stock.TypeIssue, Qty: -30, DocLineID: 2, CreatedBy: 1},
+	}
+
+	err := usecase.PostStockMovement(context.Background(), "DO-ROLLBACK", inputs)
+	require.Error(t, err)
+	assert.True(t, tx.shouldRollback, "transaction must be rolled back")
+
+	appErr, ok := err.(*apperr.AppError)
+	require.True(t, ok)
+	assert.Equal(t, "ERR_STOCK_INSUFFICIENT", appErr.Code)
+
+	// First line's balance must be untouched even though it was valid in isolation.
+	assert.Equal(t, 0.0, repo.balances["1-10-0-available"].QtyOnhand, "no partial balance write")
+	assert.Empty(t, repo.movements, "no partial ledger write")
+}
+
+func TestPostStockMovement_ZeroQtyIsRecordedWithoutBalanceChange(t *testing.T) {
+	repo := newMockStockRepo()
+	tx := &mockTxRunner{}
+	usecase := NewPostingUsecase(repo, tx)
+
+	inputs := []stock.StockMovementInput{
+		{ItemID: 1, LocationID: 10, Status: stock.StatusAvailable, MovementType: stock.TypeOpening, Qty: 0, DocLineID: 1, CreatedBy: 1},
+	}
+
+	err := usecase.PostStockMovement(context.Background(), "OPN-ZERO", inputs)
+	assert.NoError(t, err)
+
+	bal := repo.balances["1-10-0-available"]
+	require.NotNil(t, bal)
+	assert.Equal(t, 0.0, bal.QtyOnhand)
+
+	require.Len(t, repo.movements, 1)
+	assert.Equal(t, 0.0, repo.movements[0].Qty)
+	assert.Equal(t, 0.0, repo.movements[0].QtyAfter)
 }

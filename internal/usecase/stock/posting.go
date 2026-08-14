@@ -98,9 +98,12 @@ func (u *PostingUsecase) PostStockMovement(ctx context.Context, docNo string, in
 		// 5. Process each movement input
 		var shortages []ShortageDetail
 		type updateBalanceJob struct {
-			balance *stock.StockBalance
-			qty     float64
-			after   float64
+			balance      *stock.StockBalance
+			qty          float64
+			after        float64
+			movementType stock.MovementType
+			docLineID    int64
+			createdBy    int64
 		}
 		jobs := make([]updateBalanceJob, 0, len(inputs))
 
@@ -149,9 +152,12 @@ func (u *PostingUsecase) PostStockMovement(ctx context.Context, docNo string, in
 
 			bal.QtyOnhand = newOnhand
 			jobs = append(jobs, updateBalanceJob{
-				balance: bal,
-				qty:     in.Qty,
-				after:   newOnhand,
+				balance:      bal,
+				qty:          in.Qty,
+				after:        newOnhand,
+				movementType: in.MovementType,
+				docLineID:    in.DocLineID,
+				createdBy:    in.CreatedBy,
 			})
 		}
 
@@ -177,12 +183,12 @@ func (u *PostingUsecase) PostStockMovement(ctx context.Context, docNo string, in
 				LocationID:   job.balance.LocationID,
 				BatchID:      job.balance.BatchID,
 				Status:       job.balance.Status,
-				MovementType: inputs[0].MovementType,
+				MovementType: job.movementType,
 				Qty:          job.qty,
 				QtyAfter:     job.after,
-				DocLineID:    inputs[0].DocLineID,
+				DocLineID:    job.docLineID,
 				DocNo:        docNo,
-				CreatedBy:    inputs[0].CreatedBy,
+				CreatedBy:    job.createdBy,
 			}
 
 			err = u.stockRepo.InsertMovement(txCtx, movement)

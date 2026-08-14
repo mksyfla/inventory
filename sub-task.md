@@ -132,11 +132,11 @@ Menyediakan API untuk pengelolaan master entitas dan fitur import data bervolume
 
 Jantung dari aplikasi inventori. Mengimplementasikan double-entry ledger pembukuan stok yang append-only untuk konsistensi tingkat tinggi.
 
-- [ ] **4.1 Desain Model Data Ledger & Balances**
+- [x] **4.1 Desain Model Data Ledger & Balances**
     - Mempersiapkan tabel `inv.stock_balances` and `inv.stock_movements`.
     - Implementasi unique index `uq_balance_key` pada `stock_balances` untuk kombinasi: `(item_id, location_id, COALESCE(batch_id, 0), status)`.
 
-- [ ] **4.2 Proteksi Append-Only Ledger via PostgreSQL Rules**
+- [x] **4.2 Proteksi Append-Only Ledger via PostgreSQL Rules**
     - Menerapkan rule pencegahan modifikasi data pada database level:
         ```sql
         CREATE RULE no_update_movements AS ON UPDATE TO inv.stock_movements DO INSTEAD NOTHING;
@@ -144,14 +144,14 @@ Jantung dari aplikasi inventori. Mengimplementasikan double-entry ledger pembuku
         ```
     - Mencabut akses `UPDATE` and `DELETE` pada tabel `inv.stock_movements` untuk pengguna database aplikasi (`app_user`).
 
-- [ ] **4.3 Implementasi Unit Transaksi Posting Stok**
+- [x] **4.3 Implementasi Unit Transaksi Posting Stok**
     - Membuat service fungsi `PostStockMovement(ctx, docNo, movements []StockMovementInput)` yang berjalan dalam satu transaksi database:
         - **Urutkan target balance secara deterministik** berdasarkan `(item_id, location_id, batch_id)` sebelum melakukan query.
         - Lakukan penguncian baris (`SELECT ... FOR UPDATE`) berdasarkan ID yang telah diurutkan untuk **mencegah deadlock** akibat konkurensi.
         - Hitung saldo baru. Jika saldo menjadi negatif (`qty_onhand < 0`), lakukan rollback transaksi secara paksa dan kembalikan error `ERR_STOCK_INSUFFICIENT` beserta detail item yang bermasalah.
         - Update `stock_balances` and tambahkan baris histori baru ke `stock_movements` (mengisi kolom saldo akhir `qty_after`).
 
-- [ ] **4.4 Keyset Pagination Kartu Stok**
+- [x] **4.4 Keyset Pagination Kartu Stok**
     - Endpoint `GET /api/v1/stock/movements`.
     - Wajib menyertakan filter rentang tanggal (untuk optimalisasi _partition pruning_ karena tabel dipartisi bulanan berdasarkan `moved_at`).
     - Mengimplementasikan **keyset pagination** (`WHERE (moved_at, id) < ($1, $2) ORDER BY moved_at DESC, id DESC LIMIT 50`) guna menjaga performa query tetap stabil saat volume data jutaan baris.
