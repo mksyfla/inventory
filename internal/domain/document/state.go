@@ -10,6 +10,9 @@ import (
 // Status represents the document lifecycle state (doc.doc_status enum).
 type Status string
 
+// String renders the status value for persistence (doc.doc_status).
+func (s Status) String() string { return string(s) }
+
 const (
 	StatusDraft      Status = "draft"
 	StatusSubmitted  Status = "submitted"

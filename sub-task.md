@@ -192,23 +192,23 @@ Mengatur alur hidup seluruh transaksi dokumen, penomoran terpusat yang aman, dan
 
 Mengelola alur penerimaan barang dari pemasok dari mulai pencatatan draft hingga pemindahan fisik ke lokasi penyimpanan akhir.
 
-- [ ] **6.1 Pembuatan & Pengajuan GRN (Goods Receipt Note)**
+- [x] **6.1 Pembuatan & Pengajuan GRN (Goods Receipt Note)**
     - Endpoint `POST /api/v1/receipts` (membuat draft GRN dengan/atau tanpa referensi Purchase Order).
     - Endpoint `POST /api/v1/receipts/{id}/submit` (mengajukan verifikasi fisik barang).
     - Melakukan validasi kesesuaian data baris barang (SKU, qty, satuan dasar, data batch/exp jika diwajibkan oleh item).
 
-- [ ] **6.2 Persetujuan GRN & Penempatan di Lokasi Staging**
+- [x] **6.2 Persetujuan GRN & Penempatan di Lokasi Staging**
     - Endpoint `POST /api/v1/receipts/{id}/approve`.
     - Menyetujui dokumen GRN (menjalankan aturan Maker-Checker).
     - Setelah disetujui, panggil service _Posting Stok_ untuk memasukkan kuantitas barang ke lokasi **staging** (gudang penerimaan sementara). Status stok diset berdasarkan hasil QC (`available` / `quarantine` / `damaged`).
 
-- [ ] **6.3 Engine Saran Lokasi Putaway**
+- [x] **6.3 Engine Saran Lokasi Putaway**
     - Endpoint `GET /api/v1/receipts/{id}/putaway-suggestion`.
     - Membuat algoritma penentuan lokasi penyimpanan akhir berdasarkan:
         - Kategori barang & kesesuaian tipe lokasi bin (misal: barang fast-moving ditaruh dekat pintu keluar).
         - Kapasitas volume/berat maksimal lokasi bin yang masih kosong.
 
-- [ ] **6.4 Eksekusi Putaway (Scan Bin)**
+- [x] **6.4 Eksekusi Putaway (Scan Bin)**
     - Endpoint `POST /api/v1/receipts/{id}/putaway`.
     - Staf gudang melakukan scan barcode lokasi bin tujuan and item untuk mengonfirmasi penempatan barang.
     - Di backend, buat transaksi database untuk memindahkan saldo stok dari lokasi `staging` ke lokasi bin penyimpanan akhir (mengurangi saldo staging, menambah saldo lokasi bin tujuan).

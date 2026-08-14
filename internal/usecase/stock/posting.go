@@ -33,6 +33,26 @@ func (u *PostingUsecase) PostStockMovement(ctx context.Context, docNo string, in
 	if len(inputs) == 0 {
 		return nil
 	}
+	return u.txRunner.RunInTx(ctx, func(ctx context.Context) error {
+		return u.post(ctx, docNo, inputs)
+	})
+}
+
+// PostStockMovementInTx posts movements inside a transaction the caller
+// already opened (inbound approve/putaway write the document, the sequence
+// number and the stock ledger in one atomic unit — FSD 4.1). The caller owns
+// commit/rollback.
+func (u *PostingUsecase) PostStockMovementInTx(ctx context.Context, docNo string, inputs []stock.StockMovementInput) error {
+	if len(inputs) == 0 {
+		return nil
+	}
+	return u.post(ctx, docNo, inputs)
+}
+
+func (u *PostingUsecase) post(ctx context.Context, docNo string, inputs []stock.StockMovementInput) error {
+	if len(inputs) == 0 {
+		return nil
+	}
 
 	// 1. Gather all unique balance keys to lock
 	keyMap := make(map[string]stock.BalanceKey)
@@ -76,129 +96,126 @@ func (u *PostingUsecase) PostStockMovement(ctx context.Context, docNo string, in
 		return keys[i].Status < keys[j].Status
 	})
 
-	// 3. Run in database transaction
-	return u.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
-		// 4. Lock balances in sorted deterministic order (SELECT ... FOR UPDATE)
-		balances, err := u.stockRepo.GetBalancesForUpdate(txCtx, keys)
-		if err != nil {
-			return fmt.Errorf("failed to lock balances: %w", err)
+	// 4. Lock balances in sorted deterministic order (SELECT ... FOR UPDATE)
+	balances, err := u.stockRepo.GetBalancesForUpdate(ctx, keys)
+	if err != nil {
+		return fmt.Errorf("failed to lock balances: %w", err)
+	}
+
+	// Map existing balances for easy lookup
+	balMap := make(map[string]*stock.StockBalance)
+	for _, b := range balances {
+		var batchID int64
+		if b.BatchID != nil {
+			batchID = *b.BatchID
+		}
+		keyStr := fmt.Sprintf("%d-%d-%d-%s", b.ItemID, b.LocationID, batchID, b.Status)
+		balMap[keyStr] = b
+	}
+
+	// 5. Process each movement input
+	var shortages []ShortageDetail
+	type updateBalanceJob struct {
+		balance      *stock.StockBalance
+		qty          float64
+		after        float64
+		movementType stock.MovementType
+		docLineID    int64
+		createdBy    int64
+	}
+	jobs := make([]updateBalanceJob, 0, len(inputs))
+
+	for i, in := range inputs {
+		var batchID int64
+		if in.BatchID != nil {
+			batchID = *in.BatchID
+		}
+		keyStr := fmt.Sprintf("%d-%d-%d-%s", in.ItemID, in.LocationID, batchID, in.Status)
+
+		bal, exists := balMap[keyStr]
+		if !exists {
+			bal = &stock.StockBalance{
+				ItemID:      in.ItemID,
+				LocationID:  in.LocationID,
+				BatchID:     in.BatchID,
+				Status:      in.Status,
+				QtyOnhand:   0,
+				QtyReserved: 0,
+			}
+			balMap[keyStr] = bal
 		}
 
-		// Map existing balances for easy lookup
-		balMap := make(map[string]*stock.StockBalance)
-		for _, b := range balances {
-			var batchID int64
-			if b.BatchID != nil {
-				batchID = *b.BatchID
-			}
-			keyStr := fmt.Sprintf("%d-%d-%d-%s", b.ItemID, b.LocationID, batchID, b.Status)
-			balMap[keyStr] = b
-		}
-
-		// 5. Process each movement input
-		var shortages []ShortageDetail
-		type updateBalanceJob struct {
-			balance      *stock.StockBalance
-			qty          float64
-			after        float64
-			movementType stock.MovementType
-			docLineID    int64
-			createdBy    int64
-		}
-		jobs := make([]updateBalanceJob, 0, len(inputs))
-
-		for i, in := range inputs {
-			var batchID int64
-			if in.BatchID != nil {
-				batchID = *in.BatchID
-			}
-			keyStr := fmt.Sprintf("%d-%d-%d-%s", in.ItemID, in.LocationID, batchID, in.Status)
-
-			bal, exists := balMap[keyStr]
-			if !exists {
-				bal = &stock.StockBalance{
-					ItemID:      in.ItemID,
-					LocationID:  in.LocationID,
-					BatchID:     in.BatchID,
-					Status:      in.Status,
-					QtyOnhand:   0,
-					QtyReserved: 0,
-				}
-				balMap[keyStr] = bal
-			}
-
-			newOnhand := bal.QtyOnhand + in.Qty
-			// Validate negative stock constraints (BR-02 & FSD 4.1)
-			if newOnhand < 0 {
-				shortages = append(shortages, ShortageDetail{
-					Field:     fmt.Sprintf("lines[%d].qty", i),
-					SKU:       fmt.Sprintf("ITEM-%d", in.ItemID),
-					Requested: -in.Qty,
-					Available: bal.QtyOnhand,
-				})
-				continue
-			}
-
-			// Validate reserved stock constraints: qty_reserved <= qty_onhand (BR-07)
-			if newOnhand < bal.QtyReserved {
-				shortages = append(shortages, ShortageDetail{
-					Field:     fmt.Sprintf("lines[%d].qty", i),
-					SKU:       fmt.Sprintf("ITEM-%d", in.ItemID),
-					Requested: -in.Qty,
-					Available: bal.QtyOnhand - bal.QtyReserved,
-				})
-				continue
-			}
-
-			bal.QtyOnhand = newOnhand
-			jobs = append(jobs, updateBalanceJob{
-				balance:      bal,
-				qty:          in.Qty,
-				after:        newOnhand,
-				movementType: in.MovementType,
-				docLineID:    in.DocLineID,
-				createdBy:    in.CreatedBy,
+		newOnhand := bal.QtyOnhand + in.Qty
+		// Validate negative stock constraints (BR-02 & FSD 4.1)
+		if newOnhand < 0 {
+			shortages = append(shortages, ShortageDetail{
+				Field:     fmt.Sprintf("lines[%d].qty", i),
+				SKU:       fmt.Sprintf("ITEM-%d", in.ItemID),
+				Requested: -in.Qty,
+				Available: bal.QtyOnhand,
 			})
+			continue
 		}
 
-		// 6. If any shortage occurs, abort and return ERR_STOCK_INSUFFICIENT
-		if len(shortages) > 0 {
-			return &apperr.AppError{
-				Code:    "ERR_STOCK_INSUFFICIENT",
-				Message: "Saldo bebas tidak mencukupi",
-				Details: shortages,
-			}
+		// Validate reserved stock constraints: qty_reserved <= qty_onhand (BR-07)
+		if newOnhand < bal.QtyReserved {
+			shortages = append(shortages, ShortageDetail{
+				Field:     fmt.Sprintf("lines[%d].qty", i),
+				SKU:       fmt.Sprintf("ITEM-%d", in.ItemID),
+				Requested: -in.Qty,
+				Available: bal.QtyOnhand - bal.QtyReserved,
+			})
+			continue
 		}
 
-		// 7. Execute all database writes (Upsert balances and Insert movements)
-		for _, job := range jobs {
-			err = u.stockRepo.UpsertBalance(txCtx, job.balance)
-			if err != nil {
-				return fmt.Errorf("failed to update stock balance: %w", err)
-			}
+		bal.QtyOnhand = newOnhand
+		jobs = append(jobs, updateBalanceJob{
+			balance:      bal,
+			qty:          in.Qty,
+			after:        newOnhand,
+			movementType: in.MovementType,
+			docLineID:    in.DocLineID,
+			createdBy:    in.CreatedBy,
+		})
+	}
 
-			movement := &stock.StockMovement{
-				MovedAt:      time.Now().UTC(),
-				ItemID:       job.balance.ItemID,
-				LocationID:   job.balance.LocationID,
-				BatchID:      job.balance.BatchID,
-				Status:       job.balance.Status,
-				MovementType: job.movementType,
-				Qty:          job.qty,
-				QtyAfter:     job.after,
-				DocLineID:    job.docLineID,
-				DocNo:        docNo,
-				CreatedBy:    job.createdBy,
-			}
+	// 6. If any shortage occurs, abort and return ERR_STOCK_INSUFFICIENT
+	if len(shortages) > 0 {
+		return &apperr.AppError{
+			Code:    "ERR_STOCK_INSUFFICIENT",
+			Message: "Saldo bebas tidak mencukupi",
+			Details: shortages,
+		}
+	}
 
-			err = u.stockRepo.InsertMovement(txCtx, movement)
-			if err != nil {
-				return fmt.Errorf("failed to insert stock movement ledger: %w", err)
-			}
+	// 7. Execute all database writes (Upsert balances and Insert movements)
+	for _, job := range jobs {
+		err = u.stockRepo.UpsertBalance(ctx, job.balance)
+		if err != nil {
+			return fmt.Errorf("failed to update stock balance: %w", err)
 		}
 
-		return nil
-	})
+		movement := &stock.StockMovement{
+			MovedAt:      time.Now().UTC(),
+			ItemID:       job.balance.ItemID,
+			LocationID:   job.balance.LocationID,
+			BatchID:      job.balance.BatchID,
+			Status:       job.balance.Status,
+			MovementType: job.movementType,
+			Qty:          job.qty,
+			QtyAfter:     job.after,
+			DocLineID:    job.docLineID,
+			DocNo:        docNo,
+			CreatedBy:    job.createdBy,
+		}
+
+		err = u.stockRepo.InsertMovement(ctx, movement)
+		if err != nil {
+			return fmt.Errorf("failed to insert stock movement ledger: %w", err)
+		}
+	}
+
+	return nil
 }
 
 // ListMovements retrieves historical movements utilizing keyset pagination filters.

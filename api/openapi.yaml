@@ -62,7 +62,7 @@ paths:
                     description: Token pair issued (also as Set-Cookie headers)
                     headers:
                         Set-Cookie:
-                            description: HttpOnly auth cookies (access_token, refresh_token)
+                            description: "HttpOnly auth cookies (access_token, refresh_token)"
                             schema: { type: string }
                     content:
                         application/json:
@@ -233,6 +233,10 @@ paths:
                 Requires `item.import`. Multipart upload (10 MB max) with field `file`
                 containing a CSV whose header must include `sku`, `name`, `base_uom`.
                 Returns 202 with a `job_id` immediately.
+
+                Validasi (422 ERR_VALIDATION): field `file` wajib ada; file harus
+                bisa dibaca sebagai CSV; header wajib memuat kolom `sku`, `name`,
+                `base_uom` — kolom lain diabaikan. Ukuran > 10 MB -> 413.
             parameters: [{ $ref: "#/components/parameters/XWarehouseId" }]
             requestBody:
                 required: true
@@ -361,7 +365,7 @@ paths:
                 - name: warehouse_id
                   in: query
                   required: true
-                  description: Numeric warehouse ID (BigInt)
+                  description: "Wajib, bilangan bulat positif (422 bila kosong/bukan angka)"
                   schema: { type: integer, format: int64, minimum: 1 }
             responses:
                 "200":
@@ -527,7 +531,7 @@ paths:
                 - name: end_time
                   in: query
                   required: true
-                  description: RFC3339 timestamp (inclusive), must be >= start_time
+                  description: "RFC3339 timestamp (inclusive), must be >= start_time"
                   schema: { type: string, format: date-time }
                 - name: item_id
                   in: query
@@ -537,7 +541,7 @@ paths:
                 - name: limit
                   in: query
                   required: false
-                  description: Page size, 1-100, default 50
+                  description: "Page size, 1-100, default 50"
                   schema:
                       { type: integer, minimum: 1, maximum: 100, default: 50 }
                 - name: cursor
@@ -563,6 +567,237 @@ paths:
                                               }
                 "401": { $ref: "#/components/responses/Error" }
                 "403": { $ref: "#/components/responses/Error" }
+                "422": { $ref: "#/components/responses/ValidationError" }
+
+    /receipts:
+        post:
+            tags: [Inbound M2]
+            summary: Create a GRN draft (Fase 6.1, FR-2.1)
+            description: |
+                Membuka draft penerimaan barang (GRN): header + lines divalidasi
+                terhadap master data, batch di-resolve/dibuat, dan nomor dokumen
+                `GRN/{WAREHOUSE}/{YYMM}/{SEQ:5}` dialokasikan — semuanya dalam satu
+                transaksi (FSD 4.3).
+
+                Requires `grn.create`. Body limited to 1 MB.
+
+                Idempotensi (FSD 4.5): kirim `Idempotency-Key` (UUIDv4) — kunci
+                berulang mengembalikan dokumen yang sudah ada tanpa duplikat
+                (dalam mode idempotensi penuh: 200 dengan dokumen asli).
+
+                Validasi (422 ERR_VALIDATION + field details): `warehouse_id`
+                wajib & aktif; `lines` minimal 1; per baris — `item_id` dikenal &
+                aktif, `qty` > 0, `uom` terdaftar di item, `batch_no` wajib untuk
+                item batch-managed (dilarang untuk non-batch), `expiry_date`
+                wajib untuk item expiry-managed (format YYYY-MM-DD), `status`
+                salah satu available/quarantine/damaged; `Idempotency-Key` /
+                `idempotency_key` harus UUIDv4.
+            security:
+                - bearerAuth: []
+            parameters:
+                - { $ref: "#/components/parameters/XWarehouseId" }
+                - { $ref: "#/components/parameters/IdempotencyKey" }
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            {
+                                $ref: "#/components/schemas/CreateReceiptRequest",
+                            }
+            responses:
+                "201":
+                    description: GRN draft created (or existing document replayed for the same idempotency key)
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              {
+                                                  $ref: "#/components/schemas/ReceiptDocument",
+                                              }
+                "401": { $ref: "#/components/responses/Error" }
+                "403": { $ref: "#/components/responses/Error" }
+                "422": { $ref: "#/components/responses/ValidationError" }
+
+    /receipts/{id}/submit:
+        post:
+            tags: [Inbound M2]
+            summary: Submit a GRN draft for approval (Fase 6.1, FSD 4.4)
+            description: |
+                Transisi `draft → submitted`. Requires `grn.approve` (FSD endpoint
+                table memetakan submit dan approve ke `grn.approve`).
+
+                Validasi (422): path `:id` harus bilangan bulat positif;
+                dokumen harus berstatus `draft` (selain itu 409 ERR_INVALID_STATE);
+                dokumen tidak ditemukan -> 404.
+            security:
+                - bearerAuth: []
+            parameters:
+                - { $ref: "#/components/parameters/XWarehouseId" }
+                - { $ref: "#/components/parameters/ItemID" }
+            responses:
+                "200":
+                    description: Submitted
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              {
+                                                  $ref: "#/components/schemas/ReceiptStatus",
+                                              }
+                "401": { $ref: "#/components/responses/Error" }
+                "403": { $ref: "#/components/responses/Error" }
+                "404": { $ref: "#/components/responses/Error" }
+                "409": { $ref: "#/components/responses/Error" }
+                "422": { $ref: "#/components/responses/ValidationError" }
+
+    /receipts/{id}/approve:
+        post:
+            tags: [Inbound M2]
+            summary: Approve a GRN and post stock to staging (Fase 6.2, BR-05)
+            description: |
+                Transisi `submitted → approved` dengan maker-checker:
+                approver harus berbeda dari creator (ERR_SELF_APPROVAL, 403).
+                Satu movement `receipt` per line (qty × conv_factor ke base UOM)
+                diposting ke lokasi `staging` warehouse — posting mengikuti pola
+                FSD 4.1: all-or-nothing dalam satu transaksi dengan dokumen status.
+                Requires `grn.approve`.
+
+                Validasi (422/403/409): path `:id` bilangan bulat positif;
+                dokumen harus `submitted` (409 bila bukan); maker-checker —
+                approver harus berbeda dari creator (403 ERR_SELF_APPROVAL);
+                lokasi staging harus terkonfigurasi untuk warehouse (404);
+                stok tidak cukup saat posting -> 409 ERR_STOCK_INSUFFICIENT.
+            security:
+                - bearerAuth: []
+            parameters:
+                - { $ref: "#/components/parameters/XWarehouseId" }
+                - { $ref: "#/components/parameters/ItemID" }
+            responses:
+                "200":
+                    description: Approved and posted to staging
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              {
+                                                  $ref: "#/components/schemas/ReceiptStatus",
+                                              }
+                "401": { $ref: "#/components/responses/Error" }
+                "403": { $ref: "#/components/responses/Error" }
+                "404": { $ref: "#/components/responses/Error" }
+                "409": { $ref: "#/components/responses/Error" }
+                "422": { $ref: "#/components/responses/ValidationError" }
+
+    /receipts/{id}/putaway-suggestion:
+        get:
+            tags: [Inbound M2]
+            summary: Putaway suggestion per line (Fase 6.3, FR-2.5)
+            description: |
+                Menilai lokasi pick/bulk warehouse untuk setiap line yang masih
+                menunggu putaway (FR-2.5, FSD 4.2): item kelas-A mengutamakan
+                pick face, `pick_seq` memutus urutan, dan lokasi yang tidak muat
+                (kapasitas) dikecualikan. Hanya berlaku pada dokumen
+                `approved`/`in_progress`. Requires `grn.putaway`.
+
+                Validasi (422/409): path `:id` bilangan bulat positif; status
+                dokumen harus `approved`/`in_progress` (409); dokumen tidak
+                ditemukan -> 404. Line yang sudah penuh (qty_processed =
+                qty_request) tidak ikut disarankan.
+            security:
+                - bearerAuth: []
+            parameters:
+                - { $ref: "#/components/parameters/XWarehouseId" }
+                - { $ref: "#/components/parameters/ItemID" }
+            responses:
+                "200":
+                    description: Suggestion list (empty when nothing left to store)
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              type: array
+                                              items:
+                                                  {
+                                                      $ref: "#/components/schemas/PutawaySuggestion",
+                                                  }
+                "401": { $ref: "#/components/responses/Error" }
+                "403": { $ref: "#/components/responses/Error" }
+                "404": { $ref: "#/components/responses/Error" }
+                "409": { $ref: "#/components/responses/Error" }
+                "422": { $ref: "#/components/responses/ValidationError" }
+
+    /receipts/{id}/putaway:
+        post:
+            tags: [Inbound M2]
+            summary: Execute putaway from staging to target bins (Fase 6.4, FR-2.5)
+            description: |
+                Per scan dibuat dua movement `internal_move` (staging −qty, target
+                +qty) dan `qty_processed` line bertambah. Status dokumen maju
+                `approved → in_progress → completed` begitu semua line tersimpan
+                penuh (FSD 4.4). Validasi scan (line milik dokumen, qty ≤ sisa,
+                lokasi ada) dilakukan sebelum transaksi — all-or-nothing.
+                Requires `grn.putaway`.
+
+                Validasi (422/409): `lines` minimal 1 scan; per scan — `line_id`
+                harus milik dokumen ini, `qty` > 0 dan ≤ sisa qty line,
+                `location_code` harus ada di warehouse yang sama (422);
+                status dokumen harus `approved`/`in_progress` (409); stok staging
+                tidak cukup -> 409 ERR_STOCK_INSUFFICIENT.
+            security:
+                - bearerAuth: []
+            parameters:
+                - { $ref: "#/components/parameters/XWarehouseId" }
+                - { $ref: "#/components/parameters/ItemID" }
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema: { $ref: "#/components/schemas/PutawayRequest" }
+            responses:
+                "200":
+                    description: Putaway executed; status after the scans
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              {
+                                                  $ref: "#/components/schemas/ReceiptStatus",
+                                              }
+                "401": { $ref: "#/components/responses/Error" }
+                "403": { $ref: "#/components/responses/Error" }
+                "404": { $ref: "#/components/responses/Error" }
+                "409": { $ref: "#/components/responses/Error" }
                 "422": { $ref: "#/components/responses/ValidationError" }
 
     /openapi.yaml:
@@ -625,7 +860,12 @@ components:
                 (UNIQUE); kirim ulang kunci yang sama mengembalikan dokumen yang
                 sudah ada (200) alih-alih membuat duplikat. Nilai non-UUIDv4
                 ditolak dengan 422 ERR_VALIDATION oleh middleware idempotensi.
-            schema: { type: string, format: uuid, example: 3f7c1b2e-6a4d-4f8e-9c2b-1d5a8e7f3a41 }
+            schema:
+                {
+                    type: string,
+                    format: uuid,
+                    example: 3f7c1b2e-6a4d-4f8e-9c2b-1d5a8e7f3a41,
+                }
 
     responses:
         Error:
@@ -683,29 +923,78 @@ components:
 
         LoginRequest:
             type: object
+            description: |
+                Aturan validasi (422 ERR_VALIDATION + field details):
+                - `username` wajib, 3-50 karakter.
+                - `password` wajib (panjang tidak diperiksa saat login agar
+                  kebijakan password tidak bocor ke penyerang).
+                - Gagal 5x dalam 15 menit per IP -> 429 rate limited.
             required: [username, password]
             properties:
-                username: { type: string, minLength: 3, maxLength: 50 }
-                password: { type: string }
+                username:
+                    {
+                        type: string,
+                        minLength: 3,
+                        maxLength: 50,
+                        description: "Wajib, 3-50 karakter",
+                    }
+                password:
+                    {
+                        type: string,
+                        description: "Wajib. Tidak ada batas panjang yang diberlakukan di sini",
+                    }
         RegisterRequest:
             type: object
+            description: |
+                Aturan validasi (422 ERR_VALIDATION + field details):
+                - `username` wajib, 3-50 karakter.
+                - `email` wajib, format email valid, maksimal 150 karakter.
+                - `full_name` wajib, 1-150 karakter.
+                - `password` wajib, minimal 12 karakter (FSD §6), maksimal 72
+                  (batas Argon2id). Disimpan sebagai hash Argon2id.
+                - 10 percobaan / 15 menit per IP -> 429.
             required: [username, email, full_name, password]
             properties:
-                username: { type: string, minLength: 3, maxLength: 50 }
-                email: { type: string, format: email, maxLength: 150 }
-                full_name: { type: string, minLength: 1, maxLength: 150 }
+                username:
+                    {
+                        type: string,
+                        minLength: 3,
+                        maxLength: 50,
+                        description: "Wajib, 3-50 karakter",
+                    }
+                email:
+                    {
+                        type: string,
+                        format: email,
+                        maxLength: 150,
+                        description: "Wajib, format email valid, maksimal 150 karakter",
+                    }
+                full_name:
+                    {
+                        type: string,
+                        minLength: 1,
+                        maxLength: 150,
+                        description: "Wajib, 1-150 karakter",
+                    }
                 password:
                     {
                         type: string,
                         minLength: 12,
                         maxLength: 72,
-                        description: Argon2id hashed server-side,
+                        description: "Wajib, minimal 12 karakter (FSD §6), maksimal 72. Argon2id hashed server-side",
                     }
         RefreshRequest:
             type: object
+            description: |
+                Aturan validasi (422 ERR_VALIDATION + field details):
+                - `refresh_token` wajib (tidak kosong).
             required: [refresh_token]
             properties:
-                refresh_token: { type: string }
+                refresh_token:
+                    {
+                        type: string,
+                        description: "Wajib. Refresh token JWT aktif (7 hari)",
+                    }
         TokenPair:
             type: object
             properties:
@@ -722,59 +1011,187 @@ components:
 
         ItemUoMInput:
             type: object
+            description: |
+                Aturan validasi (422): `uom` wajib 1-20 karakter; `conv_factor`
+                wajib > 0; `barcode` optional maksimal 64 karakter.
             required: [uom, conv_factor]
             properties:
-                uom: { type: string, minLength: 1, maxLength: 20 }
+                uom:
+                    {
+                        type: string,
+                        minLength: 1,
+                        maxLength: 20,
+                        description: "Wajib, 1-20 karakter",
+                    }
                 conv_factor:
-                    { type: number, format: double, exclusiveMinimum: 0 }
-                barcode: { type: string, nullable: true, maxLength: 64 }
+                    {
+                        type: number,
+                        format: double,
+                        exclusiveMinimum: 0,
+                        description: "Wajib, > 0. Konversi ke base UOM (contoh 1 BOX = 24 PCS)",
+                    }
+                barcode:
+                    {
+                        type: string,
+                        nullable: true,
+                        maxLength: 64,
+                        description: "Optional, maksimal 64 karakter",
+                    }
         CreateItemRequest:
             type: object
+            description: |
+                Aturan validasi (422 ERR_VALIDATION + field details):
+                - `sku`, `name`, `base_uom` wajib (1-50 / 1-150 / 1-20 karakter).
+                - `min_qty`, `safety_stock`, `lead_time_days` >= 0.
+                - `max_qty` optional, >= 0 dan harus >= `min_qty`.
+                - `abc_class` salah satu dari A/B/C (kosong = belum diklasifikasi).
+                - Setiap elemen `uoms` divalidasi (dive).
             required: [sku, name, base_uom]
             properties:
-                sku: { type: string, minLength: 1, maxLength: 50 }
-                name: { type: string, minLength: 1, maxLength: 150 }
-                category_id: { type: integer, format: int64, nullable: true }
-                base_uom: { type: string, minLength: 1, maxLength: 20 }
+                sku:
+                    {
+                        type: string,
+                        minLength: 1,
+                        maxLength: 50,
+                        description: "Wajib, 1-50 karakter, unik",
+                    }
+                name:
+                    {
+                        type: string,
+                        minLength: 1,
+                        maxLength: 150,
+                        description: "Wajib, 1-150 karakter",
+                    }
+                category_id:
+                    {
+                        type: integer,
+                        format: int64,
+                        nullable: true,
+                        minimum: 1,
+                        description: "Optional (gt=0)",
+                    }
+                base_uom:
+                    {
+                        type: string,
+                        minLength: 1,
+                        maxLength: 20,
+                        description: "Wajib, 1-20 karakter (contoh PCS/KG)",
+                    }
                 is_batch: { type: boolean, default: false }
                 is_expiry:
                     {
                         type: boolean,
                         default: false,
-                        description: Requires is_batch=true,
+                        description: "Requires is_batch=true",
                     }
                 is_serial: { type: boolean, default: false }
-                min_qty: { type: number, format: double, minimum: 0 }
+                min_qty:
+                    {
+                        type: number,
+                        format: double,
+                        minimum: 0,
+                        description: "Wajib, >= 0 (default 0)",
+                    }
                 max_qty:
                     {
                         type: number,
                         format: double,
                         nullable: true,
                         minimum: 0,
-                        description: Must be >= min_qty,
+                        description: "Optional, >= 0 dan harus >= min_qty",
                     }
-                safety_stock: { type: number, format: double, minimum: 0 }
-                lead_time_days: { type: integer, minimum: 0 }
-                abc_class: { type: string, nullable: true, enum: [A, B, C] }
+                safety_stock:
+                    {
+                        type: number,
+                        format: double,
+                        minimum: 0,
+                        description: "Wajib, >= 0 (default 0)",
+                    }
+                lead_time_days:
+                    {
+                        type: integer,
+                        minimum: 0,
+                        description: "Wajib, >= 0 (default 0)",
+                    }
+                abc_class:
+                    {
+                        type: string,
+                        nullable: true,
+                        enum: [A, B, C],
+                        description: "Optional, salah satu A/B/C",
+                    }
                 uoms:
                     type: array
+                    description: Optional; setiap elemen divalidasi (dive)
                     items: { $ref: "#/components/schemas/ItemUoMInput" }
         UpdateItemRequest:
             type: object
+            description: |
+                Aturan validasi (422): `name`, `base_uom` wajib; `max_qty` >= 0
+                dan >= `min_qty`; `abc_class` salah satu A/B/C; `lead_time_days`
+                >= 0. Path `:id` harus bilangan bulat positif.
             required: [name, base_uom]
             properties:
-                name: { type: string, minLength: 1, maxLength: 150 }
-                category_id: { type: integer, format: int64, nullable: true }
-                base_uom: { type: string, minLength: 1, maxLength: 20 }
+                name:
+                    {
+                        type: string,
+                        minLength: 1,
+                        maxLength: 150,
+                        description: "Wajib, 1-150 karakter",
+                    }
+                category_id:
+                    {
+                        type: integer,
+                        format: int64,
+                        nullable: true,
+                        minimum: 1,
+                        description: "Optional (gt=0)",
+                    }
+                base_uom:
+                    {
+                        type: string,
+                        minLength: 1,
+                        maxLength: 20,
+                        description: "Wajib, 1-20 karakter",
+                    }
                 is_batch: { type: boolean }
                 is_expiry: { type: boolean }
                 is_serial: { type: boolean }
-                min_qty: { type: number, format: double, minimum: 0 }
+                min_qty:
+                    {
+                        type: number,
+                        format: double,
+                        minimum: 0,
+                        description: "Wajib, >= 0",
+                    }
                 max_qty:
-                    { type: number, format: double, nullable: true, minimum: 0 }
-                safety_stock: { type: number, format: double, minimum: 0 }
-                lead_time_days: { type: integer, minimum: 0 }
-                abc_class: { type: string, nullable: true, enum: [A, B, C] }
+                    {
+                        type: number,
+                        format: double,
+                        nullable: true,
+                        minimum: 0,
+                        description: "Optional, >= 0 dan harus >= min_qty",
+                    }
+                safety_stock:
+                    {
+                        type: number,
+                        format: double,
+                        minimum: 0,
+                        description: "Wajib, >= 0",
+                    }
+                lead_time_days:
+                    {
+                        type: integer,
+                        minimum: 0,
+                        description: "Wajib, >= 0",
+                    }
+                abc_class:
+                    {
+                        type: string,
+                        nullable: true,
+                        enum: [A, B, C],
+                        description: "Optional, salah satu A/B/C",
+                    }
                 is_active: { type: boolean }
         Item:
             type: object
@@ -812,22 +1229,72 @@ components:
 
         CreateLocationRequest:
             type: object
+            description: |
+                Aturan validasi (422 ERR_VALIDATION + field details):
+                - `warehouse_id` wajib (gt=0), `code` wajib 1-30 karakter,
+                  `loc_type` wajib salah satu enum.
+                - `zone`/`rack`/`level` optional maksimal 20 karakter.
+                - `pick_seq` optional >= 0; `capacity` optional >= 0.
+                - `code` harus unik per warehouse (409 ERR_DUPLICATE_KEY).
             required: [warehouse_id, code, loc_type]
             properties:
-                warehouse_id: { type: integer, format: int64, minimum: 1 }
-                code: { type: string, minLength: 1, maxLength: 30 }
-                zone: { type: string, nullable: true, maxLength: 20 }
-                rack: { type: string, nullable: true, maxLength: 20 }
-                level: { type: string, nullable: true, maxLength: 20 }
+                warehouse_id:
+                    {
+                        type: integer,
+                        format: int64,
+                        minimum: 1,
+                        description: "Wajib, gt=0",
+                    }
+                code:
+                    {
+                        type: string,
+                        minLength: 1,
+                        maxLength: 30,
+                        description: "Wajib, 1-30 karakter, unik per warehouse",
+                    }
+                zone:
+                    {
+                        type: string,
+                        nullable: true,
+                        maxLength: 20,
+                        description: "Optional, maksimal 20 karakter",
+                    }
+                rack:
+                    {
+                        type: string,
+                        nullable: true,
+                        maxLength: 20,
+                        description: "Optional, maksimal 20 karakter",
+                    }
+                level:
+                    {
+                        type: string,
+                        nullable: true,
+                        maxLength: 20,
+                        description: "Optional, maksimal 20 karakter",
+                    }
                 loc_type:
                     {
                         type: string,
                         enum:
                             [staging, pick, bulk, quarantine, damaged, transit],
+                        description: "Wajib, salah satu enum",
                     }
-                pick_seq: { type: integer, nullable: true, minimum: 0 }
+                pick_seq:
+                    {
+                        type: integer,
+                        nullable: true,
+                        minimum: 0,
+                        description: "Optional, >= 0. Urutan picking (kecil = dipilih dulu)",
+                    }
                 capacity:
-                    { type: number, format: double, nullable: true, minimum: 0 }
+                    {
+                        type: number,
+                        format: double,
+                        nullable: true,
+                        minimum: 0,
+                        description: "Optional, >= 0. Kapasitas maksimum lokasi (unit stok)",
+                    }
         Location:
             type: object
             properties:
@@ -844,24 +1311,52 @@ components:
 
         CreatePartnerRequest:
             type: object
+            description: |
+                Aturan validasi (422 ERR_VALIDATION + field details):
+                - `code`, `partner_type`, `name` wajib (1-30 / enum / 1-150).
+                - `address` optional maksimal 500; `contact_name` maksimal 100;
+                  `contact_phone` maksimal 30.
+                - `code` harus unik (409 ERR_DUPLICATE_KEY).
+                - Data kontak dienkripsi saat istirahat (UU PDP).
             required: [code, partner_type, name]
             properties:
-                code: { type: string, minLength: 1, maxLength: 30 }
+                code:
+                    {
+                        type: string,
+                        minLength: 1,
+                        maxLength: 30,
+                        description: "Wajib, 1-30 karakter, unik",
+                    }
                 partner_type:
-                    { type: string, enum: [supplier, customer, internal_unit] }
-                name: { type: string, minLength: 1, maxLength: 150 }
-                address: { type: string, maxLength: 500 }
+                    {
+                        type: string,
+                        enum: [supplier, customer, internal_unit],
+                        description: "Wajib, salah satu enum",
+                    }
+                name:
+                    {
+                        type: string,
+                        minLength: 1,
+                        maxLength: 150,
+                        description: "Wajib, 1-150 karakter",
+                    }
+                address:
+                    {
+                        type: string,
+                        maxLength: 500,
+                        description: "Optional, maksimal 500 karakter",
+                    }
                 contact_name:
                     {
                         type: string,
                         maxLength: 100,
-                        description: Encrypted at rest (UU PDP),
+                        description: "Optional, maksimal 100 karakter. Encrypted at rest (UU PDP)",
                     }
                 contact_phone:
                     {
                         type: string,
                         maxLength: 30,
-                        description: Encrypted at rest (UU PDP),
+                        description: "Optional, maksimal 30 karakter. Encrypted at rest (UU PDP)",
                     }
         Partner:
             type: object
@@ -916,8 +1411,7 @@ components:
                     {
                         type: number,
                         format: double,
-                        description: (+) in,
-                        (-) out,
+                        description: "(+) in, (-) out",
                     }
                 qty_after: { type: number, format: double }
                 doc_no: { type: string }
@@ -935,3 +1429,239 @@ components:
             properties:
                 job_id: { type: string }
                 status: { type: string, example: queued }
+
+        # ── Fase 6: Inbound M2 (GRN) ────────────────────────────────────────
+
+        CreateReceiptRequest:
+            type: object
+            description: |
+                Aturan validasi (422 ERR_VALIDATION + field details):
+                - `warehouse_id` wajib (integer > 0) dan harus warehouse aktif.
+                - `lines` wajib berisi minimal 1 baris; setiap baris divalidasi
+                  terhadap master data (item aktif, qty > 0, UOM terdaftar,
+                  batch/expiry sesuai atribut item, status hasil QC valid).
+                - `idempotency_key` (bila ada) harus UUIDv4 — atau kirim lewat
+                  header `Idempotency-Key` (FSD 4.5).
+            required: [warehouse_id, lines]
+            properties:
+                warehouse_id:
+                    {
+                        type: integer,
+                        format: int64,
+                        minimum: 1,
+                        description: "Wajib. ID warehouse tujuan (gt=0)",
+                    }
+                partner_id:
+                    {
+                        type: integer,
+                        format: int64,
+                        nullable: true,
+                        minimum: 1,
+                        description: "Optional. Supplier/vendor (gt=0)",
+                    }
+                idempotency_key:
+                    {
+                        type: string,
+                        format: uuid,
+                        description: "Optional UUIDv4 — alternatif dari header Idempotency-Key (FSD 4.5)",
+                    }
+                notes:
+                    {
+                        type: string,
+                        maxLength: 1000,
+                        description: "Optional. Maksimal 1000 karakter",
+                    }
+                lines:
+                    type: array
+                    minItems: 1
+                    description: "Wajib, minimal 1 baris"
+                    items: { $ref: "#/components/schemas/ReceiptLineRequest" }
+
+        ReceiptLineRequest:
+            type: object
+            required: [item_id, qty]
+            properties:
+                item_id:
+                    {
+                        type: integer,
+                        format: int64,
+                        minimum: 1,
+                        description: "Wajib. ID item master (gt=0); item harus aktif",
+                    }
+                qty:
+                    {
+                        type: number,
+                        format: double,
+                        exclusiveMinimum: 0,
+                        description: "Wajib, > 0. Quantity dalam UOM baris (default: base UOM item)",
+                    }
+                uom:
+                    {
+                        type: string,
+                        maxLength: 20,
+                        description: "Optional. Kosong = base UOM item (contoh PCS/BOX/KG); harus terdaftar di item",
+                    }
+                batch_no:
+                    {
+                        type: string,
+                        maxLength: 60,
+                        description: "Wajib untuk item batch-managed (is_batch); dilarang untuk item non-batch",
+                    }
+                expiry_date:
+                    {
+                        type: string,
+                        format: date,
+                        description: "Wajib untuk item expiry-managed (is_expiry). Format YYYY-MM-DD",
+                    }
+                status:
+                    {
+                        type: string,
+                        enum: [available, quarantine, damaged],
+                        description: "Hasil QC saat penerimaan. Optional, default available",
+                    }
+                notes:
+                    {
+                        type: string,
+                        maxLength: 500,
+                        description: "Optional. Maksimal 500 karakter",
+                    }
+
+        ReceiptDocument:
+            type: object
+            properties:
+                id: { type: integer, format: int64 }
+                public_id: { type: string, format: uuid }
+                doc_no: { type: string, example: "GRN/WH01/2608/00016" }
+                doc_type: { type: string, example: GRN }
+                doc_date: { type: string, format: date }
+                status:
+                    {
+                        type: string,
+                        enum:
+                            [
+                                draft,
+                                submitted,
+                                approved,
+                                in_progress,
+                                completed,
+                                cancelled,
+                            ],
+                    }
+                warehouse_id: { type: integer, format: int64 }
+                notes: { type: string, nullable: true }
+                created_by: { type: integer, format: int64 }
+                lines:
+                    type: array
+                    items: { $ref: "#/components/schemas/ReceiptLineSummary" }
+
+        ReceiptLineSummary:
+            type: object
+            properties:
+                id: { type: integer, format: int64 }
+                line_no: { type: integer }
+                item_id: { type: integer, format: int64 }
+                uom: { type: string }
+                qty_request: { type: number, format: double }
+                qty_processed: { type: number, format: double }
+                batch_id: { type: integer, format: int64, nullable: true }
+                location_id:
+                    {
+                        type: integer,
+                        format: int64,
+                        nullable: true,
+                        description: "Target bin terakhir setelah putaway",
+                    }
+                status: { type: string, enum: [available, quarantine, damaged] }
+
+        ReceiptStatus:
+            type: object
+            properties:
+                id: { type: integer, format: int64 }
+                status:
+                    {
+                        type: string,
+                        description: "Status dokumen setelah aksi",
+                        example: approved,
+                    }
+
+        PutawayRequest:
+            type: object
+            description: |
+                Aturan validasi (422 ERR_VALIDATION + field details):
+                - `lines` wajib, minimal 1 scan.
+                - Setiap scan divalidasi sebelum transaksi: line milik dokumen,
+                  qty > 0 dan tidak melebihi sisa qty line, lokasi tujuan harus
+                  milik warehouse yang sama.
+            required: [lines]
+            properties:
+                lines:
+                    type: array
+                    minItems: 1
+                    description: "Wajib, minimal 1 scan"
+                    items: { $ref: "#/components/schemas/PutawayScanRequest" }
+
+        PutawayScanRequest:
+            type: object
+            description: |
+                Aturan validasi (422 ERR_VALIDATION + field details):
+                - `line_id` wajib, bilangan bulat > 0 (gt=0), dan harus milik
+                  dokumen GRN ini.
+                - `qty` wajib, angka > 0 dan tidak boleh melebihi sisa qty
+                  yang belum diputaway dari baris tersebut.
+                - `location_code` wajib, string 1-30 karakter, dan harus
+                  merupakan kode lokasi yang ada di warehouse dokumen ini
+                  (bukan lokasi staging).
+            required: [line_id, qty, location_code]
+            properties:
+                line_id:
+                    {
+                        type: integer,
+                        format: int64,
+                        minimum: 1,
+                        description: "Wajib. ID baris dokumen GRN (gt=0) yang sedang diputaway",
+                    }
+                qty:
+                    {
+                        type: number,
+                        format: double,
+                        exclusiveMinimum: 0,
+                        description: "Wajib, > 0. Dalam UOM line; tidak boleh melebihi sisa qty line",
+                    }
+                location_code:
+                    {
+                        type: string,
+                        maxLength: 30,
+                        description: "Wajib. Kode bin tujuan (pick/bulk) milik warehouse yang sama, maksimal 30 karakter",
+                        example: PK-01-01,
+                    }
+
+        PutawaySuggestion:
+            type: object
+            properties:
+                line_id: { type: integer, format: int64 }
+                item_id: { type: integer, format: int64 }
+                qty_remaining: { type: number, format: double }
+                locations:
+                    type: array
+                    items: { $ref: "#/components/schemas/SuggestedLocation" }
+
+        SuggestedLocation:
+            type: object
+            properties:
+                location_id: { type: integer, format: int64 }
+                code: { type: string }
+                zone: { type: string }
+                rack: { type: string }
+                level: { type: string }
+                loc_type:
+                    {
+                        type: string,
+                        enum:
+                            [staging, pick, bulk, quarantine, damaged, transit],
+                    }
+                free_qty:
+                    {
+                        type: number,
+                        format: double,
+                        description: "Sisa kapasitas (0 = tak terbatas / belum diisi kapasitas)",
+                    }

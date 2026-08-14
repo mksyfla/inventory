@@ -207,6 +207,86 @@ DO UPDATE SET qty_onhand = EXCLUDED.qty_onhand, qty_reserved = EXCLUDED.qty_rese
 INSERT INTO inv.stock_movements (item_id, location_id, batch_id, status, movement_type, qty, qty_after, doc_line_id, doc_no, created_by, moved_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW());
 
+-- ============ INBOUND (Fase 6 - GRN) ============
+
+-- name: GetWarehouseByID :one
+SELECT id, code, name, is_active
+FROM master.warehouses
+WHERE id = $1;
+
+-- name: GetBatchByItemAndNo :one
+SELECT id, item_id, batch_no, mfg_date, expiry_date
+FROM master.batches
+WHERE item_id = $1 AND batch_no = $2
+LIMIT 1;
+
+-- name: CreateBatch :one
+INSERT INTO master.batches (item_id, batch_no, mfg_date, expiry_date)
+VALUES ($1, $2, $3, $4)
+RETURNING id, item_id, batch_no, mfg_date, expiry_date;
+
+-- name: GetStagingLocation :one
+SELECT id, warehouse_id, code, zone, rack, level, loc_type, pick_seq, capacity, is_active
+FROM master.locations
+WHERE warehouse_id = $1 AND loc_type = 'staging' AND is_active = TRUE
+ORDER BY code
+LIMIT 1;
+
+-- name: GetLocationByWarehouseCode :one
+SELECT id, warehouse_id, code, zone, rack, level, loc_type, pick_seq, capacity, is_active
+FROM master.locations
+WHERE warehouse_id = $1 AND code = $2 AND is_active = TRUE
+LIMIT 1;
+
+-- name: ListPutawayCandidates :many
+SELECT l.id, l.warehouse_id, l.code, l.zone, l.rack, l.level, l.loc_type, l.pick_seq, l.capacity,
+       COALESCE(SUM(b.qty_onhand), 0)::numeric(18,4) AS used_qty
+FROM master.locations l
+LEFT JOIN inv.stock_balances b ON b.location_id = l.id AND b.status = 'available'
+WHERE l.warehouse_id = $1 AND l.is_active = TRUE AND l.loc_type IN ('pick','bulk')
+GROUP BY l.id
+ORDER BY l.pick_seq NULLS LAST, l.code;
+
+-- name: CreateDocument :one
+INSERT INTO doc.documents (doc_no, doc_type, doc_date, status, warehouse_id, partner_id, idempotency_key, notes, created_by)
+VALUES ($1, $2::doc.doc_type, $3, $4::doc.doc_status, $5, $6, $7, $8, $9)
+RETURNING id, public_id, doc_no, doc_type, doc_date, status, warehouse_id, partner_id, idempotency_key, notes, created_by, created_at;
+
+-- name: CreateDocumentLine :one
+INSERT INTO doc.document_lines (document_id, line_no, item_id, uom, conv_factor, qty_request, qty_processed, batch_id, location_id, status, notes)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::inv.stock_status, $11)
+RETURNING id, document_id, line_no, item_id, uom, conv_factor, qty_request, qty_processed, batch_id, location_id, status, notes;
+
+-- name: GetDocumentByID :one
+SELECT id, public_id, doc_no, doc_type, doc_date, status, warehouse_id, dest_warehouse_id, partner_id, ref_doc_id, reason_code, notes, idempotency_key, created_at, created_by, submitted_at, approved_at, approved_by, completed_at
+FROM doc.documents
+WHERE id = $1;
+
+-- name: GetDocumentByIDempotencyKey :one
+SELECT id, public_id, doc_no, doc_type, doc_date, status, warehouse_id, dest_warehouse_id, partner_id, ref_doc_id, reason_code, notes, idempotency_key, created_at, created_by, submitted_at, approved_at, approved_by, completed_at
+FROM doc.documents
+WHERE idempotency_key = $1;
+
+-- name: ListDocumentLines :many
+SELECT id, document_id, line_no, item_id, uom, conv_factor, qty_request, qty_processed, batch_id, location_id, status, notes
+FROM doc.document_lines
+WHERE document_id = $1
+ORDER BY line_no;
+
+-- name: UpdateDocumentStatus :exec
+UPDATE doc.documents
+SET status = $2::doc.doc_status,
+    submitted_at = CASE WHEN $2::doc.doc_status = 'submitted' THEN NOW() ELSE submitted_at END,
+    approved_at  = CASE WHEN $2::doc.doc_status = 'approved' THEN NOW() ELSE approved_at END,
+    approved_by  = CASE WHEN $2::doc.doc_status = 'approved' THEN $3 ELSE approved_by END,
+    completed_at = CASE WHEN $2::doc.doc_status = 'completed' THEN NOW() ELSE completed_at END
+WHERE id = $1;
+
+-- name: UpdateDocumentLinePutaway :exec
+UPDATE doc.document_lines
+SET qty_processed = $2, location_id = $3
+WHERE id = $1;
+
 -- ============ Dokumen (Fase 5.1 - BR-04) ============
 
 -- name: UpsertDocumentNumber :one

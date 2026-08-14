@@ -15,8 +15,11 @@ import (
 	"inventory/internal/pkg/logger"
 	redisclient "inventory/internal/pkg/redis"
 	"inventory/internal/repository/postgres"
+	inbounduc "inventory/internal/usecase/inbound"
 	itemuc "inventory/internal/usecase/item"
 	stockuc "inventory/internal/usecase/stock"
+
+	"inventory/internal/pkg/docnum"
 
 	"github.com/hibiken/asynq"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -162,9 +165,24 @@ func main() {
 
 	// 7. Init domain usecases (Fase 3)
 	itemUsecase := itemuc.NewUsecase(queries)
+	txRunner := postgres.NewPostgresTxRunner(pool)
 	stockUsecase := stockuc.NewPostingUsecase(
 		postgres.NewPostgresStockRepository(pool),
-		postgres.NewPostgresTxRunner(pool),
+		txRunner,
+	)
+
+	// 7b. Inbound module (Fase 6): GRN + alur putaway
+	inboundLookup := postgres.NewInboundLookup(queries)
+	docRepo := postgres.NewPostgresDocumentRepository(queries)
+	receiptUsecase := inbounduc.NewReceiptUsecase(
+		docRepo,
+		inboundLookup,
+		inboundLookup,
+		inboundLookup,
+		inboundLookup,
+		stockUsecase,
+		txRunner,
+		docnum.NewGenerator(docRepo),
 	)
 
 	// 8. Init asynq client for async jobs (Fase 3.4)
@@ -182,6 +200,7 @@ func main() {
 		CreateUser:     createUser,
 		ItemUsecase:    itemUsecase,
 		StockUsecase:   stockUsecase,
+		ReceiptUsecase: receiptUsecase,
 		AsynqClient:    asynqClient,
 	})
 

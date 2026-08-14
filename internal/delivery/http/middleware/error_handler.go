@@ -65,6 +65,12 @@ func HTTPErrorHandler(err error, c echo.Context) {
 		if appErr.Details != nil {
 			if d, ok := appErr.Details.([]response.ErrorDetail); ok {
 				details = d
+			} else if d, ok := appErr.Details.([]apperr.ErrorDetail); ok {
+				// Neutral details emitted by usecases (e.g. inbound validation).
+				details = make([]response.ErrorDetail, 0, len(d))
+				for _, det := range d {
+					details = append(details, response.ErrorDetail{Field: det.Field, Message: det.Message})
+				}
 			} else {
 				details = shortageDetails(appErr)
 			}

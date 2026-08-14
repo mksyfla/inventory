@@ -8,6 +8,7 @@ import (
 	"inventory/internal/delivery/http/response"
 	redisclient "inventory/internal/pkg/redis"
 	"inventory/internal/pkg/validation"
+	inbounduc "inventory/internal/usecase/inbound"
 	itemuc "inventory/internal/usecase/item"
 	stockuc "inventory/internal/usecase/stock"
 
@@ -19,16 +20,17 @@ import (
 
 // RouterConfig holds dependencies required to configure the Echo router.
 type RouterConfig struct {
-	JWTSecret     string
-	AppEnv        string
-	Enforcer      *casbin.Enforcer
-	Store         redisclient.KVStore
-	LookupUser    handler.UserLookup
+	JWTSecret      string
+	AppEnv         string
+	Enforcer       *casbin.Enforcer
+	Store          redisclient.KVStore
+	LookupUser     handler.UserLookup
 	LookupUserByID handler.UserLookupByID
-	ItemUsecase   *itemuc.Usecase
-	StockUsecase  *stockuc.PostingUsecase
-	AsynqClient   *asynq.Client
-	CreateUser    handler.CreateUserFunc
+	ItemUsecase    *itemuc.Usecase
+	StockUsecase   *stockuc.PostingUsecase
+	ReceiptUsecase *inbounduc.ReceiptUsecase
+	AsynqClient    *asynq.Client
+	CreateUser     handler.CreateUserFunc
 }
 
 // NewRouter initializes an Echo instance, registers global middlewares, and configures route mapping.
@@ -105,6 +107,18 @@ func NewRouter(cfg ...RouterConfig) *echo.Echo {
 		if c.StockUsecase != nil {
 			stockHandler := handler.NewStockHandler(c.StockUsecase)
 			protected.GET("/stock/movements", stockHandler.ListMovements, rbacMW(c, "stock", "read")...)
+		}
+
+		// ─── Inbound / GRN endpoints (Fase 6) ───────────────────────────
+		if c.ReceiptUsecase != nil {
+			receiptHandler := handler.NewReceiptHandler(c.ReceiptUsecase)
+			protected.POST("/receipts", receiptHandler.CreateReceipt,
+				append(rbacMW(c, "grn", "create"), echoMiddleware.BodyLimit("1M"))...)
+			protected.POST("/receipts/:id/submit", receiptHandler.SubmitReceipt, rbacMW(c, "grn", "approve")...)
+			protected.POST("/receipts/:id/approve", receiptHandler.ApproveReceipt, rbacMW(c, "grn", "approve")...)
+			protected.GET("/receipts/:id/putaway-suggestion", receiptHandler.PutawaySuggestion, rbacMW(c, "grn", "putaway")...)
+			protected.POST("/receipts/:id/putaway", receiptHandler.Putaway,
+				append(rbacMW(c, "grn", "putaway"), echoMiddleware.BodyLimit("1M"))...)
 		}
 	}
 

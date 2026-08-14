@@ -9,6 +9,19 @@ type AppError struct {
 	RequestID string `json:"request_id"`
 }
 
+// ErrorDetail is the neutral field-level detail shape (FSD §5.1). The
+// delivery layer maps it to response.ErrorDetail; keeping the type here lets
+// usecases emit validation details without importing the http layer.
+type ErrorDetail struct {
+	Field   string `json:"field"`
+	Message string `json:"message"`
+}
+
+// New builds an AppError with the given code and message.
+func New(code, message string) *AppError {
+	return &AppError{Code: code, Message: message}
+}
+
 func (e *AppError) Error() string {
 	return e.Message
 }
