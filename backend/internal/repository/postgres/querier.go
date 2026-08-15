@@ -11,6 +11,7 @@ import (
 )
 
 type Querier interface {
+	CreateAllocation(ctx context.Context, arg CreateAllocationParams) (DocAllocations, error)
 	CreateBatch(ctx context.Context, arg CreateBatchParams) (MasterBatches, error)
 	// ============ CATEGORIES ============
 	CreateCategory(ctx context.Context, arg CreateCategoryParams) (MasterCategories, error)
@@ -29,9 +30,14 @@ type Querier interface {
 	DeleteItemUoMs(ctx context.Context, itemID int64) error
 	DeleteLocation(ctx context.Context, id int64) error
 	DeletePartner(ctx context.Context, id int64) error
+	// Manual override target: locks one specific balance (Fase 7.3). Must belong
+	// to the warehouse, be available, and not be expired.
+	GetAllocationCandidateByBalanceID(ctx context.Context, arg GetAllocationCandidateByBalanceIDParams) (GetAllocationCandidateByBalanceIDRow, error)
 	GetBatchByItemAndNo(ctx context.Context, arg GetBatchByItemAndNoParams) (MasterBatches, error)
+	GetDeliveryByDocument(ctx context.Context, documentID int64) (DocDeliveries, error)
 	GetDocumentByID(ctx context.Context, id int64) (DocDocuments, error)
 	GetDocumentByIDempotencyKey(ctx context.Context, idempotencyKey pgtype.Text) (DocDocuments, error)
+	GetItemByBarcode(ctx context.Context, barcode pgtype.Text) (GetItemByBarcodeRow, error)
 	GetItemByID(ctx context.Context, id int64) (MasterItems, error)
 	GetItemBySKU(ctx context.Context, sku string) (GetItemBySKURow, error)
 	GetLocationByID(ctx context.Context, id int64) (MasterLocations, error)
@@ -46,6 +52,13 @@ type Querier interface {
 	// ============ INBOUND (Fase 6 - GRN) ============
 	GetWarehouseByID(ctx context.Context, id int64) (GetWarehouseByIDRow, error)
 	InsertStockMovement(ctx context.Context, arg InsertStockMovementParams) error
+	// ============ OUTBOUND (Fase 7 - DO / REQ / FEFO-FIFO) ============
+	// FEFO/FIFO candidate balances for one item in a warehouse (FSD §4.2).
+	// Rows are locked (FOR UPDATE OF b — only the balances table, since
+	// PostgreSQL forbids locking the nullable side of an outer join) so allocation
+	// is race-safe against concurrent allocators/posters.
+	ListAllocationCandidates(ctx context.Context, arg ListAllocationCandidatesParams) ([]ListAllocationCandidatesRow, error)
+	ListAllocationsByDocument(ctx context.Context, documentID int64) ([]ListAllocationsByDocumentRow, error)
 	ListDocumentLines(ctx context.Context, documentID int64) ([]DocDocumentLines, error)
 	ListItemUoMs(ctx context.Context, itemID int64) ([]MasterItemUoms, error)
 	ListItems(ctx context.Context) ([]ListItemsRow, error)
@@ -60,12 +73,17 @@ type Querier interface {
 	ListWarehouseCodes(ctx context.Context) ([]string, error)
 	ListWarehouses(ctx context.Context) ([]MasterWarehouses, error)
 	SoftDeleteItem(ctx context.Context, arg SoftDeleteItemParams) (SoftDeleteItemRow, error)
+	UpdateAllocationPicked(ctx context.Context, arg UpdateAllocationPickedParams) error
+	UpdateBalanceReserved(ctx context.Context, arg UpdateBalanceReservedParams) error
+	UpdateDocumentLineProcessed(ctx context.Context, arg UpdateDocumentLineProcessedParams) error
 	UpdateDocumentLinePutaway(ctx context.Context, arg UpdateDocumentLinePutawayParams) error
+	UpdateDocumentReasonCode(ctx context.Context, arg UpdateDocumentReasonCodeParams) error
 	UpdateDocumentStatus(ctx context.Context, arg UpdateDocumentStatusParams) error
 	UpdateItem(ctx context.Context, arg UpdateItemParams) (UpdateItemRow, error)
 	UpdateLocation(ctx context.Context, arg UpdateLocationParams) (MasterLocations, error)
 	UpdatePartner(ctx context.Context, arg UpdatePartnerParams) (MasterPartners, error)
 	UpdateStockBalanceQty(ctx context.Context, arg UpdateStockBalanceQtyParams) (UpdateStockBalanceQtyRow, error)
+	UpsertDelivery(ctx context.Context, arg UpsertDeliveryParams) error
 	// ============ Dokumen (Fase 5.1 - BR-04) ============
 	// Atomic sequence bump: returns the next sequence for (doc_type, period).
 	// Must run inside the same transaction that creates the document (FSD 4.3).

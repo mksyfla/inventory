@@ -58,6 +58,17 @@ func (m *mockStockRepo) InsertMovement(ctx context.Context, mov *stock.StockMove
 	return nil
 }
 
+func (m *mockStockRepo) UpdateBalanceReserved(ctx context.Context, id int64, delta float64) error {
+	for key, bal := range m.balances {
+		if bal.ID == id {
+			bal.QtyReserved += delta
+			m.balances[key] = bal
+			return nil
+		}
+	}
+	return nil
+}
+
 func (m *mockStockRepo) GetMovements(ctx context.Context, filter stock.MovementFilter) ([]*stock.StockMovement, error) {
 	return m.movements, nil
 }

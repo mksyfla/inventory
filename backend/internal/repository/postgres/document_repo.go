@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"inventory/internal/domain/document"
 
@@ -36,7 +37,9 @@ func (r *PostgresDocumentRepository) Create(ctx context.Context, doc *document.D
 		DocDate:        pgtype.Date{Time: doc.DocDate, Valid: true},
 		Column4:        doc.Status.String(),
 		WarehouseID:    doc.WarehouseID,
+		RefDocID:       int8Param(doc.RefDocID),
 		PartnerID:      int8Param(doc.PartnerID),
+		ReasonCode:     textParam(doc.ReasonCode),
 		IdempotencyKey: textParam(doc.IdempotencyKey),
 		Notes:          textParam(doc.Notes),
 		CreatedBy:      doc.CreatedBy,
@@ -131,6 +134,95 @@ func (r *PostgresDocumentRepository) UpdateLinePutaway(ctx context.Context, line
 	return nil
 }
 
+func (r *PostgresDocumentRepository) UpdateLineProcessed(ctx context.Context, lineID int64, qtyProcessed float64) error {
+	err := r.querier(ctx).UpdateDocumentLineProcessed(ctx, UpdateDocumentLineProcessedParams{
+		ID:           lineID,
+		QtyProcessed: numericParam(qtyProcessed),
+	})
+	if err != nil {
+		return fmt.Errorf("postgres: failed to update line processed qty: %w", err)
+	}
+	return nil
+}
+
+// CreateAllocations persists one doc.allocations row per allocation. All runs
+// inside the caller's transaction so the reservation and the allocation rows
+// commit atomically with the doc (Fase 7.2).
+func (r *PostgresDocumentRepository) CreateAllocations(ctx context.Context, allocations []*document.Allocation) error {
+	q := r.querier(ctx)
+	for _, a := range allocations {
+		row, err := q.CreateAllocation(ctx, CreateAllocationParams{
+			DocLineID:    a.DocLineID,
+			BalanceID:    a.BalanceID,
+			QtyAllocated: numericParam(a.QtyAllocated),
+		})
+		if err != nil {
+			return fmt.Errorf("postgres: failed to create allocation: %w", err)
+		}
+		a.ID = row.ID
+	}
+	return nil
+}
+
+func (r *PostgresDocumentRepository) ListAllocations(ctx context.Context, documentID int64) ([]*document.Allocation, error) {
+	rows, err := r.querier(ctx).ListAllocationsByDocument(ctx, documentID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*document.Allocation, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, allocationFromRow(row))
+	}
+	return out, nil
+}
+
+func (r *PostgresDocumentRepository) UpdateAllocationPicked(ctx context.Context, id int64, qtyPicked float64) error {
+	err := r.querier(ctx).UpdateAllocationPicked(ctx, UpdateAllocationPickedParams{
+		ID:        id,
+		QtyPicked: numericParam(qtyPicked),
+	})
+	if err != nil {
+		return fmt.Errorf("postgres: failed to update allocation picked: %w", err)
+	}
+	return nil
+}
+
+func (r *PostgresDocumentRepository) UpdateReasonCode(ctx context.Context, id int64, reasonCode string) error {
+	err := r.querier(ctx).UpdateDocumentReasonCode(ctx, UpdateDocumentReasonCodeParams{
+		ID:         id,
+		ReasonCode: pgtype.Text{String: reasonCode, Valid: true},
+	})
+	if err != nil {
+		return fmt.Errorf("postgres: failed to update document reason: %w", err)
+	}
+	return nil
+}
+
+func (r *PostgresDocumentRepository) GetDelivery(ctx context.Context, documentID int64) (*document.Delivery, error) {
+	row, err := r.querier(ctx).GetDeliveryByDocument(ctx, documentID)
+	if err != nil {
+		return nil, err
+	}
+	return deliveryFromRow(row), nil
+}
+
+func (r *PostgresDocumentRepository) UpsertDelivery(ctx context.Context, d *document.Delivery) error {
+	err := r.querier(ctx).UpsertDelivery(ctx, UpsertDeliveryParams{
+		DocumentID:   d.DocumentID,
+		VehicleNo:    textParam(d.VehicleNo),
+		DriverName:   textParam(d.DriverName),
+		ShippedAt:    timestamptzParam(d.ShippedAt),
+		ReceivedBy:   textParam(d.ReceivedBy),
+		ReceivedAt:   timestamptzParam(d.ReceivedAt),
+		PodFileUrl:   textParam(d.PodFileURL),
+		SignatureUrl: textParam(d.SignatureURL),
+	})
+	if err != nil {
+		return fmt.Errorf("postgres: failed to upsert delivery: %w", err)
+	}
+	return nil
+}
+
 func (r *PostgresDocumentRepository) getHeader(ctx context.Context, id int64) (*document.Document, error) {
 	row, err := r.querier(ctx).GetDocumentByID(ctx, id)
 	if err != nil {
@@ -149,7 +241,9 @@ func documentFromRow(row DocDocuments) *document.Document {
 		DocDate:        row.DocDate.Time,
 		Status:         document.Status(fmt.Sprint(row.Status)),
 		WarehouseID:    row.WarehouseID,
+		RefDocID:       int8Ptr(row.RefDocID),
 		PartnerID:      int8Ptr(row.PartnerID),
+		ReasonCode:     textPtr(row.ReasonCode),
 		IdempotencyKey: textPtr(row.IdempotencyKey),
 		Notes:          textPtr(row.Notes),
 		CreatedBy:      row.CreatedBy,
@@ -221,4 +315,67 @@ func numericParam(v float64) pgtype.Numeric {
 	var n pgtype.Numeric
 	_ = n.Scan(fmt.Sprintf("%f", v))
 	return n
+}
+
+// timestamptzParam builds a pgtype.Timestamptz parameter from a *time.Time.
+func timestamptzParam(t *time.Time) pgtype.Timestamptz {
+	if t == nil {
+		return pgtype.Timestamptz{}
+	}
+	return pgtype.Timestamptz{Time: *t, Valid: true}
+}
+
+// timestamptzPtr converts a pgtype.Timestamptz result into a *time.Time.
+func timestamptzPtr(v pgtype.Timestamptz) *time.Time {
+	if !v.Valid {
+		return nil
+	}
+	t := v.Time
+	return &t
+}
+
+// allocationFromRow maps a sqlc ListAllocationsByDocumentRow into the domain
+// allocation enriched for picking/verification.
+func allocationFromRow(row ListAllocationsByDocumentRow) *document.Allocation {
+	a := &document.Allocation{
+		ID:           row.ID,
+		DocLineID:    row.DocLineID,
+		BalanceID:    row.BalanceID,
+		ItemID:       row.ItemID,
+		LocationID:   row.LocationID,
+		BatchID:      int8Ptr(row.BatchID),
+		LocationCode: row.LocationCode,
+		BatchNo:      row.BatchNo.String,
+		SKU:          row.Sku,
+		BaseUom:      row.BaseUom,
+	}
+	if f, err := row.QtyAllocated.Float64Value(); err == nil {
+		a.QtyAllocated = f.Float64
+	}
+	if f, err := row.QtyPicked.Float64Value(); err == nil {
+		a.QtyPicked = f.Float64
+	}
+	if row.PickSeq.Valid {
+		v := int(row.PickSeq.Int32)
+		a.PickSeq = &v
+	}
+	if row.ExpiryDate.Valid {
+		t := row.ExpiryDate.Time
+		a.ExpiryDate = &t
+	}
+	return a
+}
+
+// deliveryFromRow maps a sqlc DocDeliveries row into the domain entity.
+func deliveryFromRow(row DocDeliveries) *document.Delivery {
+	return &document.Delivery{
+		DocumentID:   row.DocumentID,
+		VehicleNo:    textPtr(row.VehicleNo),
+		DriverName:   textPtr(row.DriverName),
+		ShippedAt:    timestamptzPtr(row.ShippedAt),
+		ReceivedBy:   textPtr(row.ReceivedBy),
+		ReceivedAt:   timestamptzPtr(row.ReceivedAt),
+		PodFileURL:   textPtr(row.PodFileUrl),
+		SignatureURL: textPtr(row.SignatureUrl),
+	}
 }

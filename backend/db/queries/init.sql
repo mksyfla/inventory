@@ -248,9 +248,9 @@ GROUP BY l.id
 ORDER BY l.pick_seq NULLS LAST, l.code;
 
 -- name: CreateDocument :one
-INSERT INTO doc.documents (doc_no, doc_type, doc_date, status, warehouse_id, partner_id, idempotency_key, notes, created_by)
-VALUES ($1, $2::doc.doc_type, $3, $4::doc.doc_status, $5, $6, $7, $8, $9)
-RETURNING id, public_id, doc_no, doc_type, doc_date, status, warehouse_id, partner_id, idempotency_key, notes, created_by, created_at;
+INSERT INTO doc.documents (doc_no, doc_type, doc_date, status, warehouse_id, ref_doc_id, partner_id, reason_code, idempotency_key, notes, created_by)
+VALUES ($1, $2::doc.doc_type, $3, $4::doc.doc_status, $5, $6, $7, $8, $9, $10, $11)
+RETURNING id, public_id, doc_no, doc_type, doc_date, status, warehouse_id, ref_doc_id, partner_id, reason_code, idempotency_key, notes, created_by, created_at;
 
 -- name: CreateDocumentLine :one
 INSERT INTO doc.document_lines (document_id, line_no, item_id, uom, conv_factor, qty_request, qty_processed, batch_id, location_id, status, notes)
@@ -286,6 +286,107 @@ WHERE id = $1;
 UPDATE doc.document_lines
 SET qty_processed = $2, location_id = $3
 WHERE id = $1;
+
+-- name: UpdateDocumentLineProcessed :exec
+UPDATE doc.document_lines
+SET qty_processed = $2
+WHERE id = $1;
+
+-- ============ OUTBOUND (Fase 7 - DO / REQ / FEFO-FIFO) ============
+
+-- name: ListAllocationCandidates :many
+-- FEFO/FIFO candidate balances for one item in a warehouse (FSD §4.2).
+-- Rows are locked (FOR UPDATE OF b — only the balances table, since
+-- PostgreSQL forbids locking the nullable side of an outer join) so allocation
+-- is race-safe against concurrent allocators/posters.
+SELECT b.id AS balance_id, b.item_id, b.location_id, b.batch_id,
+       b.qty_onhand, b.qty_reserved,
+       l.code AS location_code, l.pick_seq, bt.expiry_date
+FROM inv.stock_balances b
+JOIN master.locations l ON l.id = b.location_id
+LEFT JOIN master.batches bt ON bt.id = b.batch_id
+WHERE b.item_id = $1
+  AND l.warehouse_id = $2
+  AND b.status = 'available'
+  AND l.loc_type IN ('pick','bulk')
+  AND b.qty_onhand > b.qty_reserved
+  AND (bt.expiry_date IS NULL OR bt.expiry_date > CURRENT_DATE)
+ORDER BY bt.expiry_date NULLS LAST, b.id, l.pick_seq
+FOR UPDATE OF b;
+
+-- name: UpdateBalanceReserved :exec
+UPDATE inv.stock_balances
+SET qty_reserved = qty_reserved + $2, updated_at = NOW()
+WHERE id = $1;
+
+-- name: GetAllocationCandidateByBalanceID :one
+-- Manual override target: locks one specific balance (Fase 7.3). Must belong
+-- to the warehouse, be available, and not be expired.
+SELECT b.id AS balance_id, b.item_id, b.location_id, b.batch_id,
+       b.qty_onhand, b.qty_reserved,
+       l.warehouse_id, l.code AS location_code, l.pick_seq, bt.expiry_date
+FROM inv.stock_balances b
+JOIN master.locations l ON l.id = b.location_id
+LEFT JOIN master.batches bt ON bt.id = b.batch_id
+WHERE b.id = $1
+  AND l.warehouse_id = $2
+  AND b.status = 'available'
+  AND (bt.expiry_date IS NULL OR bt.expiry_date > CURRENT_DATE)
+FOR UPDATE OF b;
+
+-- name: UpdateDocumentReasonCode :exec
+UPDATE doc.documents
+SET reason_code = $2
+WHERE id = $1;
+
+-- name: GetItemByBarcode :one
+SELECT i.id AS item_id, i.sku, i.base_uom, u.uom, u.conv_factor
+FROM master.item_uoms u
+JOIN master.items i ON i.id = u.item_id
+WHERE u.barcode = $1
+LIMIT 1;
+
+-- name: CreateAllocation :one
+INSERT INTO doc.allocations (doc_line_id, balance_id, qty_allocated, qty_picked, created_at)
+VALUES ($1, $2, $3, 0, NOW())
+RETURNING id, doc_line_id, balance_id, qty_allocated, qty_picked, created_at;
+
+-- name: ListAllocationsByDocument :many
+SELECT a.id, a.doc_line_id, a.balance_id, a.qty_allocated, a.qty_picked,
+       b.item_id, b.location_id, b.batch_id,
+       l.code AS location_code, l.pick_seq,
+       bt.batch_no, bt.expiry_date,
+       i.sku, i.base_uom
+FROM doc.allocations a
+JOIN inv.stock_balances b ON b.id = a.balance_id
+JOIN master.locations l ON l.id = b.location_id
+JOIN master.items i ON i.id = b.item_id
+LEFT JOIN master.batches bt ON bt.id = b.batch_id
+JOIN doc.document_lines dl ON dl.id = a.doc_line_id
+WHERE dl.document_id = $1
+ORDER BY l.pick_seq NULLS LAST, l.code, a.id;
+
+-- name: UpdateAllocationPicked :exec
+UPDATE doc.allocations
+SET qty_picked = qty_picked + $2
+WHERE id = $1;
+
+-- name: GetDeliveryByDocument :one
+SELECT document_id, vehicle_no, driver_name, shipped_at, received_by, received_at, pod_file_url, signature_url
+FROM doc.deliveries
+WHERE document_id = $1;
+
+-- name: UpsertDelivery :exec
+INSERT INTO doc.deliveries (document_id, vehicle_no, driver_name, shipped_at, received_by, received_at, pod_file_url, signature_url)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+ON CONFLICT (document_id) DO UPDATE SET
+    vehicle_no    = COALESCE(EXCLUDED.vehicle_no,    doc.deliveries.vehicle_no),
+    driver_name   = COALESCE(EXCLUDED.driver_name,   doc.deliveries.driver_name),
+    shipped_at    = COALESCE(EXCLUDED.shipped_at,    doc.deliveries.shipped_at),
+    received_by   = COALESCE(EXCLUDED.received_by,   doc.deliveries.received_by),
+    received_at   = COALESCE(EXCLUDED.received_at,   doc.deliveries.received_at),
+    pod_file_url  = COALESCE(EXCLUDED.pod_file_url,  doc.deliveries.pod_file_url),
+    signature_url = COALESCE(EXCLUDED.signature_url, doc.deliveries.signature_url);
 
 -- ============ Dokumen (Fase 5.1 - BR-04) ============
 

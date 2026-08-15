@@ -17,6 +17,7 @@ import (
 	"inventory/internal/repository/postgres"
 	inbounduc "inventory/internal/usecase/inbound"
 	itemuc "inventory/internal/usecase/item"
+	outbounduc "inventory/internal/usecase/outbound"
 	stockuc "inventory/internal/usecase/stock"
 
 	"inventory/internal/pkg/docnum"
@@ -185,6 +186,20 @@ func main() {
 		docnum.NewGenerator(docRepo),
 	)
 
+	// 7c. Outbound module (Fase 7): DO/REQ + FEFO/FIFO allocation
+	outboundLookup := postgres.NewOutboundLookup(queries)
+	outboundUsecase := outbounduc.NewOutboundUsecase(
+		docRepo,
+		outboundLookup,
+		outboundLookup,
+		outboundLookup,
+		outboundLookup,
+		postgres.NewPostgresStockRepository(pool),
+		txRunner,
+		stockUsecase,
+		docnum.NewGenerator(docRepo),
+	)
+
 	// 8. Init asynq client for async jobs (Fase 3.4)
 	asynqClient := asynq.NewClient(asynq.RedisClientOpt{Addr: cfg.RedisAddr})
 	defer asynqClient.Close()
@@ -201,6 +216,7 @@ func main() {
 		ItemUsecase:    itemUsecase,
 		StockUsecase:   stockUsecase,
 		ReceiptUsecase: receiptUsecase,
+		OutboundUsecase: outboundUsecase,
 		AsynqClient:    asynqClient,
 	})
 

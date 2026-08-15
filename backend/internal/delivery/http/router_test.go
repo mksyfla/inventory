@@ -168,6 +168,19 @@ func TestNewRouter_OpenAPIJSON(t *testing.T) {
 	assert.Contains(t, paths, "/items")
 	assert.Contains(t, paths, "/stock/movements")
 	assert.Contains(t, paths, "/auth/login")
+	// Fase 7 outbound endpoints
+	assert.Contains(t, paths, "/requests")
+	assert.Contains(t, paths, "/requests/{id}/submit")
+	assert.Contains(t, paths, "/requests/{id}/approve")
+	assert.Contains(t, paths, "/deliveries")
+	assert.Contains(t, paths, "/deliveries/{id}/submit")
+	assert.Contains(t, paths, "/deliveries/{id}/approve")
+	assert.Contains(t, paths, "/deliveries/{id}/allocate")
+	assert.Contains(t, paths, "/deliveries/{id}/allocate/override")
+	assert.Contains(t, paths, "/deliveries/{id}/picking-list")
+	assert.Contains(t, paths, "/deliveries/{id}/pick")
+	assert.Contains(t, paths, "/deliveries/{id}/ship")
+	assert.Contains(t, paths, "/deliveries/{id}/pod")
 }
 
 func TestNewRouter_SwaggerUI(t *testing.T) {

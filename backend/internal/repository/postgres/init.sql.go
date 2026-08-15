@@ -11,6 +11,32 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const createAllocation = `-- name: CreateAllocation :one
+INSERT INTO doc.allocations (doc_line_id, balance_id, qty_allocated, qty_picked, created_at)
+VALUES ($1, $2, $3, 0, NOW())
+RETURNING id, doc_line_id, balance_id, qty_allocated, qty_picked, created_at
+`
+
+type CreateAllocationParams struct {
+	DocLineID    int64          `json:"doc_line_id"`
+	BalanceID    int64          `json:"balance_id"`
+	QtyAllocated pgtype.Numeric `json:"qty_allocated"`
+}
+
+func (q *Queries) CreateAllocation(ctx context.Context, arg CreateAllocationParams) (DocAllocations, error) {
+	row := q.db.QueryRow(ctx, createAllocation, arg.DocLineID, arg.BalanceID, arg.QtyAllocated)
+	var i DocAllocations
+	err := row.Scan(
+		&i.ID,
+		&i.DocLineID,
+		&i.BalanceID,
+		&i.QtyAllocated,
+		&i.QtyPicked,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const createBatch = `-- name: CreateBatch :one
 INSERT INTO master.batches (item_id, batch_no, mfg_date, expiry_date)
 VALUES ($1, $2, $3, $4)
@@ -69,9 +95,9 @@ func (q *Queries) CreateCategory(ctx context.Context, arg CreateCategoryParams) 
 }
 
 const createDocument = `-- name: CreateDocument :one
-INSERT INTO doc.documents (doc_no, doc_type, doc_date, status, warehouse_id, partner_id, idempotency_key, notes, created_by)
-VALUES ($1, $2::doc.doc_type, $3, $4::doc.doc_status, $5, $6, $7, $8, $9)
-RETURNING id, public_id, doc_no, doc_type, doc_date, status, warehouse_id, partner_id, idempotency_key, notes, created_by, created_at
+INSERT INTO doc.documents (doc_no, doc_type, doc_date, status, warehouse_id, ref_doc_id, partner_id, reason_code, idempotency_key, notes, created_by)
+VALUES ($1, $2::doc.doc_type, $3, $4::doc.doc_status, $5, $6, $7, $8, $9, $10, $11)
+RETURNING id, public_id, doc_no, doc_type, doc_date, status, warehouse_id, ref_doc_id, partner_id, reason_code, idempotency_key, notes, created_by, created_at
 `
 
 type CreateDocumentParams struct {
@@ -80,7 +106,9 @@ type CreateDocumentParams struct {
 	DocDate        pgtype.Date `json:"doc_date"`
 	Column4        interface{} `json:"column_4"`
 	WarehouseID    int64       `json:"warehouse_id"`
+	RefDocID       pgtype.Int8 `json:"ref_doc_id"`
 	PartnerID      pgtype.Int8 `json:"partner_id"`
+	ReasonCode     pgtype.Text `json:"reason_code"`
 	IdempotencyKey pgtype.Text `json:"idempotency_key"`
 	Notes          pgtype.Text `json:"notes"`
 	CreatedBy      int64       `json:"created_by"`
@@ -94,7 +122,9 @@ type CreateDocumentRow struct {
 	DocDate        pgtype.Date        `json:"doc_date"`
 	Status         interface{}        `json:"status"`
 	WarehouseID    int64              `json:"warehouse_id"`
+	RefDocID       pgtype.Int8        `json:"ref_doc_id"`
 	PartnerID      pgtype.Int8        `json:"partner_id"`
+	ReasonCode     pgtype.Text        `json:"reason_code"`
 	IdempotencyKey pgtype.Text        `json:"idempotency_key"`
 	Notes          pgtype.Text        `json:"notes"`
 	CreatedBy      int64              `json:"created_by"`
@@ -108,7 +138,9 @@ func (q *Queries) CreateDocument(ctx context.Context, arg CreateDocumentParams) 
 		arg.DocDate,
 		arg.Column4,
 		arg.WarehouseID,
+		arg.RefDocID,
 		arg.PartnerID,
+		arg.ReasonCode,
 		arg.IdempotencyKey,
 		arg.Notes,
 		arg.CreatedBy,
@@ -122,7 +154,9 @@ func (q *Queries) CreateDocument(ctx context.Context, arg CreateDocumentParams) 
 		&i.DocDate,
 		&i.Status,
 		&i.WarehouseID,
+		&i.RefDocID,
 		&i.PartnerID,
+		&i.ReasonCode,
 		&i.IdempotencyKey,
 		&i.Notes,
 		&i.CreatedBy,
@@ -537,6 +571,58 @@ func (q *Queries) DeletePartner(ctx context.Context, id int64) error {
 	return err
 }
 
+const getAllocationCandidateByBalanceID = `-- name: GetAllocationCandidateByBalanceID :one
+SELECT b.id AS balance_id, b.item_id, b.location_id, b.batch_id,
+       b.qty_onhand, b.qty_reserved,
+       l.warehouse_id, l.code AS location_code, l.pick_seq, bt.expiry_date
+FROM inv.stock_balances b
+JOIN master.locations l ON l.id = b.location_id
+LEFT JOIN master.batches bt ON bt.id = b.batch_id
+WHERE b.id = $1
+  AND l.warehouse_id = $2
+  AND b.status = 'available'
+  AND (bt.expiry_date IS NULL OR bt.expiry_date > CURRENT_DATE)
+FOR UPDATE OF b
+`
+
+type GetAllocationCandidateByBalanceIDParams struct {
+	ID          int64 `json:"id"`
+	WarehouseID int64 `json:"warehouse_id"`
+}
+
+type GetAllocationCandidateByBalanceIDRow struct {
+	BalanceID    int64          `json:"balance_id"`
+	ItemID       int64          `json:"item_id"`
+	LocationID   int64          `json:"location_id"`
+	BatchID      pgtype.Int8    `json:"batch_id"`
+	QtyOnhand    pgtype.Numeric `json:"qty_onhand"`
+	QtyReserved  pgtype.Numeric `json:"qty_reserved"`
+	WarehouseID  int64          `json:"warehouse_id"`
+	LocationCode string         `json:"location_code"`
+	PickSeq      pgtype.Int4    `json:"pick_seq"`
+	ExpiryDate   pgtype.Date    `json:"expiry_date"`
+}
+
+// Manual override target: locks one specific balance (Fase 7.3). Must belong
+// to the warehouse, be available, and not be expired.
+func (q *Queries) GetAllocationCandidateByBalanceID(ctx context.Context, arg GetAllocationCandidateByBalanceIDParams) (GetAllocationCandidateByBalanceIDRow, error) {
+	row := q.db.QueryRow(ctx, getAllocationCandidateByBalanceID, arg.ID, arg.WarehouseID)
+	var i GetAllocationCandidateByBalanceIDRow
+	err := row.Scan(
+		&i.BalanceID,
+		&i.ItemID,
+		&i.LocationID,
+		&i.BatchID,
+		&i.QtyOnhand,
+		&i.QtyReserved,
+		&i.WarehouseID,
+		&i.LocationCode,
+		&i.PickSeq,
+		&i.ExpiryDate,
+	)
+	return i, err
+}
+
 const getBatchByItemAndNo = `-- name: GetBatchByItemAndNo :one
 SELECT id, item_id, batch_no, mfg_date, expiry_date
 FROM master.batches
@@ -558,6 +644,28 @@ func (q *Queries) GetBatchByItemAndNo(ctx context.Context, arg GetBatchByItemAnd
 		&i.BatchNo,
 		&i.MfgDate,
 		&i.ExpiryDate,
+	)
+	return i, err
+}
+
+const getDeliveryByDocument = `-- name: GetDeliveryByDocument :one
+SELECT document_id, vehicle_no, driver_name, shipped_at, received_by, received_at, pod_file_url, signature_url
+FROM doc.deliveries
+WHERE document_id = $1
+`
+
+func (q *Queries) GetDeliveryByDocument(ctx context.Context, documentID int64) (DocDeliveries, error) {
+	row := q.db.QueryRow(ctx, getDeliveryByDocument, documentID)
+	var i DocDeliveries
+	err := row.Scan(
+		&i.DocumentID,
+		&i.VehicleNo,
+		&i.DriverName,
+		&i.ShippedAt,
+		&i.ReceivedBy,
+		&i.ReceivedAt,
+		&i.PodFileUrl,
+		&i.SignatureUrl,
 	)
 	return i, err
 }
@@ -624,6 +732,35 @@ func (q *Queries) GetDocumentByIDempotencyKey(ctx context.Context, idempotencyKe
 		&i.ApprovedAt,
 		&i.ApprovedBy,
 		&i.CompletedAt,
+	)
+	return i, err
+}
+
+const getItemByBarcode = `-- name: GetItemByBarcode :one
+SELECT i.id AS item_id, i.sku, i.base_uom, u.uom, u.conv_factor
+FROM master.item_uoms u
+JOIN master.items i ON i.id = u.item_id
+WHERE u.barcode = $1
+LIMIT 1
+`
+
+type GetItemByBarcodeRow struct {
+	ItemID     int64          `json:"item_id"`
+	Sku        string         `json:"sku"`
+	BaseUom    string         `json:"base_uom"`
+	Uom        string         `json:"uom"`
+	ConvFactor pgtype.Numeric `json:"conv_factor"`
+}
+
+func (q *Queries) GetItemByBarcode(ctx context.Context, barcode pgtype.Text) (GetItemByBarcodeRow, error) {
+	row := q.db.QueryRow(ctx, getItemByBarcode, barcode)
+	var i GetItemByBarcodeRow
+	err := row.Scan(
+		&i.ItemID,
+		&i.Sku,
+		&i.BaseUom,
+		&i.Uom,
+		&i.ConvFactor,
 	)
 	return i, err
 }
@@ -1002,6 +1139,144 @@ func (q *Queries) InsertStockMovement(ctx context.Context, arg InsertStockMoveme
 		arg.CreatedBy,
 	)
 	return err
+}
+
+const listAllocationCandidates = `-- name: ListAllocationCandidates :many
+
+SELECT b.id AS balance_id, b.item_id, b.location_id, b.batch_id,
+       b.qty_onhand, b.qty_reserved,
+       l.code AS location_code, l.pick_seq, bt.expiry_date
+FROM inv.stock_balances b
+JOIN master.locations l ON l.id = b.location_id
+LEFT JOIN master.batches bt ON bt.id = b.batch_id
+WHERE b.item_id = $1
+  AND l.warehouse_id = $2
+  AND b.status = 'available'
+  AND l.loc_type IN ('pick','bulk')
+  AND b.qty_onhand > b.qty_reserved
+  AND (bt.expiry_date IS NULL OR bt.expiry_date > CURRENT_DATE)
+ORDER BY bt.expiry_date NULLS LAST, b.id, l.pick_seq
+FOR UPDATE OF b
+`
+
+type ListAllocationCandidatesParams struct {
+	ItemID      int64 `json:"item_id"`
+	WarehouseID int64 `json:"warehouse_id"`
+}
+
+type ListAllocationCandidatesRow struct {
+	BalanceID    int64          `json:"balance_id"`
+	ItemID       int64          `json:"item_id"`
+	LocationID   int64          `json:"location_id"`
+	BatchID      pgtype.Int8    `json:"batch_id"`
+	QtyOnhand    pgtype.Numeric `json:"qty_onhand"`
+	QtyReserved  pgtype.Numeric `json:"qty_reserved"`
+	LocationCode string         `json:"location_code"`
+	PickSeq      pgtype.Int4    `json:"pick_seq"`
+	ExpiryDate   pgtype.Date    `json:"expiry_date"`
+}
+
+// ============ OUTBOUND (Fase 7 - DO / REQ / FEFO-FIFO) ============
+// FEFO/FIFO candidate balances for one item in a warehouse (FSD §4.2).
+// Rows are locked (FOR UPDATE OF b — only the balances table, since
+// PostgreSQL forbids locking the nullable side of an outer join) so allocation
+// is race-safe against concurrent allocators/posters.
+func (q *Queries) ListAllocationCandidates(ctx context.Context, arg ListAllocationCandidatesParams) ([]ListAllocationCandidatesRow, error) {
+	rows, err := q.db.Query(ctx, listAllocationCandidates, arg.ItemID, arg.WarehouseID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListAllocationCandidatesRow
+	for rows.Next() {
+		var i ListAllocationCandidatesRow
+		if err := rows.Scan(
+			&i.BalanceID,
+			&i.ItemID,
+			&i.LocationID,
+			&i.BatchID,
+			&i.QtyOnhand,
+			&i.QtyReserved,
+			&i.LocationCode,
+			&i.PickSeq,
+			&i.ExpiryDate,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAllocationsByDocument = `-- name: ListAllocationsByDocument :many
+SELECT a.id, a.doc_line_id, a.balance_id, a.qty_allocated, a.qty_picked,
+       b.item_id, b.location_id, b.batch_id,
+       l.code AS location_code, l.pick_seq,
+       bt.batch_no, bt.expiry_date,
+       i.sku, i.base_uom
+FROM doc.allocations a
+JOIN inv.stock_balances b ON b.id = a.balance_id
+JOIN master.locations l ON l.id = b.location_id
+JOIN master.items i ON i.id = b.item_id
+LEFT JOIN master.batches bt ON bt.id = b.batch_id
+JOIN doc.document_lines dl ON dl.id = a.doc_line_id
+WHERE dl.document_id = $1
+ORDER BY l.pick_seq NULLS LAST, l.code, a.id
+`
+
+type ListAllocationsByDocumentRow struct {
+	ID           int64          `json:"id"`
+	DocLineID    int64          `json:"doc_line_id"`
+	BalanceID    int64          `json:"balance_id"`
+	QtyAllocated pgtype.Numeric `json:"qty_allocated"`
+	QtyPicked    pgtype.Numeric `json:"qty_picked"`
+	ItemID       int64          `json:"item_id"`
+	LocationID   int64          `json:"location_id"`
+	BatchID      pgtype.Int8    `json:"batch_id"`
+	LocationCode string         `json:"location_code"`
+	PickSeq      pgtype.Int4    `json:"pick_seq"`
+	BatchNo      pgtype.Text    `json:"batch_no"`
+	ExpiryDate   pgtype.Date    `json:"expiry_date"`
+	Sku          string         `json:"sku"`
+	BaseUom      string         `json:"base_uom"`
+}
+
+func (q *Queries) ListAllocationsByDocument(ctx context.Context, documentID int64) ([]ListAllocationsByDocumentRow, error) {
+	rows, err := q.db.Query(ctx, listAllocationsByDocument, documentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListAllocationsByDocumentRow
+	for rows.Next() {
+		var i ListAllocationsByDocumentRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.DocLineID,
+			&i.BalanceID,
+			&i.QtyAllocated,
+			&i.QtyPicked,
+			&i.ItemID,
+			&i.LocationID,
+			&i.BatchID,
+			&i.LocationCode,
+			&i.PickSeq,
+			&i.BatchNo,
+			&i.ExpiryDate,
+			&i.Sku,
+			&i.BaseUom,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listDocumentLines = `-- name: ListDocumentLines :many
@@ -1513,6 +1788,54 @@ func (q *Queries) SoftDeleteItem(ctx context.Context, arg SoftDeleteItemParams) 
 	return i, err
 }
 
+const updateAllocationPicked = `-- name: UpdateAllocationPicked :exec
+UPDATE doc.allocations
+SET qty_picked = qty_picked + $2
+WHERE id = $1
+`
+
+type UpdateAllocationPickedParams struct {
+	ID        int64          `json:"id"`
+	QtyPicked pgtype.Numeric `json:"qty_picked"`
+}
+
+func (q *Queries) UpdateAllocationPicked(ctx context.Context, arg UpdateAllocationPickedParams) error {
+	_, err := q.db.Exec(ctx, updateAllocationPicked, arg.ID, arg.QtyPicked)
+	return err
+}
+
+const updateBalanceReserved = `-- name: UpdateBalanceReserved :exec
+UPDATE inv.stock_balances
+SET qty_reserved = qty_reserved + $2, updated_at = NOW()
+WHERE id = $1
+`
+
+type UpdateBalanceReservedParams struct {
+	ID          int64          `json:"id"`
+	QtyReserved pgtype.Numeric `json:"qty_reserved"`
+}
+
+func (q *Queries) UpdateBalanceReserved(ctx context.Context, arg UpdateBalanceReservedParams) error {
+	_, err := q.db.Exec(ctx, updateBalanceReserved, arg.ID, arg.QtyReserved)
+	return err
+}
+
+const updateDocumentLineProcessed = `-- name: UpdateDocumentLineProcessed :exec
+UPDATE doc.document_lines
+SET qty_processed = $2
+WHERE id = $1
+`
+
+type UpdateDocumentLineProcessedParams struct {
+	ID           int64          `json:"id"`
+	QtyProcessed pgtype.Numeric `json:"qty_processed"`
+}
+
+func (q *Queries) UpdateDocumentLineProcessed(ctx context.Context, arg UpdateDocumentLineProcessedParams) error {
+	_, err := q.db.Exec(ctx, updateDocumentLineProcessed, arg.ID, arg.QtyProcessed)
+	return err
+}
+
 const updateDocumentLinePutaway = `-- name: UpdateDocumentLinePutaway :exec
 UPDATE doc.document_lines
 SET qty_processed = $2, location_id = $3
@@ -1527,6 +1850,22 @@ type UpdateDocumentLinePutawayParams struct {
 
 func (q *Queries) UpdateDocumentLinePutaway(ctx context.Context, arg UpdateDocumentLinePutawayParams) error {
 	_, err := q.db.Exec(ctx, updateDocumentLinePutaway, arg.ID, arg.QtyProcessed, arg.LocationID)
+	return err
+}
+
+const updateDocumentReasonCode = `-- name: UpdateDocumentReasonCode :exec
+UPDATE doc.documents
+SET reason_code = $2
+WHERE id = $1
+`
+
+type UpdateDocumentReasonCodeParams struct {
+	ID         int64       `json:"id"`
+	ReasonCode pgtype.Text `json:"reason_code"`
+}
+
+func (q *Queries) UpdateDocumentReasonCode(ctx context.Context, arg UpdateDocumentReasonCodeParams) error {
+	_, err := q.db.Exec(ctx, updateDocumentReasonCode, arg.ID, arg.ReasonCode)
 	return err
 }
 
@@ -1751,6 +2090,44 @@ func (q *Queries) UpdateStockBalanceQty(ctx context.Context, arg UpdateStockBala
 	var i UpdateStockBalanceQtyRow
 	err := row.Scan(&i.ID, &i.QtyOnhand, &i.QtyReserved)
 	return i, err
+}
+
+const upsertDelivery = `-- name: UpsertDelivery :exec
+INSERT INTO doc.deliveries (document_id, vehicle_no, driver_name, shipped_at, received_by, received_at, pod_file_url, signature_url)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+ON CONFLICT (document_id) DO UPDATE SET
+    vehicle_no    = COALESCE(EXCLUDED.vehicle_no,    doc.deliveries.vehicle_no),
+    driver_name   = COALESCE(EXCLUDED.driver_name,   doc.deliveries.driver_name),
+    shipped_at    = COALESCE(EXCLUDED.shipped_at,    doc.deliveries.shipped_at),
+    received_by   = COALESCE(EXCLUDED.received_by,   doc.deliveries.received_by),
+    received_at   = COALESCE(EXCLUDED.received_at,   doc.deliveries.received_at),
+    pod_file_url  = COALESCE(EXCLUDED.pod_file_url,  doc.deliveries.pod_file_url),
+    signature_url = COALESCE(EXCLUDED.signature_url, doc.deliveries.signature_url)
+`
+
+type UpsertDeliveryParams struct {
+	DocumentID   int64              `json:"document_id"`
+	VehicleNo    pgtype.Text        `json:"vehicle_no"`
+	DriverName   pgtype.Text        `json:"driver_name"`
+	ShippedAt    pgtype.Timestamptz `json:"shipped_at"`
+	ReceivedBy   pgtype.Text        `json:"received_by"`
+	ReceivedAt   pgtype.Timestamptz `json:"received_at"`
+	PodFileUrl   pgtype.Text        `json:"pod_file_url"`
+	SignatureUrl pgtype.Text        `json:"signature_url"`
+}
+
+func (q *Queries) UpsertDelivery(ctx context.Context, arg UpsertDeliveryParams) error {
+	_, err := q.db.Exec(ctx, upsertDelivery,
+		arg.DocumentID,
+		arg.VehicleNo,
+		arg.DriverName,
+		arg.ShippedAt,
+		arg.ReceivedBy,
+		arg.ReceivedAt,
+		arg.PodFileUrl,
+		arg.SignatureUrl,
+	)
+	return err
 }
 
 const upsertDocumentNumber = `-- name: UpsertDocumentNumber :one

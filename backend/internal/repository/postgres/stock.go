@@ -183,6 +183,21 @@ func (r *PostgresStockRepository) InsertMovement(ctx context.Context, m *stock.S
 	return nil
 }
 
+func (r *PostgresStockRepository) UpdateBalanceReserved(ctx context.Context, id int64, delta float64) error {
+	q := r.getQuerier(ctx)
+	var d pgtype.Numeric
+	_ = d.Scan(fmt.Sprintf("%f", delta))
+
+	err := q.UpdateBalanceReserved(ctx, UpdateBalanceReservedParams{
+		ID:          id,
+		QtyReserved: d,
+	})
+	if err != nil {
+		return fmt.Errorf("postgres: failed to update balance reserved: %w", err)
+	}
+	return nil
+}
+
 func (r *PostgresStockRepository) GetMovements(ctx context.Context, f stock.MovementFilter) ([]*stock.StockMovement, error) {
 	q := r.getQuerier(ctx)
 

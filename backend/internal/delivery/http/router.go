@@ -10,6 +10,7 @@ import (
 	"inventory/internal/pkg/validation"
 	inbounduc "inventory/internal/usecase/inbound"
 	itemuc "inventory/internal/usecase/item"
+	outbounduc "inventory/internal/usecase/outbound"
 	stockuc "inventory/internal/usecase/stock"
 
 	"github.com/casbin/casbin/v2"
@@ -29,6 +30,7 @@ type RouterConfig struct {
 	ItemUsecase    *itemuc.Usecase
 	StockUsecase   *stockuc.PostingUsecase
 	ReceiptUsecase *inbounduc.ReceiptUsecase
+	OutboundUsecase *outbounduc.OutboundUsecase
 	AsynqClient    *asynq.Client
 	CreateUser     handler.CreateUserFunc
 }
@@ -119,6 +121,31 @@ func NewRouter(cfg ...RouterConfig) *echo.Echo {
 			protected.GET("/receipts/:id/putaway-suggestion", receiptHandler.PutawaySuggestion, rbacMW(c, "grn", "putaway")...)
 			protected.POST("/receipts/:id/putaway", receiptHandler.Putaway,
 				append(rbacMW(c, "grn", "putaway"), echoMiddleware.BodyLimit("1M"))...)
+		}
+
+		// ─── Outbound endpoints (Fase 7) ────────────────────────────────
+		if c.OutboundUsecase != nil {
+			outboundHandler := handler.NewOutboundHandler(c.OutboundUsecase)
+			protected.POST("/requests", outboundHandler.CreateRequest,
+				append(rbacMW(c, "request", "create"), echoMiddleware.BodyLimit("1M"))...)
+			protected.POST("/requests/:id/submit", outboundHandler.SubmitRequest, rbacMW(c, "request", "approve")...)
+			protected.POST("/requests/:id/approve", outboundHandler.ApproveRequest, rbacMW(c, "request", "approve")...)
+
+			protected.POST("/deliveries", outboundHandler.CreateDelivery,
+				append(rbacMW(c, "do", "create"), echoMiddleware.BodyLimit("1M"))...)
+			protected.POST("/deliveries/:id/submit", outboundHandler.SubmitDelivery, rbacMW(c, "do", "approve")...)
+			protected.POST("/deliveries/:id/approve", outboundHandler.ApproveDelivery, rbacMW(c, "do", "approve")...)
+			protected.POST("/deliveries/:id/allocate", outboundHandler.Allocate,
+				append(rbacMW(c, "do", "allocate"), echoMiddleware.BodyLimit("1M"))...)
+			protected.POST("/deliveries/:id/allocate/override", outboundHandler.AllocateOverride,
+				append(rbacMW(c, "outbound", "override_allocation"), echoMiddleware.BodyLimit("1M"))...)
+			protected.GET("/deliveries/:id/picking-list", outboundHandler.PickingList, rbacMW(c, "do", "pick")...)
+			protected.POST("/deliveries/:id/pick", outboundHandler.Pick,
+				append(rbacMW(c, "do", "pick"), echoMiddleware.BodyLimit("1M"))...)
+			protected.POST("/deliveries/:id/ship", outboundHandler.Ship,
+				append(rbacMW(c, "do", "ship"), echoMiddleware.BodyLimit("1M"))...)
+			protected.POST("/deliveries/:id/pod", outboundHandler.Pod,
+				append(rbacMW(c, "do", "pod"), echoMiddleware.BodyLimit("1M"))...)
 		}
 	}
 
