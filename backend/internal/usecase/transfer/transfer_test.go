@@ -822,3 +822,119 @@ func TestReceiveTransfer_InsufficientInTransit(t *testing.T) {
 	doc, _, _ := h.docs.GetByID(context.Background(), 1)
 	assert.Equal(t, document.StatusInProgress, doc.Status)
 }
+
+func TestSubmitTransfer_WrongDocType(t *testing.T) {
+	h := newHarness(t)
+	h.stdMaster()
+	do := &document.Document{DocType: document.DocTypeDO, Status: document.StatusDraft, WarehouseID: 10, CreatedBy: 5}
+	h.docs.seed(do, nil)
+
+	err := h.uc.SubmitTransfer(context.Background(), do.ID)
+	isAppErr(t, err, "ERR_NOT_FOUND")
+}
+
+func TestApproveTransfer_WrongDocType(t *testing.T) {
+	h := newHarness(t)
+	h.stdMaster()
+	do := &document.Document{DocType: document.DocTypeDO, Status: document.StatusSubmitted, WarehouseID: 10, CreatedBy: 5}
+	h.docs.seed(do, nil)
+
+	err := h.uc.ApproveTransfer(context.Background(), do.ID, 99)
+	isAppErr(t, err, "ERR_NOT_FOUND")
+}
+
+func TestApproveTransfer_SelfApproval(t *testing.T) {
+	h := newHarness(t)
+	h.stdMaster()
+	dest := int64(20)
+	doc, lines := h.seedTransfer(document.StatusSubmitted, 5, &dest)
+	_ = lines
+
+	err := h.uc.ApproveTransfer(context.Background(), doc.ID, 5)
+	isAppErr(t, err, "ERR_SELF_APPROVAL")
+}
+
+func TestReceiveTransfer_EdgeValidation(t *testing.T) {
+	h := newHarness(t)
+	h.stdMaster()
+	ctx := context.Background()
+	dest := int64(20)
+
+	t.Run("wrong doc type", func(t *testing.T) {
+		do := &document.Document{DocType: document.DocTypeDO, Status: document.StatusInProgress, WarehouseID: 10, CreatedBy: 5}
+		h.docs.seed(do, nil)
+		_, err := h.uc.ReceiveTransfer(ctx, do.ID, ReceiveInput{UserID: 7, Lines: []ReceiveLineInput{{LineID: 1, QtyReceived: 10, LocationID: 901}}})
+		isAppErr(t, err, "ERR_NOT_FOUND")
+	})
+	t.Run("no destination warehouse", func(t *testing.T) {
+		doc, lines := h.seedTransfer(document.StatusInProgress, 5, nil)
+		_, err := h.uc.ReceiveTransfer(ctx, doc.ID, ReceiveInput{UserID: 7, Lines: []ReceiveLineInput{{LineID: lines[0].ID, QtyReceived: 10, LocationID: 901}}})
+		isAppErr(t, err, "ERR_INVALID_STATE")
+	})
+	t.Run("empty lines", func(t *testing.T) {
+		doc, _ := h.seedTransfer(document.StatusInProgress, 5, &dest)
+		_, err := h.uc.ReceiveTransfer(ctx, doc.ID, ReceiveInput{UserID: 7})
+		isAppErr(t, err, "ERR_VALIDATION")
+	})
+	t.Run("zero qty received", func(t *testing.T) {
+		doc, lines := h.seedTransfer(document.StatusInProgress, 5, &dest)
+		_, err := h.uc.ReceiveTransfer(ctx, doc.ID, ReceiveInput{UserID: 7, Lines: []ReceiveLineInput{{LineID: lines[0].ID, QtyReceived: 0, LocationID: 901}}})
+		isAppErr(t, err, "ERR_VALIDATION")
+	})
+	t.Run("unknown location", func(t *testing.T) {
+		doc, lines := h.seedTransfer(document.StatusInProgress, 5, &dest)
+		_, err := h.uc.ReceiveTransfer(ctx, doc.ID, ReceiveInput{UserID: 7, Lines: []ReceiveLineInput{{LineID: lines[0].ID, QtyReceived: 10, LocationID: 999}}})
+		isAppErr(t, err, "ERR_VALIDATION")
+	})
+	t.Run("inactive location", func(t *testing.T) {
+		doc, lines := h.seedTransfer(document.StatusInProgress, 5, &dest)
+		h.locs.byID[903] = &LocationInfo{ID: 903, WarehouseID: 20, Code: "BLK-20-01", LocType: "bulk", IsActive: false}
+		_, err := h.uc.ReceiveTransfer(ctx, doc.ID, ReceiveInput{UserID: 7, Lines: []ReceiveLineInput{{LineID: lines[0].ID, QtyReceived: 10, LocationID: 903}}})
+		isAppErr(t, err, "ERR_VALIDATION")
+	})
+	t.Run("invalid location type", func(t *testing.T) {
+		doc, lines := h.seedTransfer(document.StatusInProgress, 5, &dest)
+		h.locs.byID[904] = &LocationInfo{ID: 904, WarehouseID: 20, Code: "DAM-20-01", LocType: "damaged", IsActive: true}
+		_, err := h.uc.ReceiveTransfer(ctx, doc.ID, ReceiveInput{UserID: 7, Lines: []ReceiveLineInput{{LineID: lines[0].ID, QtyReceived: 10, LocationID: 904}}})
+		isAppErr(t, err, "ERR_VALIDATION")
+	})
+	t.Run("not all lines received", func(t *testing.T) {
+		doc := &document.Document{DocType: document.DocTypeTransfer, Status: document.StatusInProgress, WarehouseID: 10, DestWarehouseID: &dest, CreatedBy: 5}
+		lines := []*document.DocumentLine{
+			{LineNo: 1, ItemID: 1, Uom: "PCS", ConvFactor: 1, QtyRequest: 10},
+			{LineNo: 2, ItemID: 1, Uom: "PCS", ConvFactor: 1, QtyRequest: 10},
+		}
+		h.docs.seed(doc, lines)
+		_, err := h.uc.ReceiveTransfer(ctx, doc.ID, ReceiveInput{UserID: 7, Lines: []ReceiveLineInput{{LineID: lines[0].ID, QtyReceived: 10, LocationID: 901}}})
+		isAppErr(t, err, "ERR_VALIDATION")
+	})
+	t.Run("no transit location", func(t *testing.T) {
+		doc, lines := h.seedTransfer(document.StatusInProgress, 5, &dest)
+		delete(h.locs.transit, 20)
+		_, err := h.uc.ReceiveTransfer(ctx, doc.ID, ReceiveInput{UserID: 7, Lines: []ReceiveLineInput{{LineID: lines[0].ID, QtyReceived: 10, LocationID: 901}}})
+		isAppErr(t, err, "ERR_VALIDATION")
+	})
+}
+
+func TestReceiveTransfer_DiscrepancyWithoutAuditSink(t *testing.T) {
+	h := newHarness(t)
+	h.stdMaster()
+	dest := int64(20)
+	h.seedTransfer(document.StatusInProgress, 5, &dest)
+	h.stock.addBalance(&stock.StockBalance{ItemID: 1, LocationID: 900, Status: stock.StatusInTransit, QtyOnhand: 100})
+
+	// No audit sink configured → discrepancy must not fail the receive.
+	tx := snapTx{docs: h.docs, stock: h.stock}
+	posting := stockuc.NewPostingUsecase(h.stock, inlineTx{})
+	h.uc = NewTransferUsecase(h.docs, h.items, h.wh, h.locs, h.cands, posting, tx,
+		docnum.NewGenerator(&mockSeq{}), nil,
+		WithClock(func() time.Time { return testNow }))
+
+	result, err := h.uc.ReceiveTransfer(context.Background(), 1, ReceiveInput{
+		UserID: 7,
+		Lines:  []ReceiveLineInput{{LineID: 1, QtyReceived: 80, LocationID: 901}},
+	})
+	require.NoError(t, err)
+	assert.True(t, result.HasDiscrepancy)
+	assert.Equal(t, document.StatusCompleted, result.Status)
+}

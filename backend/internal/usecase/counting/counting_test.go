@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"testing"
 	"time"
 
@@ -21,15 +22,16 @@ import (
 // ─── Mocks ──────────────────────────────────────────────────────────────────
 
 type mockDocs struct {
-	docs         map[int64]*document.Document
-	lines        map[int64][]*document.CountLine
-	byKey        map[string]int64
-	nextID       int64
-	nextLine     int64
-	statuses     []mockStatusUpdate
+	docs             map[int64]*document.Document
+	lines            map[int64][]*document.CountLine
+	byKey            map[string]int64
+	nextID           int64
+	nextLine         int64
+	statuses         []mockStatusUpdate
 	managerApprovals []int64
-	createdCount []*document.CountLine
-	createdDoc   []*document.Document
+	createdCount     []*document.CountLine
+	createdDoc       []*document.Document
+	errByKey         error // injected GetByIDempotencyKey failure
 }
 
 type mockStatusUpdate struct {
@@ -78,6 +80,9 @@ func (m *mockDocs) GetByID(ctx context.Context, id int64) (*document.Document, [
 }
 
 func (m *mockDocs) GetByIDempotencyKey(ctx context.Context, key string) (*document.Document, error) {
+	if m.errByKey != nil {
+		return nil, m.errByKey
+	}
 	id, ok := m.byKey[key]
 	if !ok {
 		return nil, pgx.ErrNoRows
@@ -360,8 +365,16 @@ func (h *harness) seedCount(status document.Status, createdBy int64, systems map
 		WarehouseID: 10,
 		CreatedBy:   createdBy,
 	}
+	// Iterate sorted keys: Go map iteration order is randomized, and line IDs
+	// are assigned by slice position, which would make tests flaky.
+	keys := make([]int, 0, len(systems))
+	for k := range systems {
+		keys = append(keys, int(k))
+	}
+	sort.Ints(keys)
 	var lines []*document.CountLine
-	for itemID, qty := range systems {
+	for _, k := range keys {
+		itemID, qty := int64(k), systems[int64(k)]
 		lines = append(lines, &document.CountLine{
 			ItemID:     itemID,
 			LocationID: itemID + 100,
@@ -657,6 +670,89 @@ func TestCreateAdjustment_Success(t *testing.T) {
 	assert.Equal(t, stock.StatusDamaged, h.stock.movements[0].Status)
 	assert.Equal(t, stock.StatusAvailable, h.stock.movements[1].Status)
 	assert.Equal(t, 5.0, h.stock.movements[1].Qty)
+}
+
+func TestPostCount_WrongDocType(t *testing.T) {
+	h := newHarness(t)
+	h.stdMaster()
+	do := &document.Document{DocType: document.DocTypeAdjust, Status: document.StatusDraft, WarehouseID: 10, CreatedBy: 5}
+	h.docs.seed(do, nil)
+
+	_, err := h.uc.PostCount(context.Background(), do.ID, PostCountInput{ApproverID: 9})
+	isAppErr(t, err, "ERR_NOT_FOUND")
+}
+
+func TestPostCount_UnneededManagerApprovalAccepted(t *testing.T) {
+	h := newHarness(t)
+	h.stdMaster()
+	h.seedCount(document.StatusDraft, 5, map[int64]float64{1: 100})
+	h.stock.addBalance(&stock.StockBalance{ItemID: 1, LocationID: 101, Status: stock.StatusAvailable, QtyOnhand: 100})
+	h.values.costs[1] = 1000 // variance value 5.000 ≤ threshold → manager tidak wajib
+	h.docs.lines[1][0].QtyCounted = f64Ptr(95)
+	h.docs.lines[1][0].Variance = f64Ptr(-5)
+	manager := int64(11)
+
+	// Manager ikut diisi meski tidak wajib → tetap divalidasi (harus beda dari
+	// maker dan approver) dan sesi tetap diposting.
+	result, err := h.uc.PostCount(context.Background(), 1, PostCountInput{ApproverID: 9, ManagerApproverID: &manager})
+	require.NoError(t, err)
+	assert.False(t, result.NeedsManagerApproval)
+	assert.Equal(t, document.StatusCompleted, result.Status)
+	require.Len(t, h.docs.managerApprovals, 0, "manager approval not recorded when below threshold")
+}
+
+func TestPostCount_ZeroVariancePostsNothing(t *testing.T) {
+	h := newHarness(t)
+	h.stdMaster()
+	h.seedCount(document.StatusDraft, 5, map[int64]float64{1: 100})
+	h.docs.lines[1][0].QtyCounted = f64Ptr(100)
+	h.docs.lines[1][0].Variance = f64Ptr(0)
+
+	result, err := h.uc.PostCount(context.Background(), 1, PostCountInput{ApproverID: 9})
+	require.NoError(t, err)
+	assert.Equal(t, document.StatusCompleted, result.Status)
+	assert.Equal(t, 0, result.PostedAdjustmentLines)
+	assert.Len(t, h.stock.movements, 0, "zero variance → no ledger rows")
+}
+
+func TestCreateAdjustment_ExtraValidation(t *testing.T) {
+	h := newHarness(t)
+	h.stdMaster()
+	ctx := context.Background()
+	base := CreateAdjustmentInput{
+		WarehouseID: 10,
+		ReasonCode:  "RUSAK",
+		Notes:       "penjelasan tertulis",
+		CreatedBy:   5,
+		Lines:       []AdjustmentLineInput{{ItemID: 1, LocationID: 101, Qty: -5}},
+	}
+
+	t.Run("reason code too long", func(t *testing.T) {
+		in := base
+		in.ReasonCode = "KODE-REASON-SANGAT-PANJANG-MELEBIHI-BATAS-30-KARAKTER"
+		_, err := h.uc.CreateAdjustment(ctx, in)
+		isAppErr(t, err, "ERR_VALIDATION")
+	})
+	t.Run("inactive warehouse", func(t *testing.T) {
+		h.wh.warehouses[10].IsActive = false
+		_, err := h.uc.CreateAdjustment(ctx, base)
+		isAppErr(t, err, "ERR_VALIDATION")
+		h.wh.warehouses[10].IsActive = true
+	})
+	t.Run("location id required", func(t *testing.T) {
+		in := base
+		in.Lines = []AdjustmentLineInput{{ItemID: 1, LocationID: 0, Qty: -5}}
+		_, err := h.uc.CreateAdjustment(ctx, in)
+		isAppErr(t, err, "ERR_VALIDATION")
+	})
+	t.Run("idempotency lookup failure", func(t *testing.T) {
+		h.docs.errByKey = errors.New("lookup boom")
+		in := base
+		in.IdempotencyKey = "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
+		_, err := h.uc.CreateAdjustment(ctx, in)
+		require.ErrorContains(t, err, "lookup boom")
+		h.docs.errByKey = nil
+	})
 }
 
 func TestCreateAdjustment_Validation(t *testing.T) {

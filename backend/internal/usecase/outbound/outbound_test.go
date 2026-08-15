@@ -38,6 +38,9 @@ type mockDocs struct {
 	processed    []mockLineProcessed
 	reasons      []mockReason
 	upserts      []*document.Delivery
+	errGet       error // injected GetByID failure
+	errByKey     error // injected GetByIDempotencyKey failure
+	errCreate    error // injected Create failure
 }
 
 type mockStatusUpdate struct {
@@ -79,12 +82,18 @@ func (m *mockDocs) seed(doc *document.Document, lines []*document.DocumentLine) 
 }
 
 func (m *mockDocs) Create(ctx context.Context, doc *document.Document, lines []*document.DocumentLine) error {
+	if m.errCreate != nil {
+		return m.errCreate
+	}
 	m.seed(doc, lines)
 	m.createdDocs = append(m.createdDocs, doc)
 	return nil
 }
 
 func (m *mockDocs) GetByID(ctx context.Context, id int64) (*document.Document, []*document.DocumentLine, error) {
+	if m.errGet != nil {
+		return nil, nil, m.errGet
+	}
 	doc, ok := m.docs[id]
 	if !ok {
 		return nil, nil, pgx.ErrNoRows
@@ -93,6 +102,9 @@ func (m *mockDocs) GetByID(ctx context.Context, id int64) (*document.Document, [
 }
 
 func (m *mockDocs) GetByIDempotencyKey(ctx context.Context, key string) (*document.Document, error) {
+	if m.errByKey != nil {
+		return nil, m.errByKey
+	}
 	id, ok := m.byKey[key]
 	if !ok {
 		return nil, pgx.ErrNoRows
@@ -297,9 +309,11 @@ func (m *mockLocs) GetByWarehouseCode(ctx context.Context, warehouseID int64, co
 
 // mockCands serves StockCandidates; reserves are recorded for assertions.
 type mockCands struct {
-	byItem  map[int64][]*AllocationCandidate
-	byBal   map[int64]*AllocationCandidate
-	reserve []mockReserve
+	byItem    map[int64][]*AllocationCandidate
+	byBal     map[int64]*AllocationCandidate
+	reserve   []mockReserve
+	errLock   error // injected LockAllocationCandidates failure
+	errGetCand error // injected GetCandidateByBalanceID failure
 }
 
 type mockReserve struct {
@@ -308,10 +322,16 @@ type mockReserve struct {
 }
 
 func (m *mockCands) LockAllocationCandidates(ctx context.Context, itemID, warehouseID int64) ([]*AllocationCandidate, error) {
+	if m.errLock != nil {
+		return nil, m.errLock
+	}
 	return m.byItem[itemID], nil
 }
 
 func (m *mockCands) GetCandidateByBalanceID(ctx context.Context, balanceID, warehouseID int64) (*AllocationCandidate, error) {
+	if m.errGetCand != nil {
+		return nil, m.errGetCand
+	}
 	c, ok := m.byBal[balanceID]
 	if !ok {
 		return nil, pgx.ErrNoRows
@@ -327,10 +347,12 @@ func (m *mockCands) UpdateBalanceReserved(ctx context.Context, balanceID int64, 
 // mockStockRepo mirrors the stock tables for the posting engine + ship release.
 type mockStockRepo struct {
 	stock.StockRepository
-	balances  map[string]*stock.StockBalance
-	byID      map[int64]*stock.StockBalance
-	movements []*stock.StockMovement
-	nextID    int64
+	balances   map[string]*stock.StockBalance
+	byID       map[int64]*stock.StockBalance
+	movements  []*stock.StockMovement
+	nextID     int64
+	errUpsert  error // injected UpsertBalance failure
+	errInsert  error // injected InsertMovement failure
 }
 
 func newMockStockRepo() *mockStockRepo {
@@ -369,6 +391,9 @@ func (m *mockStockRepo) GetBalancesForUpdate(ctx context.Context, keys []stock.B
 }
 
 func (m *mockStockRepo) UpsertBalance(ctx context.Context, b *stock.StockBalance) error {
+	if m.errUpsert != nil {
+		return m.errUpsert
+	}
 	if b.ID == 0 {
 		b.ID = m.nextID
 		m.nextID++
@@ -379,6 +404,9 @@ func (m *mockStockRepo) UpsertBalance(ctx context.Context, b *stock.StockBalance
 }
 
 func (m *mockStockRepo) InsertMovement(ctx context.Context, mv *stock.StockMovement) error {
+	if m.errInsert != nil {
+		return m.errInsert
+	}
 	m.movements = append(m.movements, mv)
 	return nil
 }
@@ -447,6 +475,7 @@ type harness struct {
 	docs  *mockDocs
 	items *mockItems
 	wh    *mockWh
+	seq   *mockSeq
 	locs  *mockLocs
 	cands *mockCands
 	stock *mockStockRepo
@@ -463,16 +492,19 @@ func newHarness(t *testing.T) *harness {
 		stock: newMockStockRepo(),
 	}
 	tx := snapTx{docs: h.docs, cands: h.cands, stock: h.stock}
-	seq := &mockSeq{}
+	h.seq = &mockSeq{}
 	posting := stockuc.NewPostingUsecase(h.stock, inlineTx{})
 	h.uc = NewOutboundUsecase(h.docs, h.items, h.wh, h.locs, h.cands, h.stock, tx, posting,
-		docnum.NewGenerator(seq), WithClock(func() time.Time { return testNow }))
+		docnum.NewGenerator(h.seq), WithClock(func() time.Time { return testNow }))
 	return h
 }
 
-type mockSeq struct{ n int64 }
+type mockSeq struct{ n int64; err error }
 
 func (m *mockSeq) NextSequence(ctx context.Context, docType, period string) (int64, error) {
+	if m.err != nil {
+		return 0, m.err
+	}
 	m.n++
 	return m.n, nil
 }
@@ -1097,4 +1129,425 @@ func TestPod_RequiresReceiver(t *testing.T) {
 
 	_, err = h.uc.Pod(context.Background(), do.ID, PodInput{})
 	assertAppErr(t, err, "ERR_VALIDATION")
+}
+
+// ─── Request edge cases (7.1) ─────────────────────────────────────────────────
+
+func TestRequest_Submit_WrongDocType(t *testing.T) {
+	h := newHarness(t)
+	h.stdItems()
+	req := h.seedApprovedREQ(7)
+	do, _, _ := h.uc.CreateDelivery(context.Background(), CreateDeliveryInput{
+		WarehouseID: 10, RequestID: req.ID, CreatedBy: 9,
+	})
+
+	err := h.uc.SubmitRequest(context.Background(), do.ID)
+	assertAppErr(t, err, "ERR_NOT_FOUND")
+}
+
+func TestRequest_Approve_WrongDocType(t *testing.T) {
+	h := newHarness(t)
+	h.stdItems()
+	req := h.seedApprovedREQ(7)
+	do, _, _ := h.uc.CreateDelivery(context.Background(), CreateDeliveryInput{
+		WarehouseID: 10, RequestID: req.ID, CreatedBy: 9,
+	})
+
+	err := h.uc.ApproveRequest(context.Background(), do.ID, 99)
+	assertAppErr(t, err, "ERR_NOT_FOUND")
+}
+
+func TestRequest_Approve_SelfApproval(t *testing.T) {
+	h := newHarness(t)
+	h.stdItems()
+	doc, _, err := h.uc.CreateRequest(context.Background(), CreateRequestInput{
+		WarehouseID: 10, CreatedBy: 7, Lines: []CreateLineInput{{ItemID: 1, Qty: 2}},
+	})
+	require.NoError(t, err)
+	require.NoError(t, h.uc.SubmitRequest(context.Background(), doc.ID))
+
+	err = h.uc.ApproveRequest(context.Background(), doc.ID, 7)
+	assertAppErr(t, err, "ERR_SELF_APPROVAL")
+}
+
+// ─── Delivery edge cases (7.1) ────────────────────────────────────────────────
+
+func TestCreateDelivery_IdempotentReplay(t *testing.T) {
+	h := newHarness(t)
+	h.stdItems()
+	req := h.seedApprovedREQ(7)
+	key := "6f1e9b2a-3c4d-4e5f-8a9b-0c1d2e3f4a5b"
+
+	first, _, err := h.uc.CreateDelivery(context.Background(), CreateDeliveryInput{
+		WarehouseID: 10, RequestID: req.ID, CreatedBy: 9, IdempotencyKey: key,
+	})
+	require.NoError(t, err)
+
+	replay, lines, err := h.uc.CreateDelivery(context.Background(), CreateDeliveryInput{
+		WarehouseID: 10, RequestID: req.ID, CreatedBy: 9, IdempotencyKey: key,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, first.ID, replay.ID, "same idempotency key must replay the same document")
+	assert.Nil(t, lines, "replay returns the existing document without lines")
+}
+
+func TestCreateDelivery_ByIdemKeyLookupError(t *testing.T) {
+	h := newHarness(t)
+	h.stdItems()
+	req := h.seedApprovedREQ(7)
+	h.docs.errByKey = errors.New("lookup boom")
+
+	_, _, err := h.uc.CreateDelivery(context.Background(), CreateDeliveryInput{
+		WarehouseID: 10, RequestID: req.ID, CreatedBy: 9,
+		IdempotencyKey: "6f1e9b2a-3c4d-4e5f-8a9b-0c1d2e3f4a5b",
+	})
+	require.ErrorContains(t, err, "lookup boom")
+}
+
+func TestCreateDelivery_RequestNoLines(t *testing.T) {
+	h := newHarness(t)
+	h.stdItems()
+	req := &document.Document{
+		DocNo: "REQ/WH01/2608/00001", DocType: document.DocTypeRequest,
+		Status: document.StatusApproved, WarehouseID: 10, CreatedBy: 7,
+	}
+	h.docs.seed(req, nil)
+
+	_, _, err := h.uc.CreateDelivery(context.Background(), CreateDeliveryInput{
+		WarehouseID: 10, RequestID: req.ID, CreatedBy: 9,
+	})
+	assertAppErr(t, err, "ERR_VALIDATION")
+}
+
+func TestCreateDelivery_InactiveWarehouse(t *testing.T) {
+	h := newHarness(t)
+	h.stdItems()
+	req := h.seedApprovedREQ(7)
+	h.wh.warehouses[10].IsActive = false
+
+	_, _, err := h.uc.CreateDelivery(context.Background(), CreateDeliveryInput{
+		WarehouseID: 10, RequestID: req.ID, CreatedBy: 9,
+	})
+	assertAppErr(t, err, "ERR_VALIDATION")
+}
+
+func TestCreateDelivery_UnknownWarehouse(t *testing.T) {
+	h := newHarness(t)
+	h.stdItems()
+	req := h.seedApprovedREQ(7)
+
+	_, _, err := h.uc.CreateDelivery(context.Background(), CreateDeliveryInput{
+		WarehouseID: 999, RequestID: req.ID, CreatedBy: 9,
+	})
+	require.ErrorIs(t, err, pgx.ErrNoRows)
+}
+
+func TestCreateDelivery_SequenceError(t *testing.T) {
+	h := newHarness(t)
+	h.stdItems()
+	req := h.seedApprovedREQ(7)
+	h.seq.err = errors.New("seq boom")
+
+	_, _, err := h.uc.CreateDelivery(context.Background(), CreateDeliveryInput{
+		WarehouseID: 10, RequestID: req.ID, CreatedBy: 9,
+	})
+	require.ErrorContains(t, err, "seq boom")
+}
+
+func TestCreateDelivery_PersistError(t *testing.T) {
+	h := newHarness(t)
+	h.stdItems()
+	req := h.seedApprovedREQ(7)
+	h.docs.errCreate = errors.New("create boom")
+
+	_, _, err := h.uc.CreateDelivery(context.Background(), CreateDeliveryInput{
+		WarehouseID: 10, RequestID: req.ID, CreatedBy: 9,
+	})
+	require.ErrorContains(t, err, "create boom")
+}
+
+func TestDelivery_Submit_WrongDocType(t *testing.T) {
+	h := newHarness(t)
+	h.stdItems()
+	req := h.seedApprovedREQ(7)
+
+	err := h.uc.SubmitDelivery(context.Background(), req.ID)
+	assertAppErr(t, err, "ERR_NOT_FOUND")
+}
+
+func TestDelivery_Submit_InvalidState(t *testing.T) {
+	h := newHarness(t)
+	h.stdItems()
+	do, _ := h.seedApprovedDO(7)
+
+	err := h.uc.SubmitDelivery(context.Background(), do.ID)
+	assertAppErr(t, err, "ERR_INVALID_STATE")
+}
+
+func TestDelivery_Approve_SelfApproval(t *testing.T) {
+	h := newHarness(t)
+	h.stdItems()
+	req := h.seedApprovedREQ(7)
+	do, _, err := h.uc.CreateDelivery(context.Background(), CreateDeliveryInput{
+		WarehouseID: 10, RequestID: req.ID, CreatedBy: 7,
+	})
+	require.NoError(t, err)
+	require.NoError(t, h.uc.SubmitDelivery(context.Background(), do.ID))
+
+	err = h.uc.ApproveDelivery(context.Background(), do.ID, 7)
+	assertAppErr(t, err, "ERR_SELF_APPROVAL")
+}
+
+func TestDelivery_Approve_DraftState(t *testing.T) {
+	h := newHarness(t)
+	h.stdItems()
+	req := h.seedApprovedREQ(7)
+	do, _, err := h.uc.CreateDelivery(context.Background(), CreateDeliveryInput{
+		WarehouseID: 10, RequestID: req.ID, CreatedBy: 7,
+	})
+	require.NoError(t, err)
+
+	err = h.uc.ApproveDelivery(context.Background(), do.ID, 99)
+	assertAppErr(t, err, "ERR_INVALID_STATE")
+}
+
+// ─── Allocation edge cases (7.2 / 7.3) ───────────────────────────────────────
+
+func TestAllocate_WrongDocType(t *testing.T) {
+	h := newHarness(t)
+	h.stdItems()
+	req := h.seedApprovedREQ(7)
+
+	_, err := h.uc.Allocate(context.Background(), req.ID, AllocateInput{
+		Lines: []LineAllocInput{{LineID: 1, Qty: 1}},
+	})
+	assertAppErr(t, err, "ERR_NOT_FOUND")
+}
+
+func TestAllocate_CandidateLookupError(t *testing.T) {
+	h := newHarness(t)
+	h.stdItems()
+	do, lines := h.seedApprovedDO(7)
+	h.cands.errLock = errors.New("lock boom")
+
+	_, err := h.uc.Allocate(context.Background(), do.ID, AllocateInput{
+		Lines: []LineAllocInput{{LineID: lines[0].ID, Qty: 1}},
+	})
+	require.ErrorContains(t, err, "lock boom")
+}
+
+func TestAllocateOverride_WrongDocType(t *testing.T) {
+	h := newHarness(t)
+	h.stdItems()
+	req := h.seedApprovedREQ(7)
+
+	_, err := h.uc.AllocateOverride(context.Background(), req.ID, OverrideInput{
+		ReasonCode: "test",
+		Lines:      []OverrideLineInput{{LineID: 1, Qty: 1, BalanceID: 500}},
+	})
+	assertAppErr(t, err, "ERR_NOT_FOUND")
+}
+
+func TestAllocateOverride_MissingBalanceID(t *testing.T) {
+	h := newHarness(t)
+	h.stdItems()
+	do, lines := h.seedApprovedDO(7)
+
+	_, err := h.uc.AllocateOverride(context.Background(), do.ID, OverrideInput{
+		ReasonCode: "test",
+		Lines:      []OverrideLineInput{{LineID: lines[0].ID, Qty: 1}},
+	})
+	assertAppErr(t, err, "ERR_VALIDATION")
+}
+
+func TestAllocateOverride_CandidateLookupError(t *testing.T) {
+	h := newHarness(t)
+	h.stdItems()
+	do, lines := h.seedApprovedDO(7)
+	h.cands.errGetCand = errors.New("cand boom")
+
+	_, err := h.uc.AllocateOverride(context.Background(), do.ID, OverrideInput{
+		ReasonCode: "test",
+		Lines:      []OverrideLineInput{{LineID: lines[0].ID, Qty: 1, BalanceID: 500}},
+	})
+	require.ErrorContains(t, err, "cand boom")
+}
+
+// ─── Picking list edge cases (7.4) ───────────────────────────────────────────
+
+func TestPickingList_WrongDocType(t *testing.T) {
+	h := newHarness(t)
+	h.stdItems()
+	req := h.seedApprovedREQ(7)
+
+	_, err := h.uc.PickingList(context.Background(), req.ID)
+	assertAppErr(t, err, "ERR_NOT_FOUND")
+}
+
+func TestPickingList_GetError(t *testing.T) {
+	h := newHarness(t)
+	h.stdItems()
+	h.docs.errGet = errors.New("get boom")
+
+	_, err := h.uc.PickingList(context.Background(), 123)
+	require.ErrorContains(t, err, "get boom")
+}
+
+// ─── Pick edge cases (7.5) ───────────────────────────────────────────────────
+
+func TestPick_UnknownItemBarcode(t *testing.T) {
+	h := newHarness(t)
+	h.stdItems()
+	do, _, alloc := h.seedAllocatedDO(7, 10)
+
+	err := h.uc.Pick(context.Background(), do.ID, PickInput{
+		Scans: []PickScanInput{
+			{AllocationID: alloc.ID, LocationBarcode: "PK-01-01", ItemBarcode: "9999999999999", Qty: 1},
+		},
+	})
+	assertAppErr(t, err, "ERR_SCAN_MISMATCH")
+}
+
+func TestPick_UnknownLocationBarcode(t *testing.T) {
+	h := newHarness(t)
+	h.stdItems()
+	do, _, alloc := h.seedAllocatedDO(7, 10)
+
+	err := h.uc.Pick(context.Background(), do.ID, PickInput{
+		Scans: []PickScanInput{
+			{AllocationID: alloc.ID, LocationBarcode: "ZZ-99-99", ItemBarcode: "8991002101001", Qty: 1},
+		},
+	})
+	assertAppErr(t, err, "ERR_SCAN_MISMATCH")
+}
+
+func TestPick_UnknownAllocation(t *testing.T) {
+	h := newHarness(t)
+	h.stdItems()
+	do, _ := h.seedApprovedDO(7)
+
+	err := h.uc.Pick(context.Background(), do.ID, PickInput{
+		Scans: []PickScanInput{
+			{AllocationID: 424242, LocationBarcode: "PK-01-01", ItemBarcode: "8991002101001", Qty: 1},
+		},
+	})
+	assertAppErr(t, err, "ERR_SCAN_MISMATCH")
+}
+
+// ─── Ship edge cases (7.6) ───────────────────────────────────────────────────
+
+func TestShip_WrongDocType(t *testing.T) {
+	h := newHarness(t)
+	h.stdItems()
+	req := h.seedApprovedREQ(7)
+
+	_, err := h.uc.Ship(context.Background(), req.ID, ShipInput{})
+	assertAppErr(t, err, "ERR_NOT_FOUND")
+}
+
+func TestShip_MergesAllocationsPerBalance(t *testing.T) {
+	h := newHarness(t)
+	h.stdItems()
+	do, _, alloc := h.seedAllocatedDO(7, 10)
+
+	// Second allocation against the same balance, partially picked already —
+	// Ship must merge both into a single balance release but keep one ledger
+	// row per allocation (FSD §4.2).
+	a2 := &document.Allocation{
+		DocLineID:    alloc.DocLineID,
+		BalanceID:    500,
+		QtyAllocated: 3,
+		QtyPicked:    3,
+		ItemID:       1,
+		LocationID:   200,
+		LocationCode: "PK-01-01",
+	}
+	a2.ID = h.docs.nextAlloc
+	h.docs.nextAlloc++
+	h.docs.allocations[a2.ID] = a2
+	h.docs.allocsByLine[alloc.DocLineID] = append(h.docs.allocsByLine[alloc.DocLineID], a2)
+
+	bal := h.stock.byID[500]
+	bal.QtyReserved = 13
+	bal.QtyOnhand = 13
+
+	require.NoError(t, h.uc.Pick(context.Background(), do.ID, PickInput{
+		Scans: []PickScanInput{
+			{AllocationID: alloc.ID, LocationBarcode: "PK-01-01", ItemBarcode: "8991002101001", Qty: 10},
+		},
+	}))
+
+	status, err := h.uc.Ship(context.Background(), do.ID, ShipInput{VehicleNo: "B 1 XYZ"})
+	require.NoError(t, err)
+	assert.Equal(t, document.StatusInProgress, status)
+
+	require.Len(t, h.stock.movements, 2, "one issue movement per allocation")
+	total := 0.0
+	for _, mv := range h.stock.movements {
+		assert.Equal(t, stock.TypeIssue, mv.MovementType)
+		total += mv.Qty
+	}
+	assert.Equal(t, -13.0, total)
+	assert.Equal(t, 0.0, bal.QtyOnhand, "onhand reduced by the merged shipped qty")
+	assert.Equal(t, 0.0, bal.QtyReserved, "merged reservation released exactly once")
+}
+
+func TestShip_ReleaseErrorRollsBack(t *testing.T) {
+	h := newHarness(t)
+	h.stdItems()
+	do, lines := h.seedApprovedDO(7)
+
+	// Allocation pointing at a balance that does not exist in the ledger —
+	// UpdateBalanceReserved fails and the whole shipment is aborted.
+	orphan := &document.Allocation{
+		DocLineID:    lines[0].ID,
+		BalanceID:    999,
+		QtyAllocated: 5,
+		QtyPicked:    5,
+		ItemID:       1,
+		LocationID:   200,
+		LocationCode: "PK-01-01",
+	}
+	orphan.ID = h.docs.nextAlloc
+	h.docs.nextAlloc++
+	h.docs.allocations[orphan.ID] = orphan
+	h.docs.allocsByLine[lines[0].ID] = append(h.docs.allocsByLine[lines[0].ID], orphan)
+
+	_, err := h.uc.Ship(context.Background(), do.ID, ShipInput{})
+	require.ErrorIs(t, err, pgx.ErrNoRows)
+}
+
+func TestShip_GetError(t *testing.T) {
+	h := newHarness(t)
+	h.stdItems()
+	h.docs.errGet = errors.New("get boom")
+
+	_, err := h.uc.Ship(context.Background(), 123, ShipInput{})
+	require.ErrorContains(t, err, "get boom")
+}
+
+func TestShip_PostingErrorRollsBack(t *testing.T) {
+	h := newHarness(t)
+	h.stdItems()
+	do, _, alloc := h.seedAllocatedDO(7, 10)
+	require.NoError(t, h.uc.Pick(context.Background(), do.ID, PickInput{
+		Scans: []PickScanInput{{AllocationID: alloc.ID, LocationBarcode: "PK-01-01", ItemBarcode: "8991002101001", Qty: 10}},
+	}))
+
+	h.stock.errUpsert = errors.New("upsert boom")
+	_, err := h.uc.Ship(context.Background(), do.ID, ShipInput{})
+	require.ErrorContains(t, err, "upsert boom")
+	assert.Equal(t, document.StatusApproved, h.docs.docs[do.ID].Status, "document must not move on failed posting")
+	assert.Len(t, h.stock.movements, 0, "no ledger rows written on failure")
+}
+
+// ─── POD edge cases (7.7) ────────────────────────────────────────────────────
+
+func TestPod_WrongDocType(t *testing.T) {
+	h := newHarness(t)
+	h.stdItems()
+	req := h.seedApprovedREQ(7)
+
+	_, err := h.uc.Pod(context.Background(), req.ID, PodInput{ReceivedBy: "X"})
+	assertAppErr(t, err, "ERR_NOT_FOUND")
 }
