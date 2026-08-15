@@ -197,6 +197,15 @@ FROM inv.stock_balances
 WHERE item_id = $1 AND location_id = $2 AND COALESCE(batch_id, 0) = COALESCE($3, 0) AND status = $4
 FOR UPDATE;
 
+-- name: EnsureBalanceExists :exec
+-- Creates a zeroed balance row if absent so the subsequent SELECT ... FOR
+-- UPDATE actually locks it. Without this, two concurrent transactions that
+-- both see "no row" would later race on the upsert and overwrite each
+-- other's snapshot (lost update — caught by the Fase 10.3 concurrency test).
+INSERT INTO inv.stock_balances (item_id, location_id, batch_id, status, qty_onhand, qty_reserved, updated_at)
+VALUES ($1, $2, $3, $4, 0, 0, NOW())
+ON CONFLICT (item_id, location_id, COALESCE(batch_id, 0), status) DO NOTHING;
+
 -- name: UpsertStockBalanceFull :exec
 INSERT INTO inv.stock_balances (item_id, location_id, batch_id, status, qty_onhand, qty_reserved, updated_at)
 VALUES ($1, $2, $3, $4, $5, $6, NOW())

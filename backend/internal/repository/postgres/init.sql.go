@@ -653,6 +653,33 @@ func (q *Queries) DeletePartner(ctx context.Context, id int64) error {
 	return err
 }
 
+const ensureBalanceExists = `-- name: EnsureBalanceExists :exec
+INSERT INTO inv.stock_balances (item_id, location_id, batch_id, status, qty_onhand, qty_reserved, updated_at)
+VALUES ($1, $2, $3, $4, 0, 0, NOW())
+ON CONFLICT (item_id, location_id, COALESCE(batch_id, 0), status) DO NOTHING
+`
+
+type EnsureBalanceExistsParams struct {
+	ItemID     int64       `json:"item_id"`
+	LocationID int64       `json:"location_id"`
+	BatchID    pgtype.Int8 `json:"batch_id"`
+	Status     interface{} `json:"status"`
+}
+
+// Creates a zeroed balance row if absent so the subsequent SELECT ... FOR
+// UPDATE actually locks it. Without this, two concurrent transactions that
+// both see "no row" would later race on the upsert and overwrite each
+// other's snapshot (lost update — caught by the Fase 10.3 concurrency test).
+func (q *Queries) EnsureBalanceExists(ctx context.Context, arg EnsureBalanceExistsParams) error {
+	_, err := q.db.Exec(ctx, ensureBalanceExists,
+		arg.ItemID,
+		arg.LocationID,
+		arg.BatchID,
+		arg.Status,
+	)
+	return err
+}
+
 const getAllocationCandidateByBalanceID = `-- name: GetAllocationCandidateByBalanceID :one
 SELECT b.id AS balance_id, b.item_id, b.location_id, b.batch_id,
        b.qty_onhand, b.qty_reserved,

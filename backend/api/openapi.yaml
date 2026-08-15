@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
     title: SIMBAR - Sistem Manajemen Inventori
-    version: 0.3.0
+    version: 0.4.0
     description: |
         API contract for Sistem Manajemen Inventori (SIMBAR) per FSD v0.1.
 
@@ -1637,6 +1637,95 @@ paths:
                 "409": { $ref: "#/components/responses/Error" }
                 "422": { $ref: "#/components/responses/ValidationError" }
 
+    # ═══════════════════ Fase 10 ═══════════════════
+    # 10.4 Validasi kontrak: openapi_contract_test.go memastikan (1) dokumen
+    # ini valid secara struktur, (2) setiap path+method di sini terdaftar di
+    # router Echo, dan (3) response riil tervalidasi terhadap schema ini
+    # (openapi3filter.ValidateResponse). Dokumen ini juga menjadi sumber
+    # embedded spec di /api/v1/openapi.yaml dan Swagger UI (/swagger).
+    # 10.5 Observability: endpoint /healthz, /readyz, /metrics di bawah.
+
+    /healthz:
+        get:
+            tags: [Observability]
+            summary: Liveness probe — proses API hidup
+            description: |
+                Selalu 200 selama proses berjalan. Tidak menyentuh dependensi
+                (PostgreSQL/Redis) — gunakan /readyz untuk kesiapan sebenarnya.
+            security: []
+            responses:
+                "200":
+                    description: Service is alive
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    status: { type: string, example: ok }
+
+    /readyz:
+        get:
+            tags: [Observability]
+            summary: Readiness probe — dependensi siap (PostgreSQL & Redis)
+            description: |
+                Menjalankan ping ke PostgreSQL dan Redis secara paralel dengan
+                timeout 2 detik. 200 bila semuanya naik; 503 bila salah satu
+                gagal (detail per komponen di body).
+            security: []
+            responses:
+                "200":
+                    description: All dependencies are up
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    status: { type: string, example: ready }
+                                    checks:
+                                        type: object
+                                        additionalProperties: { type: string }
+                                        example: { postgres: up, redis: up }
+                "503":
+                    description: At least one dependency is down
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    status: { type: string, example: unavailable }
+                                    checks:
+                                        type: object
+                                        additionalProperties: { type: string }
+                                        example:
+                                            {
+                                                postgres: up,
+                                                redis: "down: connection refused",
+                                            }
+
+    /metrics:
+        get:
+            tags: [Observability]
+            summary: Prometheus metrics (text exposition format)
+            description: |
+                Metrik runtime SIMBAR (FSD §10.5):
+
+                - `http_requests_total{method,path,status}` — jumlah request,
+                  label path memakai route pattern agar cardinality terkendali.
+                - `http_request_duration_seconds{quantile="0.95"}` — latensi
+                  p95 (summary objectives 0.5/0.9/0.95/0.99).
+                - `http_requests_in_flight` — request yang sedang diproses.
+                - `db_pool_max_conns / total_conns / idle_conns /
+                  acquired_conns` — okupansi koneksi PostgreSQL (pgxpool).
+                - `asynq_queue_pending / active / archived{queue}` — kedalaman
+                  antrean worker asynq per queue.
+            security: []
+            responses:
+                "200":
+                    description: Prometheus text exposition format
+                    content:
+                        text/plain; version=0.0.4:
+                            schema: { type: string }
+
     /openapi.yaml:
         get:
             tags: [API Docs]
@@ -1727,7 +1816,7 @@ components:
             required: [success, data, error]
             properties:
                 success: { type: boolean }
-                data: {}
+                data: { nullable: true, description: "Payload; null pada response error" }
                 meta:
                     type: object
                     properties:
@@ -1835,9 +1924,9 @@ components:
         TokenPair:
             type: object
             properties:
-                access_token: { type: string, description: JWT, 15 min TTL }
+                access_token: { type: string, description: "JWT, 15 min TTL" }
                 refresh_token:
-                    { type: string, description: Rotating JWT, 7 day TTL }
+                    { type: string, description: "Rotating JWT, 7 day TTL" }
                 token_type: { type: string, example: Bearer }
         RegisterResponse:
             type: object

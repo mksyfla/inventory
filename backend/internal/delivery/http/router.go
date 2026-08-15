@@ -6,6 +6,7 @@ import (
 	"inventory/internal/delivery/http/handler"
 	"inventory/internal/delivery/http/middleware"
 	"inventory/internal/delivery/http/response"
+	"inventory/internal/pkg/metrics"
 	redisclient "inventory/internal/pkg/redis"
 	"inventory/internal/pkg/validation"
 	inbounduc "inventory/internal/usecase/inbound"
@@ -37,6 +38,10 @@ type RouterConfig struct {
 	CountingUsecase *countinguc.CountingUsecase
 	AsynqClient     *asynq.Client
 	CreateUser      handler.CreateUserFunc
+
+	// Observability (FSD 10.5) — all optional; omitted in unit tests.
+	Metrics        *metrics.Metrics
+	HealthCheckers []HealthChecker
 }
 
 // NewRouter initializes an Echo instance, registers global middlewares, and configures route mapping.
@@ -57,6 +62,23 @@ func NewRouter(cfg ...RouterConfig) *echo.Echo {
 	} else {
 		e.Use(middleware.SecurityHeaders(""))
 	}
+
+	// ─── Observability (FSD 10.5) ───────────────────────────────────────
+	// Prometheus metrics middleware runs before everything else so latency
+	// covers the full middleware chain.
+	if len(cfg) > 0 && cfg[0].Metrics != nil {
+		e.Use(cfg[0].Metrics.Middleware())
+		e.GET("/metrics", echo.WrapHandler(cfg[0].Metrics.Handler()))
+	}
+
+	// Health probes (public, k8s-style): /healthz liveness, /readyz
+	// readiness with per-dependency checks (PostgreSQL, Redis).
+	health := newHealthHandler(nil)
+	if len(cfg) > 0 {
+		health = newHealthHandler(cfg[0].HealthCheckers)
+	}
+	e.GET("/healthz", health.liveness)
+	e.GET("/readyz", health.readiness)
 
 	// Configure base API v1 path
 	v1 := e.Group("/api/v1")

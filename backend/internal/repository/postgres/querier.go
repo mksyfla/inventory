@@ -32,6 +32,11 @@ type Querier interface {
 	DeleteItemUoMs(ctx context.Context, itemID int64) error
 	DeleteLocation(ctx context.Context, id int64) error
 	DeletePartner(ctx context.Context, id int64) error
+	// Creates a zeroed balance row if absent so the subsequent SELECT ... FOR
+	// UPDATE actually locks it. Without this, two concurrent transactions that
+	// both see "no row" would later race on the upsert and overwrite each
+	// other's snapshot (lost update — caught by the Fase 10.3 concurrency test).
+	EnsureBalanceExists(ctx context.Context, arg EnsureBalanceExistsParams) error
 	// Manual override target: locks one specific balance (Fase 7.3). Must belong
 	// to the warehouse, be available, and not be expired.
 	GetAllocationCandidateByBalanceID(ctx context.Context, arg GetAllocationCandidateByBalanceIDParams) (GetAllocationCandidateByBalanceIDRow, error)

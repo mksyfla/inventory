@@ -101,6 +101,19 @@ func (r *PostgresStockRepository) GetBalancesForUpdate(ctx context.Context, keys
 			batchID = pgtype.Int8{Int64: *k.BatchID, Valid: true}
 		}
 
+		// Materialize a zeroed row when the balance does not exist yet, so the
+		// FOR UPDATE below really locks it. Otherwise concurrent postings for
+		// a brand-new balance all read "0" and later overwrite each other
+		// (lost update — see integration test TestConcurrency_50GoroutinesSameSKU).
+		if err := q.EnsureBalanceExists(ctx, EnsureBalanceExistsParams{
+			ItemID:     k.ItemID,
+			LocationID: k.LocationID,
+			BatchID:    batchID,
+			Status:     k.Status,
+		}); err != nil {
+			return nil, fmt.Errorf("postgres: failed to materialize balance: %w", err)
+		}
+
 		row, err := q.GetStockBalanceForUpdate(ctx, GetStockBalanceForUpdateParams{
 			ItemID:     k.ItemID,
 			LocationID: k.LocationID,

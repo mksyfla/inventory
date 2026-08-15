@@ -11,6 +11,7 @@ import (
 
 	"inventory/internal/delivery/http/response"
 	"inventory/internal/pkg/auth"
+	"inventory/internal/pkg/metrics"
 	redisclient "inventory/internal/pkg/redis"
 	countinguc "inventory/internal/usecase/counting"
 	outbounduc "inventory/internal/usecase/outbound"
@@ -252,4 +253,56 @@ func TestNewRouter_Fase78RoutesRegistered(t *testing.T) {
 				"route must be registered and JWT-protected (401), not %d", rec.Code)
 		})
 	}
+}
+
+// TestNewRouter_ObservabilityRoutes (FSD 10.5) proves the health probes and
+// Prometheus endpoint are public (no auth) when configured.
+func TestNewRouter_ObservabilityRoutes(t *testing.T) {
+	router := NewRouter(RouterConfig{
+		JWTSecret: "test-secret",
+		Store:     redisclient.NewInMemoryStore(),
+		Metrics:   metrics.New(),
+	})
+
+	cases := []struct {
+		name       string
+		method     string
+		path       string
+		wantStatus int
+	}{
+		{"liveness", http.MethodGet, "/healthz", http.StatusOK},
+		{"readiness", http.MethodGet, "/readyz", http.StatusOK},
+		{"prometheus scrape", http.MethodGet, "/metrics", http.StatusOK},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(tc.method, tc.path, nil)
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+			assert.Equal(t, tc.wantStatus, rec.Code)
+		})
+	}
+
+	// The scrape endpoint must expose the request-latency p95 summary.
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	assert.Contains(t, rec.Body.String(), "http_request_duration_seconds")
+}
+
+// TestNewRouter_ObservabilityNotConfigured proves the probes still exist
+// (and answer OK) when Metrics is omitted — e.g. in older unit tests.
+func TestNewRouter_ObservabilityNotConfigured(t *testing.T) {
+	router := NewRouter()
+	for _, path := range []string{"/healthz", "/readyz"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusOK, rec.Code, "path %s", path)
+	}
+	// /metrics is only mounted when Metrics is configured.
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusNotFound, rec.Code)
 }

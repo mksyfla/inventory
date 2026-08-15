@@ -13,6 +13,7 @@ import (
 	httpDelivery "inventory/internal/delivery/http"
 	"inventory/internal/pkg/auth"
 	"inventory/internal/pkg/logger"
+	"inventory/internal/pkg/metrics"
 	redisclient "inventory/internal/pkg/redis"
 	"inventory/internal/repository/postgres"
 	inbounduc "inventory/internal/usecase/inbound"
@@ -67,6 +68,41 @@ func main() {
 	}
 
 	queries := postgres.New(pool)
+
+	// 4b. Observability (FSD 10.5): Prometheus metrics wired to the live pool
+	// and the asynq queues, so /metrics always reflects runtime state.
+	metricsSvc := metrics.New()
+	metricsSvc.RegisterDBPool(func() metrics.DBPoolStats {
+		s := pool.Stat()
+		return metrics.DBPoolStats{
+			MaxConns:      s.MaxConns(),
+			TotalConns:    s.TotalConns(),
+			IdleConns:     s.IdleConns(),
+			AcquiredConns: s.AcquiredConns(),
+		}
+	})
+	queueInspector := asynq.NewInspector(asynq.RedisClientOpt{Addr: cfg.RedisAddr})
+	metricsSvc.RegisterQueueDepth(func() []metrics.QueueDepthStat {
+		queues, err := queueInspector.Queues()
+		if err != nil {
+			log.Warn("failed to list asynq queues", slog.Any("error", err))
+			return nil
+		}
+		stats := make([]metrics.QueueDepthStat, 0, len(queues))
+		for _, q := range queues {
+			info, err := queueInspector.GetQueueInfo(q)
+			if err != nil {
+				continue
+			}
+			stats = append(stats, metrics.QueueDepthStat{
+				Queue:    q,
+				Pending:  int64(info.Pending),
+				Active:   int64(info.Active),
+				Archived: int64(info.Archived),
+			})
+		}
+		return stats
+	})
 
 	// 5. Wire authentication user lookups (Fase 2)
 	// Login looks users up by username; the refresh flow looks them up by numeric user ID
@@ -249,6 +285,11 @@ func main() {
 		TransferUsecase: transferUsecase,
 		CountingUsecase: countingUsecase,
 		AsynqClient:     asynqClient,
+		Metrics:         metricsSvc,
+		HealthCheckers: []httpDelivery.HealthChecker{
+			{Name: "postgres", Check: pool.Ping},
+			{Name: "redis", Check: store.Ping},
+		},
 	})
 
 	// 10. Start HTTP Server with hardened timeouts and header limits
