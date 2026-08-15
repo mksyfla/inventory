@@ -11,12 +11,12 @@ import (
 type DocType string
 
 const (
-	DocTypeGRN     DocType = "GRN"
-	DocTypeDO      DocType = "DO"
-	DocTypeRequest DocType = "REQ"
+	DocTypeGRN      DocType = "GRN"
+	DocTypeDO       DocType = "DO"
+	DocTypeRequest  DocType = "REQ"
 	DocTypeTransfer DocType = "TRF"
-	DocTypeCount   DocType = "COUNT"
-	DocTypeAdjust  DocType = "ADJ"
+	DocTypeCount    DocType = "CNT" // matches doc.doc_type enum ('CNT')
+	DocTypeAdjust   DocType = "ADJ"
 )
 
 func (d DocType) String() string { return string(d) }
@@ -30,6 +30,7 @@ type Document struct {
 	DocDate        time.Time
 	Status         Status
 	WarehouseID    int64
+	DestWarehouseID *int64 // destination warehouse for TRF transfers (Fase 8.1)
 	RefDocID       *int64 // reference document (e.g. DO → approved REQ)
 	PartnerID      *int64
 	ReasonCode     *string // required for override allocations / adjustments
@@ -37,6 +38,7 @@ type Document struct {
 	Notes          *string
 	CreatedBy      int64
 	ApprovedBy     *int64
+	ManagerApprovedBy *int64 // second-level approval for high-value counts (M6.4)
 }
 
 // DocumentLine is one item row of a document (doc.document_lines). Qty is

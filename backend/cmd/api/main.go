@@ -19,6 +19,8 @@ import (
 	itemuc "inventory/internal/usecase/item"
 	outbounduc "inventory/internal/usecase/outbound"
 	stockuc "inventory/internal/usecase/stock"
+	countinguc "inventory/internal/usecase/counting"
+	transferuc "inventory/internal/usecase/transfer"
 
 	"inventory/internal/pkg/docnum"
 
@@ -200,24 +202,53 @@ func main() {
 		docnum.NewGenerator(docRepo),
 	)
 
+	// 7d. Transfer module (Fase 8.1 / M5): mutasi antar gudang
+	transferLookup := postgres.NewTransferLookup(queries)
+	transferUsecase := transferuc.NewTransferUsecase(
+		docRepo,
+		transferLookup,
+		transferLookup,
+		transferLookup,
+		transferLookup,
+		stockUsecase,
+		txRunner,
+		docnum.NewGenerator(docRepo),
+		transferLookup,
+	)
+
+	// 7e. Stock opname module (Fase 8.2 - 8.5 / M6)
+	countingLookup := postgres.NewCountingLookup(queries)
+	countingUsecase := countinguc.NewCountingUsecase(
+		docRepo,
+		countingLookup,
+		countingLookup,
+		countingLookup,
+		countingLookup,
+		stockUsecase,
+		txRunner,
+		docnum.NewGenerator(docRepo),
+	)
+
 	// 8. Init asynq client for async jobs (Fase 3.4)
 	asynqClient := asynq.NewClient(asynq.RedisClientOpt{Addr: cfg.RedisAddr})
 	defer asynqClient.Close()
 
 	// 9. Init router with all dependencies
 	router := httpDelivery.NewRouter(httpDelivery.RouterConfig{
-		JWTSecret:      cfg.JWTSecret,
-		AppEnv:         cfg.AppEnv,
-		Enforcer:       enforcer,
-		Store:          store,
-		LookupUser:     lookupUserByUsername,
-		LookupUserByID: lookupUserByID,
-		CreateUser:     createUser,
-		ItemUsecase:    itemUsecase,
-		StockUsecase:   stockUsecase,
-		ReceiptUsecase: receiptUsecase,
+		JWTSecret:       cfg.JWTSecret,
+		AppEnv:          cfg.AppEnv,
+		Enforcer:        enforcer,
+		Store:           store,
+		LookupUser:      lookupUserByUsername,
+		LookupUserByID:  lookupUserByID,
+		CreateUser:      createUser,
+		ItemUsecase:     itemUsecase,
+		StockUsecase:    stockUsecase,
+		ReceiptUsecase:  receiptUsecase,
 		OutboundUsecase: outboundUsecase,
-		AsynqClient:    asynqClient,
+		TransferUsecase: transferUsecase,
+		CountingUsecase: countingUsecase,
+		AsynqClient:     asynqClient,
 	})
 
 	// 10. Start HTTP Server with hardened timeouts and header limits

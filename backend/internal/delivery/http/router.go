@@ -12,6 +12,8 @@ import (
 	itemuc "inventory/internal/usecase/item"
 	outbounduc "inventory/internal/usecase/outbound"
 	stockuc "inventory/internal/usecase/stock"
+	countinguc "inventory/internal/usecase/counting"
+	transferuc "inventory/internal/usecase/transfer"
 
 	"github.com/casbin/casbin/v2"
 	"github.com/hibiken/asynq"
@@ -21,18 +23,20 @@ import (
 
 // RouterConfig holds dependencies required to configure the Echo router.
 type RouterConfig struct {
-	JWTSecret      string
-	AppEnv         string
-	Enforcer       *casbin.Enforcer
-	Store          redisclient.KVStore
-	LookupUser     handler.UserLookup
-	LookupUserByID handler.UserLookupByID
-	ItemUsecase    *itemuc.Usecase
-	StockUsecase   *stockuc.PostingUsecase
-	ReceiptUsecase *inbounduc.ReceiptUsecase
+	JWTSecret       string
+	AppEnv          string
+	Enforcer        *casbin.Enforcer
+	Store           redisclient.KVStore
+	LookupUser      handler.UserLookup
+	LookupUserByID  handler.UserLookupByID
+	ItemUsecase     *itemuc.Usecase
+	StockUsecase    *stockuc.PostingUsecase
+	ReceiptUsecase  *inbounduc.ReceiptUsecase
 	OutboundUsecase *outbounduc.OutboundUsecase
-	AsynqClient    *asynq.Client
-	CreateUser     handler.CreateUserFunc
+	TransferUsecase *transferuc.TransferUsecase
+	CountingUsecase *countinguc.CountingUsecase
+	AsynqClient     *asynq.Client
+	CreateUser      handler.CreateUserFunc
 }
 
 // NewRouter initializes an Echo instance, registers global middlewares, and configures route mapping.
@@ -146,6 +150,30 @@ func NewRouter(cfg ...RouterConfig) *echo.Echo {
 				append(rbacMW(c, "do", "ship"), echoMiddleware.BodyLimit("1M"))...)
 			protected.POST("/deliveries/:id/pod", outboundHandler.Pod,
 				append(rbacMW(c, "do", "pod"), echoMiddleware.BodyLimit("1M"))...)
+		}
+
+		// ─── Transfer endpoints (Fase 8.1 / M5) ────────────────────────
+		if c.TransferUsecase != nil {
+			transferHandler := handler.NewTransferHandler(c.TransferUsecase)
+			protected.POST("/transfers", transferHandler.CreateTransfer,
+				append(rbacMW(c, "transfer", "create"), echoMiddleware.BodyLimit("1M"))...)
+			protected.POST("/transfers/:id/submit", transferHandler.SubmitTransfer, rbacMW(c, "transfer", "approve")...)
+			protected.POST("/transfers/:id/approve", transferHandler.ApproveTransfer, rbacMW(c, "transfer", "approve")...)
+			protected.POST("/transfers/:id/send", transferHandler.SendTransfer, rbacMW(c, "transfer", "approve")...)
+			protected.POST("/transfers/:id/receive", transferHandler.ReceiveTransfer,
+				append(rbacMW(c, "transfer", "approve"), echoMiddleware.BodyLimit("1M"))...)
+		}
+
+		// ─── Stock opname endpoints (Fase 8.2 - 8.5 / M6) ──────────────
+		if c.CountingUsecase != nil {
+			countingHandler := handler.NewCountingHandler(c.CountingUsecase)
+			protected.POST("/counts", countingHandler.CreateCount,
+				append(rbacMW(c, "count", "create"), echoMiddleware.BodyLimit("1M"))...)
+			protected.POST("/counts/:id/lines", countingHandler.InputCountLines,
+				append(rbacMW(c, "count", "execute"), echoMiddleware.BodyLimit("1M"))...)
+			protected.POST("/counts/:id/post", countingHandler.PostCount, rbacMW(c, "count", "approve")...)
+			protected.POST("/adjustments", countingHandler.CreateAdjustment,
+				append(rbacMW(c, "adj", "create"), echoMiddleware.BodyLimit("1M"))...)
 		}
 	}
 

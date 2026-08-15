@@ -37,6 +37,7 @@ func (r *PostgresDocumentRepository) Create(ctx context.Context, doc *document.D
 		DocDate:        pgtype.Date{Time: doc.DocDate, Valid: true},
 		Column4:        doc.Status.String(),
 		WarehouseID:    doc.WarehouseID,
+		DestWarehouseID: int8Param(doc.DestWarehouseID),
 		RefDocID:       int8Param(doc.RefDocID),
 		PartnerID:      int8Param(doc.PartnerID),
 		ReasonCode:     textParam(doc.ReasonCode),
@@ -231,23 +232,179 @@ func (r *PostgresDocumentRepository) getHeader(ctx context.Context, id int64) (*
 	return documentFromRow(row), nil
 }
 
+// ─── Fase 8: Transfer receipts & count lines ─────────────────────────────────
+
+// CreateTransferReceipt persists one line receipt of a transfer receive
+// (doc.transfer_receipts, Fase 8.1). Runs in the caller's transaction so the
+// in-transit → available posting and the receipt record commit atomically.
+func (r *PostgresDocumentRepository) CreateTransferReceipt(ctx context.Context, rec *document.TransferReceipt) error {
+	row, err := r.querier(ctx).CreateTransferReceipt(ctx, CreateTransferReceiptParams{
+		DocumentID:  rec.DocumentID,
+		LineID:      rec.LineID,
+		QtySent:     numericParam(rec.QtySent),
+		QtyReceived: numericParam(rec.QtyReceived),
+		ReceivedBy:  rec.ReceivedBy,
+		Notes:       textParam(rec.Notes),
+	})
+	if err != nil {
+		return fmt.Errorf("postgres: failed to create transfer receipt: %w", err)
+	}
+	rec.ID = row.ID
+	if f, err := row.Variance.Float64Value(); err == nil {
+		rec.Variance = f.Float64
+	}
+	if row.ReceivedAt.Valid {
+		rec.ReceivedAt = row.ReceivedAt.Time
+	}
+	return nil
+}
+
+func (r *PostgresDocumentRepository) ListTransferReceipts(ctx context.Context, documentID int64) ([]*document.TransferReceipt, error) {
+	rows, err := r.querier(ctx).ListTransferReceipts(ctx, documentID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*document.TransferReceipt, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, transferReceiptFromRow(row))
+	}
+	return out, nil
+}
+
+// CreateCountLines persists the qty_system snapshot rows of an opname session
+// (doc.count_lines, Fase 8.2). Runs in the caller's transaction.
+func (r *PostgresDocumentRepository) CreateCountLines(ctx context.Context, lines []*document.CountLine) error {
+	q := r.querier(ctx)
+	for _, ln := range lines {
+		row, err := q.CreateCountLine(ctx, CreateCountLineParams{
+			DocumentID: ln.DocumentID,
+			ItemID:     ln.ItemID,
+			LocationID: ln.LocationID,
+			BatchID:    int8Param(ln.BatchID),
+			QtySystem:  numericParam(ln.QtySystem),
+		})
+		if err != nil {
+			return fmt.Errorf("postgres: failed to create count line: %w", err)
+		}
+		ln.ID = row.ID
+	}
+	return nil
+}
+
+func (r *PostgresDocumentRepository) ListCountLines(ctx context.Context, documentID int64) ([]*document.CountLine, error) {
+	rows, err := r.querier(ctx).ListCountLines(ctx, documentID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*document.CountLine, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, countLineFromRow(row))
+	}
+	return out, nil
+}
+
+// UpdateCountLineCounted records the field count on a snapshot line
+// (Fase 8.3): qty_counted, optional reason_code, and the counter identity.
+func (r *PostgresDocumentRepository) UpdateCountLineCounted(ctx context.Context, id int64, qtyCounted float64, reasonCode *string, countedBy int64) error {
+	err := r.querier(ctx).UpdateCountLineCounted(ctx, UpdateCountLineCountedParams{
+		ID:         id,
+		QtyCounted: numericParam(qtyCounted),
+		ReasonCode: textParam(reasonCode),
+		CountedBy:  pgtype.Int8{Int64: countedBy, Valid: true},
+	})
+	if err != nil {
+		return fmt.Errorf("postgres: failed to update count line %d: %w", id, err)
+	}
+	return nil
+}
+
+// UpdateManagerApproval records the second-level (Inventory Manager) approval
+// for high-value count variances (M6.4).
+func (r *PostgresDocumentRepository) UpdateManagerApproval(ctx context.Context, id, managerID int64) error {
+	err := r.querier(ctx).UpdateDocumentManagerApproval(ctx, UpdateDocumentManagerApprovalParams{
+		ID:                id,
+		ManagerApprovedBy: pgtype.Int8{Int64: managerID, Valid: true},
+	})
+	if err != nil {
+		return fmt.Errorf("postgres: failed to update manager approval: %w", err)
+	}
+	return nil
+}
+
+// transferReceiptFromRow maps a sqlc DocTransferReceipts row into the domain.
+func transferReceiptFromRow(row DocTransferReceipts) *document.TransferReceipt {
+	rec := &document.TransferReceipt{
+		ID:          row.ID,
+		DocumentID:  row.DocumentID,
+		LineID:      row.LineID,
+		ReceivedBy:  row.ReceivedBy,
+		Notes:       textPtr(row.Notes),
+	}
+	if f, err := row.QtySent.Float64Value(); err == nil {
+		rec.QtySent = f.Float64
+	}
+	if f, err := row.QtyReceived.Float64Value(); err == nil {
+		rec.QtyReceived = f.Float64
+	}
+	if f, err := row.Variance.Float64Value(); err == nil {
+		rec.Variance = f.Float64
+	}
+	if row.ReceivedAt.Valid {
+		rec.ReceivedAt = row.ReceivedAt.Time
+	}
+	return rec
+}
+
+// countLineFromRow maps a sqlc DocCountLines row into the domain entity.
+func countLineFromRow(row DocCountLines) *document.CountLine {
+	ln := &document.CountLine{
+		ID:         row.ID,
+		DocumentID: row.DocumentID,
+		ItemID:     row.ItemID,
+		LocationID: row.LocationID,
+		BatchID:    int8Ptr(row.BatchID),
+		ReasonCode: textPtr(row.ReasonCode),
+		CountedBy:  int8Ptr(row.CountedBy),
+	}
+	if f, err := row.QtySystem.Float64Value(); err == nil {
+		ln.QtySystem = f.Float64
+	}
+	if row.QtyCounted.Valid {
+		if f, err := row.QtyCounted.Float64Value(); err == nil {
+			ln.QtyCounted = &f.Float64
+		}
+	}
+	if row.Variance.Valid {
+		if f, err := row.Variance.Float64Value(); err == nil {
+			ln.Variance = &f.Float64
+		}
+	}
+	if row.CountedAt.Valid {
+		t := row.CountedAt.Time
+		ln.CountedAt = &t
+	}
+	return ln
+}
+
 // documentFromRow maps a sqlc DocDocuments row into the domain entity.
 func documentFromRow(row DocDocuments) *document.Document {
 	return &document.Document{
-		ID:             row.ID,
-		PublicID:       row.PublicID.String(),
-		DocNo:          row.DocNo,
-		DocType:        document.DocType(fmt.Sprint(row.DocType)),
-		DocDate:        row.DocDate.Time,
-		Status:         document.Status(fmt.Sprint(row.Status)),
-		WarehouseID:    row.WarehouseID,
-		RefDocID:       int8Ptr(row.RefDocID),
-		PartnerID:      int8Ptr(row.PartnerID),
-		ReasonCode:     textPtr(row.ReasonCode),
-		IdempotencyKey: textPtr(row.IdempotencyKey),
-		Notes:          textPtr(row.Notes),
-		CreatedBy:      row.CreatedBy,
-		ApprovedBy:     int8Ptr(row.ApprovedBy),
+		ID:               row.ID,
+		PublicID:         row.PublicID.String(),
+		DocNo:            row.DocNo,
+		DocType:          document.DocType(fmt.Sprint(row.DocType)),
+		DocDate:          row.DocDate.Time,
+		Status:           document.Status(fmt.Sprint(row.Status)),
+		WarehouseID:      row.WarehouseID,
+		DestWarehouseID:  int8Ptr(row.DestWarehouseID),
+		RefDocID:         int8Ptr(row.RefDocID),
+		PartnerID:        int8Ptr(row.PartnerID),
+		ReasonCode:       textPtr(row.ReasonCode),
+		IdempotencyKey:   textPtr(row.IdempotencyKey),
+		Notes:            textPtr(row.Notes),
+		CreatedBy:        row.CreatedBy,
+		ApprovedBy:       int8Ptr(row.ApprovedBy),
+		ManagerApprovedBy: int8Ptr(row.ManagerApprovedBy),
 	}
 }
 

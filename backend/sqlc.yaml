@@ -11,4 +11,6 @@ sql:
               package: "postgres"
               sql_package: "pgx/v5"
       queries: "db/queries/"
-      schema: "db/migrations/000001_init.up.sql"
+      schema:
+          - "db/migrations/000001_init.up.sql"
+          - "db/migrations/000006_transfer_counting.up.sql"

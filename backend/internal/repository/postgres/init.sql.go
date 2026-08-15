@@ -94,41 +94,82 @@ func (q *Queries) CreateCategory(ctx context.Context, arg CreateCategoryParams) 
 	return i, err
 }
 
+const createCountLine = `-- name: CreateCountLine :one
+INSERT INTO doc.count_lines (document_id, item_id, location_id, batch_id, qty_system)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING id, document_id, item_id, location_id, batch_id, qty_system, qty_counted, variance, reason_code, counted_by, counted_at
+`
+
+type CreateCountLineParams struct {
+	DocumentID int64          `json:"document_id"`
+	ItemID     int64          `json:"item_id"`
+	LocationID int64          `json:"location_id"`
+	BatchID    pgtype.Int8    `json:"batch_id"`
+	QtySystem  pgtype.Numeric `json:"qty_system"`
+}
+
+func (q *Queries) CreateCountLine(ctx context.Context, arg CreateCountLineParams) (DocCountLines, error) {
+	row := q.db.QueryRow(ctx, createCountLine,
+		arg.DocumentID,
+		arg.ItemID,
+		arg.LocationID,
+		arg.BatchID,
+		arg.QtySystem,
+	)
+	var i DocCountLines
+	err := row.Scan(
+		&i.ID,
+		&i.DocumentID,
+		&i.ItemID,
+		&i.LocationID,
+		&i.BatchID,
+		&i.QtySystem,
+		&i.QtyCounted,
+		&i.Variance,
+		&i.ReasonCode,
+		&i.CountedBy,
+		&i.CountedAt,
+	)
+	return i, err
+}
+
 const createDocument = `-- name: CreateDocument :one
-INSERT INTO doc.documents (doc_no, doc_type, doc_date, status, warehouse_id, ref_doc_id, partner_id, reason_code, idempotency_key, notes, created_by)
-VALUES ($1, $2::doc.doc_type, $3, $4::doc.doc_status, $5, $6, $7, $8, $9, $10, $11)
-RETURNING id, public_id, doc_no, doc_type, doc_date, status, warehouse_id, ref_doc_id, partner_id, reason_code, idempotency_key, notes, created_by, created_at
+INSERT INTO doc.documents (doc_no, doc_type, doc_date, status, warehouse_id, dest_warehouse_id, ref_doc_id, partner_id, reason_code, idempotency_key, notes, created_by)
+VALUES ($1, $2::doc.doc_type, $3, $4::doc.doc_status, $5, $6, $7, $8, $9, $10, $11, $12)
+RETURNING id, public_id, doc_no, doc_type, doc_date, status, warehouse_id, dest_warehouse_id, ref_doc_id, partner_id, reason_code, idempotency_key, notes, created_by, created_at
 `
 
 type CreateDocumentParams struct {
-	DocNo          string      `json:"doc_no"`
-	Column2        interface{} `json:"column_2"`
-	DocDate        pgtype.Date `json:"doc_date"`
-	Column4        interface{} `json:"column_4"`
-	WarehouseID    int64       `json:"warehouse_id"`
-	RefDocID       pgtype.Int8 `json:"ref_doc_id"`
-	PartnerID      pgtype.Int8 `json:"partner_id"`
-	ReasonCode     pgtype.Text `json:"reason_code"`
-	IdempotencyKey pgtype.Text `json:"idempotency_key"`
-	Notes          pgtype.Text `json:"notes"`
-	CreatedBy      int64       `json:"created_by"`
+	DocNo           string      `json:"doc_no"`
+	Column2         interface{} `json:"column_2"`
+	DocDate         pgtype.Date `json:"doc_date"`
+	Column4         interface{} `json:"column_4"`
+	WarehouseID     int64       `json:"warehouse_id"`
+	DestWarehouseID pgtype.Int8 `json:"dest_warehouse_id"`
+	RefDocID        pgtype.Int8 `json:"ref_doc_id"`
+	PartnerID       pgtype.Int8 `json:"partner_id"`
+	ReasonCode      pgtype.Text `json:"reason_code"`
+	IdempotencyKey  pgtype.Text `json:"idempotency_key"`
+	Notes           pgtype.Text `json:"notes"`
+	CreatedBy       int64       `json:"created_by"`
 }
 
 type CreateDocumentRow struct {
-	ID             int64              `json:"id"`
-	PublicID       pgtype.UUID        `json:"public_id"`
-	DocNo          string             `json:"doc_no"`
-	DocType        interface{}        `json:"doc_type"`
-	DocDate        pgtype.Date        `json:"doc_date"`
-	Status         interface{}        `json:"status"`
-	WarehouseID    int64              `json:"warehouse_id"`
-	RefDocID       pgtype.Int8        `json:"ref_doc_id"`
-	PartnerID      pgtype.Int8        `json:"partner_id"`
-	ReasonCode     pgtype.Text        `json:"reason_code"`
-	IdempotencyKey pgtype.Text        `json:"idempotency_key"`
-	Notes          pgtype.Text        `json:"notes"`
-	CreatedBy      int64              `json:"created_by"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	ID              int64              `json:"id"`
+	PublicID        pgtype.UUID        `json:"public_id"`
+	DocNo           string             `json:"doc_no"`
+	DocType         interface{}        `json:"doc_type"`
+	DocDate         pgtype.Date        `json:"doc_date"`
+	Status          interface{}        `json:"status"`
+	WarehouseID     int64              `json:"warehouse_id"`
+	DestWarehouseID pgtype.Int8        `json:"dest_warehouse_id"`
+	RefDocID        pgtype.Int8        `json:"ref_doc_id"`
+	PartnerID       pgtype.Int8        `json:"partner_id"`
+	ReasonCode      pgtype.Text        `json:"reason_code"`
+	IdempotencyKey  pgtype.Text        `json:"idempotency_key"`
+	Notes           pgtype.Text        `json:"notes"`
+	CreatedBy       int64              `json:"created_by"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
 }
 
 func (q *Queries) CreateDocument(ctx context.Context, arg CreateDocumentParams) (CreateDocumentRow, error) {
@@ -138,6 +179,7 @@ func (q *Queries) CreateDocument(ctx context.Context, arg CreateDocumentParams) 
 		arg.DocDate,
 		arg.Column4,
 		arg.WarehouseID,
+		arg.DestWarehouseID,
 		arg.RefDocID,
 		arg.PartnerID,
 		arg.ReasonCode,
@@ -154,6 +196,7 @@ func (q *Queries) CreateDocument(ctx context.Context, arg CreateDocumentParams) 
 		&i.DocDate,
 		&i.Status,
 		&i.WarehouseID,
+		&i.DestWarehouseID,
 		&i.RefDocID,
 		&i.PartnerID,
 		&i.ReasonCode,
@@ -440,7 +483,7 @@ type CreateStockMovementParams struct {
 	MovementType interface{}    `json:"movement_type"`
 	Qty          pgtype.Numeric `json:"qty"`
 	QtyAfter     pgtype.Numeric `json:"qty_after"`
-	DocLineID    int64          `json:"doc_line_id"`
+	DocLineID    pgtype.Int8    `json:"doc_line_id"`
 	DocNo        string         `json:"doc_no"`
 	CreatedBy    int64          `json:"created_by"`
 }
@@ -466,6 +509,45 @@ func (q *Queries) CreateStockMovement(ctx context.Context, arg CreateStockMoveme
 	)
 	var i CreateStockMovementRow
 	err := row.Scan(&i.ID, &i.MovedAt, &i.QtyAfter)
+	return i, err
+}
+
+const createTransferReceipt = `-- name: CreateTransferReceipt :one
+INSERT INTO doc.transfer_receipts (document_id, line_id, qty_sent, qty_received, received_by, notes)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id, document_id, line_id, qty_sent, qty_received, variance, received_by, received_at, notes
+`
+
+type CreateTransferReceiptParams struct {
+	DocumentID  int64          `json:"document_id"`
+	LineID      int64          `json:"line_id"`
+	QtySent     pgtype.Numeric `json:"qty_sent"`
+	QtyReceived pgtype.Numeric `json:"qty_received"`
+	ReceivedBy  int64          `json:"received_by"`
+	Notes       pgtype.Text    `json:"notes"`
+}
+
+func (q *Queries) CreateTransferReceipt(ctx context.Context, arg CreateTransferReceiptParams) (DocTransferReceipts, error) {
+	row := q.db.QueryRow(ctx, createTransferReceipt,
+		arg.DocumentID,
+		arg.LineID,
+		arg.QtySent,
+		arg.QtyReceived,
+		arg.ReceivedBy,
+		arg.Notes,
+	)
+	var i DocTransferReceipts
+	err := row.Scan(
+		&i.ID,
+		&i.DocumentID,
+		&i.LineID,
+		&i.QtySent,
+		&i.QtyReceived,
+		&i.Variance,
+		&i.ReceivedBy,
+		&i.ReceivedAt,
+		&i.Notes,
+	)
 	return i, err
 }
 
@@ -671,7 +753,7 @@ func (q *Queries) GetDeliveryByDocument(ctx context.Context, documentID int64) (
 }
 
 const getDocumentByID = `-- name: GetDocumentByID :one
-SELECT id, public_id, doc_no, doc_type, doc_date, status, warehouse_id, dest_warehouse_id, partner_id, ref_doc_id, reason_code, notes, idempotency_key, created_at, created_by, submitted_at, approved_at, approved_by, completed_at
+SELECT id, public_id, doc_no, doc_type, doc_date, status, warehouse_id, dest_warehouse_id, partner_id, ref_doc_id, reason_code, notes, idempotency_key, created_at, created_by, submitted_at, approved_at, approved_by, completed_at, manager_approved_by, manager_approved_at
 FROM doc.documents
 WHERE id = $1
 `
@@ -699,12 +781,14 @@ func (q *Queries) GetDocumentByID(ctx context.Context, id int64) (DocDocuments, 
 		&i.ApprovedAt,
 		&i.ApprovedBy,
 		&i.CompletedAt,
+		&i.ManagerApprovedBy,
+		&i.ManagerApprovedAt,
 	)
 	return i, err
 }
 
 const getDocumentByIDempotencyKey = `-- name: GetDocumentByIDempotencyKey :one
-SELECT id, public_id, doc_no, doc_type, doc_date, status, warehouse_id, dest_warehouse_id, partner_id, ref_doc_id, reason_code, notes, idempotency_key, created_at, created_by, submitted_at, approved_at, approved_by, completed_at
+SELECT id, public_id, doc_no, doc_type, doc_date, status, warehouse_id, dest_warehouse_id, partner_id, ref_doc_id, reason_code, notes, idempotency_key, created_at, created_by, submitted_at, approved_at, approved_by, completed_at, manager_approved_by, manager_approved_at
 FROM doc.documents
 WHERE idempotency_key = $1
 `
@@ -732,6 +816,8 @@ func (q *Queries) GetDocumentByIDempotencyKey(ctx context.Context, idempotencyKe
 		&i.ApprovedAt,
 		&i.ApprovedBy,
 		&i.CompletedAt,
+		&i.ManagerApprovedBy,
+		&i.ManagerApprovedAt,
 	)
 	return i, err
 }
@@ -847,6 +933,22 @@ func (q *Queries) GetItemBySKU(ctx context.Context, sku string) (GetItemBySKURow
 		&i.CreatedBy,
 	)
 	return i, err
+}
+
+const getLastUnitCostByItem = `-- name: GetLastUnitCostByItem :one
+SELECT unit_cost
+FROM inv.stock_movements
+WHERE item_id = $1 AND unit_cost IS NOT NULL
+ORDER BY moved_at DESC, id DESC
+LIMIT 1
+`
+
+// Harga pokok terakhir item untuk menilai selisih opname (M6.4 threshold).
+func (q *Queries) GetLastUnitCostByItem(ctx context.Context, itemID int64) (pgtype.Numeric, error) {
+	row := q.db.QueryRow(ctx, getLastUnitCostByItem, itemID)
+	var unit_cost pgtype.Numeric
+	err := row.Scan(&unit_cost)
+	return unit_cost, err
 }
 
 const getLocationByID = `-- name: GetLocationByID :one
@@ -1018,6 +1120,35 @@ func (q *Queries) GetStockBalanceForUpdate(ctx context.Context, arg GetStockBala
 	return i, err
 }
 
+const getTransitLocation = `-- name: GetTransitLocation :one
+
+SELECT id, warehouse_id, code, zone, rack, level, loc_type, pick_seq, capacity, is_active
+FROM master.locations
+WHERE warehouse_id = $1 AND loc_type = 'transit' AND is_active = TRUE
+ORDER BY code
+LIMIT 1
+`
+
+// ============ FASE 8 (M5 Transfer & M6 Stock Opname) ============
+// Lokasi transit gudang tujuan (tempat saldo in_transit dicatat saat /send).
+func (q *Queries) GetTransitLocation(ctx context.Context, warehouseID int64) (MasterLocations, error) {
+	row := q.db.QueryRow(ctx, getTransitLocation, warehouseID)
+	var i MasterLocations
+	err := row.Scan(
+		&i.ID,
+		&i.WarehouseID,
+		&i.Code,
+		&i.Zone,
+		&i.Rack,
+		&i.Level,
+		&i.LocType,
+		&i.PickSeq,
+		&i.Capacity,
+		&i.IsActive,
+	)
+	return i, err
+}
+
 const getUserByID = `-- name: GetUserByID :one
 SELECT id, username, email, full_name, password_hash, is_active, mfa_secret, last_login_at
 FROM sec.users
@@ -1107,6 +1238,32 @@ func (q *Queries) GetWarehouseByID(ctx context.Context, id int64) (GetWarehouseB
 	return i, err
 }
 
+const insertAuditLog = `-- name: InsertAuditLog :exec
+INSERT INTO aud.audit_logs (user_id, action, entity, entity_id, old_value, new_value)
+VALUES ($1, $2, $3, $4, $5, $6)
+`
+
+type InsertAuditLogParams struct {
+	UserID   pgtype.Int8 `json:"user_id"`
+	Action   string      `json:"action"`
+	Entity   string      `json:"entity"`
+	EntityID pgtype.Int8 `json:"entity_id"`
+	OldValue []byte      `json:"old_value"`
+	NewValue []byte      `json:"new_value"`
+}
+
+func (q *Queries) InsertAuditLog(ctx context.Context, arg InsertAuditLogParams) error {
+	_, err := q.db.Exec(ctx, insertAuditLog,
+		arg.UserID,
+		arg.Action,
+		arg.Entity,
+		arg.EntityID,
+		arg.OldValue,
+		arg.NewValue,
+	)
+	return err
+}
+
 const insertStockMovement = `-- name: InsertStockMovement :exec
 INSERT INTO inv.stock_movements (item_id, location_id, batch_id, status, movement_type, qty, qty_after, doc_line_id, doc_no, created_by, moved_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
@@ -1120,7 +1277,7 @@ type InsertStockMovementParams struct {
 	MovementType interface{}    `json:"movement_type"`
 	Qty          pgtype.Numeric `json:"qty"`
 	QtyAfter     pgtype.Numeric `json:"qty_after"`
-	DocLineID    int64          `json:"doc_line_id"`
+	DocLineID    pgtype.Int8    `json:"doc_line_id"`
 	DocNo        string         `json:"doc_no"`
 	CreatedBy    int64          `json:"created_by"`
 }
@@ -1268,6 +1425,98 @@ func (q *Queries) ListAllocationsByDocument(ctx context.Context, documentID int6
 			&i.ExpiryDate,
 			&i.Sku,
 			&i.BaseUom,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCountLines = `-- name: ListCountLines :many
+SELECT id, document_id, item_id, location_id, batch_id, qty_system, qty_counted, variance, reason_code, counted_by, counted_at
+FROM doc.count_lines
+WHERE document_id = $1
+ORDER BY id
+`
+
+func (q *Queries) ListCountLines(ctx context.Context, documentID int64) ([]DocCountLines, error) {
+	rows, err := q.db.Query(ctx, listCountLines, documentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []DocCountLines
+	for rows.Next() {
+		var i DocCountLines
+		if err := rows.Scan(
+			&i.ID,
+			&i.DocumentID,
+			&i.ItemID,
+			&i.LocationID,
+			&i.BatchID,
+			&i.QtySystem,
+			&i.QtyCounted,
+			&i.Variance,
+			&i.ReasonCode,
+			&i.CountedBy,
+			&i.CountedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCountSnapshotBalances = `-- name: ListCountSnapshotBalances :many
+SELECT b.item_id, b.location_id, b.batch_id, b.status, b.qty_onhand
+FROM inv.stock_balances b
+JOIN master.locations l ON l.id = b.location_id
+WHERE l.warehouse_id = $1
+  AND ($2::varchar = '' OR l.zone = $2)
+  AND ($3::bigint = 0 OR b.item_id = $3)
+  AND b.qty_onhand > 0
+ORDER BY b.item_id, b.location_id, COALESCE(b.batch_id, 0)
+`
+
+type ListCountSnapshotBalancesParams struct {
+	WarehouseID int64  `json:"warehouse_id"`
+	Column2     string `json:"column_2"`
+	Column3     int64  `json:"column_3"`
+}
+
+type ListCountSnapshotBalancesRow struct {
+	ItemID     int64          `json:"item_id"`
+	LocationID int64          `json:"location_id"`
+	BatchID    pgtype.Int8    `json:"batch_id"`
+	Status     interface{}    `json:"status"`
+	QtyOnhand  pgtype.Numeric `json:"qty_onhand"`
+}
+
+// Sumber snapshot qty_system saat sesi opname dibuka (FR-6.1). Scope dapat
+// dipersempit per zona (” = semua) dan/atau per item (0 = semua).
+func (q *Queries) ListCountSnapshotBalances(ctx context.Context, arg ListCountSnapshotBalancesParams) ([]ListCountSnapshotBalancesRow, error) {
+	rows, err := q.db.Query(ctx, listCountSnapshotBalances, arg.WarehouseID, arg.Column2, arg.Column3)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListCountSnapshotBalancesRow
+	for rows.Next() {
+		var i ListCountSnapshotBalancesRow
+		if err := rows.Scan(
+			&i.ItemID,
+			&i.LocationID,
+			&i.BatchID,
+			&i.Status,
+			&i.QtyOnhand,
 		); err != nil {
 			return nil, err
 		}
@@ -1606,7 +1855,7 @@ type ListStockMovementsKeysetRow struct {
 	MovementType interface{}        `json:"movement_type"`
 	Qty          pgtype.Numeric     `json:"qty"`
 	QtyAfter     pgtype.Numeric     `json:"qty_after"`
-	DocLineID    int64              `json:"doc_line_id"`
+	DocLineID    pgtype.Int8        `json:"doc_line_id"`
 	DocNo        string             `json:"doc_no"`
 	CreatedBy    int64              `json:"created_by"`
 }
@@ -1642,6 +1891,43 @@ func (q *Queries) ListStockMovementsKeyset(ctx context.Context, arg ListStockMov
 			&i.DocLineID,
 			&i.DocNo,
 			&i.CreatedBy,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTransferReceipts = `-- name: ListTransferReceipts :many
+SELECT id, document_id, line_id, qty_sent, qty_received, variance, received_by, received_at, notes
+FROM doc.transfer_receipts
+WHERE document_id = $1
+ORDER BY line_id
+`
+
+func (q *Queries) ListTransferReceipts(ctx context.Context, documentID int64) ([]DocTransferReceipts, error) {
+	rows, err := q.db.Query(ctx, listTransferReceipts, documentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []DocTransferReceipts
+	for rows.Next() {
+		var i DocTransferReceipts
+		if err := rows.Scan(
+			&i.ID,
+			&i.DocumentID,
+			&i.LineID,
+			&i.QtySent,
+			&i.QtyReceived,
+			&i.Variance,
+			&i.ReceivedBy,
+			&i.ReceivedAt,
+			&i.Notes,
 		); err != nil {
 			return nil, err
 		}
@@ -1820,6 +2106,29 @@ func (q *Queries) UpdateBalanceReserved(ctx context.Context, arg UpdateBalanceRe
 	return err
 }
 
+const updateCountLineCounted = `-- name: UpdateCountLineCounted :exec
+UPDATE doc.count_lines
+SET qty_counted = $2, reason_code = $3, counted_by = $4, counted_at = NOW()
+WHERE id = $1
+`
+
+type UpdateCountLineCountedParams struct {
+	ID         int64          `json:"id"`
+	QtyCounted pgtype.Numeric `json:"qty_counted"`
+	ReasonCode pgtype.Text    `json:"reason_code"`
+	CountedBy  pgtype.Int8    `json:"counted_by"`
+}
+
+func (q *Queries) UpdateCountLineCounted(ctx context.Context, arg UpdateCountLineCountedParams) error {
+	_, err := q.db.Exec(ctx, updateCountLineCounted,
+		arg.ID,
+		arg.QtyCounted,
+		arg.ReasonCode,
+		arg.CountedBy,
+	)
+	return err
+}
+
 const updateDocumentLineProcessed = `-- name: UpdateDocumentLineProcessed :exec
 UPDATE doc.document_lines
 SET qty_processed = $2
@@ -1850,6 +2159,22 @@ type UpdateDocumentLinePutawayParams struct {
 
 func (q *Queries) UpdateDocumentLinePutaway(ctx context.Context, arg UpdateDocumentLinePutawayParams) error {
 	_, err := q.db.Exec(ctx, updateDocumentLinePutaway, arg.ID, arg.QtyProcessed, arg.LocationID)
+	return err
+}
+
+const updateDocumentManagerApproval = `-- name: UpdateDocumentManagerApproval :exec
+UPDATE doc.documents
+SET manager_approved_by = $2, manager_approved_at = NOW()
+WHERE id = $1
+`
+
+type UpdateDocumentManagerApprovalParams struct {
+	ID                int64       `json:"id"`
+	ManagerApprovedBy pgtype.Int8 `json:"manager_approved_by"`
+}
+
+func (q *Queries) UpdateDocumentManagerApproval(ctx context.Context, arg UpdateDocumentManagerApprovalParams) error {
+	_, err := q.db.Exec(ctx, updateDocumentManagerApproval, arg.ID, arg.ManagerApprovedBy)
 	return err
 }
 

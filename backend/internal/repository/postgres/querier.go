@@ -15,6 +15,7 @@ type Querier interface {
 	CreateBatch(ctx context.Context, arg CreateBatchParams) (MasterBatches, error)
 	// ============ CATEGORIES ============
 	CreateCategory(ctx context.Context, arg CreateCategoryParams) (MasterCategories, error)
+	CreateCountLine(ctx context.Context, arg CreateCountLineParams) (DocCountLines, error)
 	CreateDocument(ctx context.Context, arg CreateDocumentParams) (CreateDocumentRow, error)
 	CreateDocumentLine(ctx context.Context, arg CreateDocumentLineParams) (DocDocumentLines, error)
 	// ============ ITEMS & UOMS ============
@@ -25,6 +26,7 @@ type Querier interface {
 	// ============ PARTNERS ============
 	CreatePartner(ctx context.Context, arg CreatePartnerParams) (MasterPartners, error)
 	CreateStockMovement(ctx context.Context, arg CreateStockMovementParams) (CreateStockMovementRow, error)
+	CreateTransferReceipt(ctx context.Context, arg CreateTransferReceiptParams) (DocTransferReceipts, error)
 	CreateUser(ctx context.Context, arg CreateUserParams) (CreateUserRow, error)
 	CreateWarehouse(ctx context.Context, arg CreateWarehouseParams) (MasterWarehouses, error)
 	DeleteItemUoMs(ctx context.Context, itemID int64) error
@@ -40,17 +42,23 @@ type Querier interface {
 	GetItemByBarcode(ctx context.Context, barcode pgtype.Text) (GetItemByBarcodeRow, error)
 	GetItemByID(ctx context.Context, id int64) (MasterItems, error)
 	GetItemBySKU(ctx context.Context, sku string) (GetItemBySKURow, error)
+	// Harga pokok terakhir item untuk menilai selisih opname (M6.4 threshold).
+	GetLastUnitCostByItem(ctx context.Context, itemID int64) (pgtype.Numeric, error)
 	GetLocationByID(ctx context.Context, id int64) (MasterLocations, error)
 	GetLocationByWarehouseCode(ctx context.Context, arg GetLocationByWarehouseCodeParams) (MasterLocations, error)
 	GetPartnerByID(ctx context.Context, id int64) (MasterPartners, error)
 	GetStagingLocation(ctx context.Context, warehouseID int64) (MasterLocations, error)
 	GetStockBalanceByIDForUpdate(ctx context.Context, id int64) (GetStockBalanceByIDForUpdateRow, error)
 	GetStockBalanceForUpdate(ctx context.Context, arg GetStockBalanceForUpdateParams) (InvStockBalances, error)
+	// ============ FASE 8 (M5 Transfer & M6 Stock Opname) ============
+	// Lokasi transit gudang tujuan (tempat saldo in_transit dicatat saat /send).
+	GetTransitLocation(ctx context.Context, warehouseID int64) (MasterLocations, error)
 	GetUserByID(ctx context.Context, id int64) (SecUsers, error)
 	GetUserByUsername(ctx context.Context, username string) (SecUsers, error)
 	GetWarehouseByCode(ctx context.Context, code string) (MasterWarehouses, error)
 	// ============ INBOUND (Fase 6 - GRN) ============
 	GetWarehouseByID(ctx context.Context, id int64) (GetWarehouseByIDRow, error)
+	InsertAuditLog(ctx context.Context, arg InsertAuditLogParams) error
 	InsertStockMovement(ctx context.Context, arg InsertStockMovementParams) error
 	// ============ OUTBOUND (Fase 7 - DO / REQ / FEFO-FIFO) ============
 	// FEFO/FIFO candidate balances for one item in a warehouse (FSD §4.2).
@@ -59,6 +67,10 @@ type Querier interface {
 	// is race-safe against concurrent allocators/posters.
 	ListAllocationCandidates(ctx context.Context, arg ListAllocationCandidatesParams) ([]ListAllocationCandidatesRow, error)
 	ListAllocationsByDocument(ctx context.Context, documentID int64) ([]ListAllocationsByDocumentRow, error)
+	ListCountLines(ctx context.Context, documentID int64) ([]DocCountLines, error)
+	// Sumber snapshot qty_system saat sesi opname dibuka (FR-6.1). Scope dapat
+	// dipersempit per zona ('' = semua) dan/atau per item (0 = semua).
+	ListCountSnapshotBalances(ctx context.Context, arg ListCountSnapshotBalancesParams) ([]ListCountSnapshotBalancesRow, error)
 	ListDocumentLines(ctx context.Context, documentID int64) ([]DocDocumentLines, error)
 	ListItemUoMs(ctx context.Context, itemID int64) ([]MasterItemUoms, error)
 	ListItems(ctx context.Context) ([]ListItemsRow, error)
@@ -68,6 +80,7 @@ type Querier interface {
 	// ============ RBAC (Fase 2.4) ============
 	ListRolePermissions(ctx context.Context) ([]ListRolePermissionsRow, error)
 	ListStockMovementsKeyset(ctx context.Context, arg ListStockMovementsKeysetParams) ([]ListStockMovementsKeysetRow, error)
+	ListTransferReceipts(ctx context.Context, documentID int64) ([]DocTransferReceipts, error)
 	ListUserRoleCodes(ctx context.Context, userID int64) ([]string, error)
 	ListUserWarehouseCodes(ctx context.Context, userID int64) ([]string, error)
 	ListWarehouseCodes(ctx context.Context) ([]string, error)
@@ -75,8 +88,10 @@ type Querier interface {
 	SoftDeleteItem(ctx context.Context, arg SoftDeleteItemParams) (SoftDeleteItemRow, error)
 	UpdateAllocationPicked(ctx context.Context, arg UpdateAllocationPickedParams) error
 	UpdateBalanceReserved(ctx context.Context, arg UpdateBalanceReservedParams) error
+	UpdateCountLineCounted(ctx context.Context, arg UpdateCountLineCountedParams) error
 	UpdateDocumentLineProcessed(ctx context.Context, arg UpdateDocumentLineProcessedParams) error
 	UpdateDocumentLinePutaway(ctx context.Context, arg UpdateDocumentLinePutawayParams) error
+	UpdateDocumentManagerApproval(ctx context.Context, arg UpdateDocumentManagerApprovalParams) error
 	UpdateDocumentReasonCode(ctx context.Context, arg UpdateDocumentReasonCodeParams) error
 	UpdateDocumentStatus(ctx context.Context, arg UpdateDocumentStatusParams) error
 	UpdateItem(ctx context.Context, arg UpdateItemParams) (UpdateItemRow, error)

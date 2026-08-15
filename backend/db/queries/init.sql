@@ -248,9 +248,9 @@ GROUP BY l.id
 ORDER BY l.pick_seq NULLS LAST, l.code;
 
 -- name: CreateDocument :one
-INSERT INTO doc.documents (doc_no, doc_type, doc_date, status, warehouse_id, ref_doc_id, partner_id, reason_code, idempotency_key, notes, created_by)
-VALUES ($1, $2::doc.doc_type, $3, $4::doc.doc_status, $5, $6, $7, $8, $9, $10, $11)
-RETURNING id, public_id, doc_no, doc_type, doc_date, status, warehouse_id, ref_doc_id, partner_id, reason_code, idempotency_key, notes, created_by, created_at;
+INSERT INTO doc.documents (doc_no, doc_type, doc_date, status, warehouse_id, dest_warehouse_id, ref_doc_id, partner_id, reason_code, idempotency_key, notes, created_by)
+VALUES ($1, $2::doc.doc_type, $3, $4::doc.doc_status, $5, $6, $7, $8, $9, $10, $11, $12)
+RETURNING id, public_id, doc_no, doc_type, doc_date, status, warehouse_id, dest_warehouse_id, ref_doc_id, partner_id, reason_code, idempotency_key, notes, created_by, created_at;
 
 -- name: CreateDocumentLine :one
 INSERT INTO doc.document_lines (document_id, line_no, item_id, uom, conv_factor, qty_request, qty_processed, batch_id, location_id, status, notes)
@@ -258,12 +258,12 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::inv.stock_status, $11)
 RETURNING id, document_id, line_no, item_id, uom, conv_factor, qty_request, qty_processed, batch_id, location_id, status, notes;
 
 -- name: GetDocumentByID :one
-SELECT id, public_id, doc_no, doc_type, doc_date, status, warehouse_id, dest_warehouse_id, partner_id, ref_doc_id, reason_code, notes, idempotency_key, created_at, created_by, submitted_at, approved_at, approved_by, completed_at
+SELECT id, public_id, doc_no, doc_type, doc_date, status, warehouse_id, dest_warehouse_id, partner_id, ref_doc_id, reason_code, notes, idempotency_key, created_at, created_by, submitted_at, approved_at, approved_by, completed_at, manager_approved_by, manager_approved_at
 FROM doc.documents
 WHERE id = $1;
 
 -- name: GetDocumentByIDempotencyKey :one
-SELECT id, public_id, doc_no, doc_type, doc_date, status, warehouse_id, dest_warehouse_id, partner_id, ref_doc_id, reason_code, notes, idempotency_key, created_at, created_by, submitted_at, approved_at, approved_by, completed_at
+SELECT id, public_id, doc_no, doc_type, doc_date, status, warehouse_id, dest_warehouse_id, partner_id, ref_doc_id, reason_code, notes, idempotency_key, created_at, created_by, submitted_at, approved_at, approved_by, completed_at, manager_approved_by, manager_approved_at
 FROM doc.documents
 WHERE idempotency_key = $1;
 
@@ -412,3 +412,69 @@ ORDER BY r.code, p.code;
 
 -- name: ListWarehouseCodes :many
 SELECT code FROM master.warehouses WHERE is_active = TRUE ORDER BY code;
+
+-- ============ FASE 8 (M5 Transfer & M6 Stock Opname) ============
+
+-- name: GetTransitLocation :one
+-- Lokasi transit gudang tujuan (tempat saldo in_transit dicatat saat /send).
+SELECT id, warehouse_id, code, zone, rack, level, loc_type, pick_seq, capacity, is_active
+FROM master.locations
+WHERE warehouse_id = $1 AND loc_type = 'transit' AND is_active = TRUE
+ORDER BY code
+LIMIT 1;
+
+-- name: CreateTransferReceipt :one
+INSERT INTO doc.transfer_receipts (document_id, line_id, qty_sent, qty_received, received_by, notes)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id, document_id, line_id, qty_sent, qty_received, variance, received_by, received_at, notes;
+
+-- name: ListTransferReceipts :many
+SELECT id, document_id, line_id, qty_sent, qty_received, variance, received_by, received_at, notes
+FROM doc.transfer_receipts
+WHERE document_id = $1
+ORDER BY line_id;
+
+-- name: ListCountSnapshotBalances :many
+-- Sumber snapshot qty_system saat sesi opname dibuka (FR-6.1). Scope dapat
+-- dipersempit per zona ('' = semua) dan/atau per item (0 = semua).
+SELECT b.item_id, b.location_id, b.batch_id, b.status, b.qty_onhand
+FROM inv.stock_balances b
+JOIN master.locations l ON l.id = b.location_id
+WHERE l.warehouse_id = $1
+  AND ($2::varchar = '' OR l.zone = $2)
+  AND ($3::bigint = 0 OR b.item_id = $3)
+  AND b.qty_onhand > 0
+ORDER BY b.item_id, b.location_id, COALESCE(b.batch_id, 0);
+
+-- name: CreateCountLine :one
+INSERT INTO doc.count_lines (document_id, item_id, location_id, batch_id, qty_system)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING id, document_id, item_id, location_id, batch_id, qty_system, qty_counted, variance, reason_code, counted_by, counted_at;
+
+-- name: ListCountLines :many
+SELECT id, document_id, item_id, location_id, batch_id, qty_system, qty_counted, variance, reason_code, counted_by, counted_at
+FROM doc.count_lines
+WHERE document_id = $1
+ORDER BY id;
+
+-- name: UpdateCountLineCounted :exec
+UPDATE doc.count_lines
+SET qty_counted = $2, reason_code = $3, counted_by = $4, counted_at = NOW()
+WHERE id = $1;
+
+-- name: UpdateDocumentManagerApproval :exec
+UPDATE doc.documents
+SET manager_approved_by = $2, manager_approved_at = NOW()
+WHERE id = $1;
+
+-- name: GetLastUnitCostByItem :one
+-- Harga pokok terakhir item untuk menilai selisih opname (M6.4 threshold).
+SELECT unit_cost
+FROM inv.stock_movements
+WHERE item_id = $1 AND unit_cost IS NOT NULL
+ORDER BY moved_at DESC, id DESC
+LIMIT 1;
+
+-- name: InsertAuditLog :exec
+INSERT INTO aud.audit_logs (user_id, action, entity, entity_id, old_value, new_value)
+VALUES ($1, $2, $3, $4, $5, $6);
