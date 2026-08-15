@@ -16,6 +16,8 @@ info:
 servers:
     - url: /api/v1
       description: Same origin (behind reverse proxy)
+    - url: /
+      description: path for observability
 
 tags:
     - name: System
@@ -826,7 +828,10 @@ paths:
                 required: true
                 content:
                     application/json:
-                        schema: { $ref: "#/components/schemas/CreateRequestRequest" }
+                        schema:
+                            {
+                                $ref: "#/components/schemas/CreateRequestRequest",
+                            }
             responses:
                 "201":
                     description: Request draft created (or replayed for the same idempotency key)
@@ -834,7 +839,9 @@ paths:
                         application/json:
                             schema:
                                 allOf:
-                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
                                     - type: object
                                       properties:
                                           data:
@@ -864,7 +871,9 @@ paths:
                         application/json:
                             schema:
                                 allOf:
-                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
                                     - type: object
                                       properties:
                                           data:
@@ -898,7 +907,9 @@ paths:
                         application/json:
                             schema:
                                 allOf:
-                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
                                     - type: object
                                       properties:
                                           data:
@@ -933,7 +944,10 @@ paths:
                 required: true
                 content:
                     application/json:
-                        schema: { $ref: "#/components/schemas/CreateDeliveryRequest" }
+                        schema:
+                            {
+                                $ref: "#/components/schemas/CreateDeliveryRequest",
+                            }
             responses:
                 "201":
                     description: DO draft created (or replayed for the same idempotency key)
@@ -941,7 +955,9 @@ paths:
                         application/json:
                             schema:
                                 allOf:
-                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
                                     - type: object
                                       properties:
                                           data:
@@ -972,7 +988,9 @@ paths:
                         application/json:
                             schema:
                                 allOf:
-                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
                                     - type: object
                                       properties:
                                           data:
@@ -1005,7 +1023,9 @@ paths:
                         application/json:
                             schema:
                                 allOf:
-                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
                                     - type: object
                                       properties:
                                           data:
@@ -1051,7 +1071,9 @@ paths:
                         application/json:
                             schema:
                                 allOf:
-                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
                                     - type: object
                                       properties:
                                           data:
@@ -1086,7 +1108,10 @@ paths:
                 required: true
                 content:
                     application/json:
-                        schema: { $ref: "#/components/schemas/OverrideAllocateRequest" }
+                        schema:
+                            {
+                                $ref: "#/components/schemas/OverrideAllocateRequest",
+                            }
             responses:
                 "200":
                     description: Manual allocations created with reason recorded
@@ -1094,7 +1119,9 @@ paths:
                         application/json:
                             schema:
                                 allOf:
-                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
                                     - type: object
                                       properties:
                                           data:
@@ -1130,7 +1157,9 @@ paths:
                         application/json:
                             schema:
                                 allOf:
-                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
                                     - type: object
                                       properties:
                                           data:
@@ -1176,7 +1205,9 @@ paths:
                         application/json:
                             schema:
                                 allOf:
-                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
                                     - type: object
                                       properties:
                                           data:
@@ -1217,7 +1248,9 @@ paths:
                         application/json:
                             schema:
                                 allOf:
-                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
                                     - type: object
                                       properties:
                                           data:
@@ -1259,7 +1292,9 @@ paths:
                         application/json:
                             schema:
                                 allOf:
-                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
                                     - type: object
                                       properties:
                                           data:
@@ -1292,7 +1327,10 @@ paths:
                 required: true
                 content:
                     application/json:
-                        schema: { $ref: "#/components/schemas/TransferCreateRequest" }
+                        schema:
+                            {
+                                $ref: "#/components/schemas/TransferCreateRequest",
+                            }
             responses:
                 "201":
                     description: Transfer draft created
@@ -1300,7 +1338,9 @@ paths:
                         application/json:
                             schema:
                                 allOf:
-                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
                                     - type: object
                                       properties:
                                           data:
@@ -1330,7 +1370,9 @@ paths:
                         application/json:
                             schema:
                                 allOf:
-                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
                                     - type: object
                                       properties:
                                           data:
@@ -1362,7 +1404,9 @@ paths:
                         application/json:
                             schema:
                                 allOf:
-                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
                                     - type: object
                                       properties:
                                           data:
@@ -1401,7 +1445,9 @@ paths:
                         application/json:
                             schema:
                                 allOf:
-                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
                                     - type: object
                                       properties:
                                           data:
@@ -1441,7 +1487,10 @@ paths:
                 required: true
                 content:
                     application/json:
-                        schema: { $ref: "#/components/schemas/TransferReceiveRequest" }
+                        schema:
+                            {
+                                $ref: "#/components/schemas/TransferReceiveRequest",
+                            }
             responses:
                 "200":
                     description: Transfer received; document completed
@@ -1449,7 +1498,9 @@ paths:
                         application/json:
                             schema:
                                 allOf:
-                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
                                     - type: object
                                       properties:
                                           data:
@@ -1483,7 +1534,8 @@ paths:
                 required: true
                 content:
                     application/json:
-                        schema: { $ref: "#/components/schemas/CountCreateRequest" }
+                        schema:
+                            { $ref: "#/components/schemas/CountCreateRequest" }
             responses:
                 "201":
                     description: Count session opened with snapshot lines
@@ -1491,7 +1543,9 @@ paths:
                         application/json:
                             schema:
                                 allOf:
-                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
                                     - type: object
                                       properties:
                                           data:
@@ -1525,7 +1579,10 @@ paths:
                 required: true
                 content:
                     application/json:
-                        schema: { $ref: "#/components/schemas/InputCountLinesRequest" }
+                        schema:
+                            {
+                                $ref: "#/components/schemas/InputCountLinesRequest",
+                            }
             responses:
                 "200":
                     description: Count lines recorded (with computed variance)
@@ -1533,7 +1590,9 @@ paths:
                         application/json:
                             schema:
                                 allOf:
-                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
                                     - type: object
                                       properties:
                                           data:
@@ -1573,7 +1632,8 @@ paths:
                 required: true
                 content:
                     application/json:
-                        schema: { $ref: "#/components/schemas/PostCountRequest" }
+                        schema:
+                            { $ref: "#/components/schemas/PostCountRequest" }
             responses:
                 "200":
                     description: Count session posted (adjustments on ledger)
@@ -1581,7 +1641,9 @@ paths:
                         application/json:
                             schema:
                                 allOf:
-                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
                                     - type: object
                                       properties:
                                           data:
@@ -1616,7 +1678,10 @@ paths:
                 required: true
                 content:
                     application/json:
-                        schema: { $ref: "#/components/schemas/AdjustmentCreateRequest" }
+                        schema:
+                            {
+                                $ref: "#/components/schemas/AdjustmentCreateRequest",
+                            }
             responses:
                 "201":
                     description: Adjustment posted (document completed)
@@ -1624,7 +1689,9 @@ paths:
                         application/json:
                             schema:
                                 allOf:
-                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
                                     - type: object
                                       properties:
                                           data:
@@ -1692,7 +1759,8 @@ paths:
                             schema:
                                 type: object
                                 properties:
-                                    status: { type: string, example: unavailable }
+                                    status:
+                                        { type: string, example: unavailable }
                                     checks:
                                         type: object
                                         additionalProperties: { type: string }
@@ -1816,7 +1884,11 @@ components:
             required: [success, data, error]
             properties:
                 success: { type: boolean }
-                data: { nullable: true, description: "Payload; null pada response error" }
+                data:
+                    {
+                        nullable: true,
+                        description: "Payload; null pada response error",
+                    }
                 meta:
                     type: object
                     properties:
@@ -2106,11 +2178,7 @@ components:
                         description: "Wajib, >= 0",
                     }
                 lead_time_days:
-                    {
-                        type: integer,
-                        minimum: 0,
-                        description: "Wajib, >= 0",
-                    }
+                    { type: integer, minimum: 0, description: "Wajib, >= 0" }
                 abc_class:
                     {
                         type: string,
@@ -2678,7 +2746,15 @@ components:
                 status:
                     {
                         type: string,
-                        enum: [draft, submitted, approved, in_progress, completed, cancelled],
+                        enum:
+                            [
+                                draft,
+                                submitted,
+                                approved,
+                                in_progress,
+                                completed,
+                                cancelled,
+                            ],
                     }
                 warehouse_id: { type: integer, format: int64 }
                 partner_id: { type: integer, format: int64, nullable: true }
@@ -2754,7 +2830,15 @@ components:
                 status:
                     {
                         type: string,
-                        enum: [draft, submitted, approved, in_progress, completed, cancelled],
+                        enum:
+                            [
+                                draft,
+                                submitted,
+                                approved,
+                                in_progress,
+                                completed,
+                                cancelled,
+                            ],
                     }
                 warehouse_id: { type: integer, format: int64 }
                 request_id: { type: integer, format: int64, nullable: true }
@@ -2999,7 +3083,13 @@ components:
             properties:
                 item_id: { type: integer, format: int64, example: 1 }
                 qty: { type: number, format: double, example: 10 }
-                uom: { type: string, maxLength: 20, description: "Kosong = satuan dasar item", example: BOX }
+                uom:
+                    {
+                        type: string,
+                        maxLength: 20,
+                        description: "Kosong = satuan dasar item",
+                        example: BOX,
+                    }
                 notes: { type: string, maxLength: 500 }
 
         TransferCreateRequest:
@@ -3075,7 +3165,10 @@ components:
             properties:
                 lines:
                     type: array
-                    items: { $ref: "#/components/schemas/TransferReceiveLineRequest" }
+                    items:
+                        {
+                            $ref: "#/components/schemas/TransferReceiveLineRequest",
+                        }
 
         TransferReceiptSummary:
             type: object
@@ -3094,7 +3187,8 @@ components:
                 status: { type: string, example: in_progress }
                 receipts:
                     type: array
-                    items: { $ref: "#/components/schemas/TransferReceiptSummary" }
+                    items:
+                        { $ref: "#/components/schemas/TransferReceiptSummary" }
                 discrepancy:
                     {
                         type: boolean,
@@ -3168,7 +3262,8 @@ components:
             properties:
                 lines:
                     type: array
-                    items: { $ref: "#/components/schemas/InputCountLineRequest" }
+                    items:
+                        { $ref: "#/components/schemas/InputCountLineRequest" }
 
         PostCountRequest:
             type: object
@@ -3237,7 +3332,8 @@ components:
                     }
                 lines:
                     type: array
-                    items: { $ref: "#/components/schemas/AdjustmentLineRequest" }
+                    items:
+                        { $ref: "#/components/schemas/AdjustmentLineRequest" }
 
         AdjustmentDocumentResponse:
             type: object
