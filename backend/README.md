@@ -30,18 +30,23 @@ Spec docs: [PRD](PRD-Sistem-Inventori.md) · [FSD](FSD-Sistem-Inventori.md) · [
 
 ## 3. Instantiation (quick start)
 
-### 3.1 Start PostgreSQL + Redis
+### 3.1 Start PostgreSQL + Redis + migrations
 
 ```bash
 docker compose up -d
 ```
 
+`docker compose up` automatically runs the pending [golang-migrate](https://github.com/golang-migrate/migrate) migrations in the `migrate` container once Postgres is healthy (it exits with code 0 when done). To apply migrations manually instead, see §3.2.
+
 | Container | Port | Credentials |
 |---|---|---|
 | `inventory_postgres` | 5432 | `user` / `password` / db `dbname` |
 | `inventory_redis` | 6379 | — |
+| `inventory_migrate` | — | runs `db/migrations` on startup |
 
-### 3.2 Run migrations
+### 3.2 Run migrations (manual / CLI)
+
+Migrations run automatically via Docker, but you can also apply them with the local `migrate` CLI:
 
 ```bash
 migrate -path db/migrations \
