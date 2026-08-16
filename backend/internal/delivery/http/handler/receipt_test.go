@@ -92,6 +92,36 @@ func (m *hDocRepo) UpdateLinePutaway(ctx context.Context, lineID int64, qtyProce
 	return nil
 }
 
+// ─── Outbound-era additions (unused by receipt flows, harmless stubs) ──────
+
+func (m *hDocRepo) UpdateLineProcessed(ctx context.Context, lineID int64, qtyProcessed float64) error {
+	return nil
+}
+
+func (m *hDocRepo) CreateAllocations(ctx context.Context, allocations []*document.Allocation) error {
+	return nil
+}
+
+func (m *hDocRepo) ListAllocations(ctx context.Context, documentID int64) ([]*document.Allocation, error) {
+	return nil, nil
+}
+
+func (m *hDocRepo) UpdateAllocationPicked(ctx context.Context, id int64, qtyPicked float64) error {
+	return nil
+}
+
+func (m *hDocRepo) UpdateReasonCode(ctx context.Context, id int64, reasonCode string) error {
+	return nil
+}
+
+func (m *hDocRepo) GetDelivery(ctx context.Context, documentID int64) (*document.Delivery, error) {
+	return nil, pgx.ErrNoRows
+}
+
+func (m *hDocRepo) UpsertDelivery(ctx context.Context, d *document.Delivery) error {
+	return nil
+}
+
 func (m *hDocRepo) NextSequence(ctx context.Context, docType, period string) (int64, error) {
 	return 1, nil
 }

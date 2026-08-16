@@ -14,24 +14,9 @@ services:
         healthcheck:
             test: ["CMD-SHELL", "pg_isready -U user -d dbname"]
             interval: 5s
-            timeout: 5s
-            retries: 5
-
-    # DB migrations (golang-migrate)
-    migrate:
-        container_name: inventory_migrate
-        image: migrate/migrate:v4.17.1
-        depends_on:
-            db:
-                condition: service_healthy
-        environment:
-            - MIGRATE_DATABASE_URL=postgres://user:password@db:5432/dbname?sslmode=disable
-        volumes:
-            - ./backend/db/migrations:/migrations
-        command:
-            - -path=/migrations
-            - -database=$${MIGRATE_DATABASE_URL}
-            - up
+            timeout: 3s
+            retries: 10
+            start_period: 10s
 
     # Redis Cache
     redis:
@@ -41,6 +26,80 @@ services:
             - 6379:6379
         volumes:
             - redis_data:/data
+        healthcheck:
+            test: ["CMD", "redis-cli", "ping"]
+            interval: 5s
+            timeout: 3s
+            retries: 10
+
+    # One-shot migrator: menunggu Postgres naik, lalu menerapkan
+    # db/migrations/*.up.sql secara berurutan (idempotent — skrip
+    # db/migrate.sh mencatat versi di schema_migrations).
+    migrate:
+        container_name: inventory_migrate
+        image: postgres:16
+        depends_on:
+            db:
+                condition: service_healthy
+        environment:
+            - PGHOST=db
+            - PGUSER=user
+            - PGPASSWORD=password
+            - PGDATABASE=dbname
+        volumes:
+            - ./backend/db/migrations:/migrations:ro
+            - ./backend/db/migrate.sh:/migrate.sh:ro
+        command: ["sh", "/migrate.sh"]
+        restart: "no"
+
+    # Backend API (binary dari backend/Dockerfile)
+    api:
+        container_name: inventory_api
+        build:
+            context: ./backend
+            dockerfile: Dockerfile
+        image: simbar-backend:latest
+        depends_on:
+            db:
+                condition: service_healthy
+            redis:
+                condition: service_healthy
+            migrate:
+                condition: service_completed_successfully
+        environment:
+            - APP_ENV=development
+            - PORT=8080
+            - DB_CONN_STRING=postgres://user:password@db:5432/dbname?sslmode=disable
+            - REDIS_ADDR=redis:6379
+            - JWT_SECRET=dev-only-jwt-secret-change-me-0123456789
+            - DB_POOL_MAX=10
+        ports:
+            - 8080:8080
+        healthcheck:
+            test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/healthz >/dev/null 2>&1 || exit 1"]
+            interval: 30s
+            timeout: 3s
+            retries: 3
+            start_period: 15s
+
+    # Asynq worker (job planner: expiry alert, reorder calc, dll)
+    worker:
+        container_name: inventory_worker
+        image: simbar-backend:latest
+        depends_on:
+            db:
+                condition: service_healthy
+            redis:
+                condition: service_healthy
+            migrate:
+                condition: service_completed_successfully
+        environment:
+            - APP_ENV=development
+            - DB_CONN_STRING=postgres://user:password@db:5432/dbname?sslmode=disable
+            - REDIS_ADDR=redis:6379
+            - JWT_SECRET=dev-only-jwt-secret-change-me-0123456789
+            - DB_POOL_MAX=10
+        command: ["/app/worker"]
 
 volumes:
     postgres_data:

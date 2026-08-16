@@ -197,6 +197,15 @@ FROM inv.stock_balances
 WHERE item_id = $1 AND location_id = $2 AND COALESCE(batch_id, 0) = COALESCE($3, 0) AND status = $4
 FOR UPDATE;
 
+-- name: EnsureBalanceExists :exec
+-- Creates a zeroed balance row if absent so the subsequent SELECT ... FOR
+-- UPDATE actually locks it. Without this, two concurrent transactions that
+-- both see "no row" would later race on the upsert and overwrite each
+-- other's snapshot (lost update — caught by the Fase 10.3 concurrency test).
+INSERT INTO inv.stock_balances (item_id, location_id, batch_id, status, qty_onhand, qty_reserved, updated_at)
+VALUES ($1, $2, $3, $4, 0, 0, NOW())
+ON CONFLICT (item_id, location_id, COALESCE(batch_id, 0), status) DO NOTHING;
+
 -- name: UpsertStockBalanceFull :exec
 INSERT INTO inv.stock_balances (item_id, location_id, batch_id, status, qty_onhand, qty_reserved, updated_at)
 VALUES ($1, $2, $3, $4, $5, $6, NOW())
@@ -248,9 +257,9 @@ GROUP BY l.id
 ORDER BY l.pick_seq NULLS LAST, l.code;
 
 -- name: CreateDocument :one
-INSERT INTO doc.documents (doc_no, doc_type, doc_date, status, warehouse_id, partner_id, idempotency_key, notes, created_by)
-VALUES ($1, $2::doc.doc_type, $3, $4::doc.doc_status, $5, $6, $7, $8, $9)
-RETURNING id, public_id, doc_no, doc_type, doc_date, status, warehouse_id, partner_id, idempotency_key, notes, created_by, created_at;
+INSERT INTO doc.documents (doc_no, doc_type, doc_date, status, warehouse_id, dest_warehouse_id, ref_doc_id, partner_id, reason_code, idempotency_key, notes, created_by)
+VALUES ($1, $2::doc.doc_type, $3, $4::doc.doc_status, $5, $6, $7, $8, $9, $10, $11, $12)
+RETURNING id, public_id, doc_no, doc_type, doc_date, status, warehouse_id, dest_warehouse_id, ref_doc_id, partner_id, reason_code, idempotency_key, notes, created_by, created_at;
 
 -- name: CreateDocumentLine :one
 INSERT INTO doc.document_lines (document_id, line_no, item_id, uom, conv_factor, qty_request, qty_processed, batch_id, location_id, status, notes)
@@ -258,12 +267,12 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::inv.stock_status, $11)
 RETURNING id, document_id, line_no, item_id, uom, conv_factor, qty_request, qty_processed, batch_id, location_id, status, notes;
 
 -- name: GetDocumentByID :one
-SELECT id, public_id, doc_no, doc_type, doc_date, status, warehouse_id, dest_warehouse_id, partner_id, ref_doc_id, reason_code, notes, idempotency_key, created_at, created_by, submitted_at, approved_at, approved_by, completed_at
+SELECT id, public_id, doc_no, doc_type, doc_date, status, warehouse_id, dest_warehouse_id, partner_id, ref_doc_id, reason_code, notes, idempotency_key, created_at, created_by, submitted_at, approved_at, approved_by, completed_at, manager_approved_by, manager_approved_at
 FROM doc.documents
 WHERE id = $1;
 
 -- name: GetDocumentByIDempotencyKey :one
-SELECT id, public_id, doc_no, doc_type, doc_date, status, warehouse_id, dest_warehouse_id, partner_id, ref_doc_id, reason_code, notes, idempotency_key, created_at, created_by, submitted_at, approved_at, approved_by, completed_at
+SELECT id, public_id, doc_no, doc_type, doc_date, status, warehouse_id, dest_warehouse_id, partner_id, ref_doc_id, reason_code, notes, idempotency_key, created_at, created_by, submitted_at, approved_at, approved_by, completed_at, manager_approved_by, manager_approved_at
 FROM doc.documents
 WHERE idempotency_key = $1;
 
@@ -286,6 +295,107 @@ WHERE id = $1;
 UPDATE doc.document_lines
 SET qty_processed = $2, location_id = $3
 WHERE id = $1;
+
+-- name: UpdateDocumentLineProcessed :exec
+UPDATE doc.document_lines
+SET qty_processed = $2
+WHERE id = $1;
+
+-- ============ OUTBOUND (Fase 7 - DO / REQ / FEFO-FIFO) ============
+
+-- name: ListAllocationCandidates :many
+-- FEFO/FIFO candidate balances for one item in a warehouse (FSD §4.2).
+-- Rows are locked (FOR UPDATE OF b — only the balances table, since
+-- PostgreSQL forbids locking the nullable side of an outer join) so allocation
+-- is race-safe against concurrent allocators/posters.
+SELECT b.id AS balance_id, b.item_id, b.location_id, b.batch_id,
+       b.qty_onhand, b.qty_reserved,
+       l.code AS location_code, l.pick_seq, bt.expiry_date
+FROM inv.stock_balances b
+JOIN master.locations l ON l.id = b.location_id
+LEFT JOIN master.batches bt ON bt.id = b.batch_id
+WHERE b.item_id = $1
+  AND l.warehouse_id = $2
+  AND b.status = 'available'
+  AND l.loc_type IN ('pick','bulk')
+  AND b.qty_onhand > b.qty_reserved
+  AND (bt.expiry_date IS NULL OR bt.expiry_date > CURRENT_DATE)
+ORDER BY bt.expiry_date NULLS LAST, b.id, l.pick_seq
+FOR UPDATE OF b;
+
+-- name: UpdateBalanceReserved :exec
+UPDATE inv.stock_balances
+SET qty_reserved = qty_reserved + $2, updated_at = NOW()
+WHERE id = $1;
+
+-- name: GetAllocationCandidateByBalanceID :one
+-- Manual override target: locks one specific balance (Fase 7.3). Must belong
+-- to the warehouse, be available, and not be expired.
+SELECT b.id AS balance_id, b.item_id, b.location_id, b.batch_id,
+       b.qty_onhand, b.qty_reserved,
+       l.warehouse_id, l.code AS location_code, l.pick_seq, bt.expiry_date
+FROM inv.stock_balances b
+JOIN master.locations l ON l.id = b.location_id
+LEFT JOIN master.batches bt ON bt.id = b.batch_id
+WHERE b.id = $1
+  AND l.warehouse_id = $2
+  AND b.status = 'available'
+  AND (bt.expiry_date IS NULL OR bt.expiry_date > CURRENT_DATE)
+FOR UPDATE OF b;
+
+-- name: UpdateDocumentReasonCode :exec
+UPDATE doc.documents
+SET reason_code = $2
+WHERE id = $1;
+
+-- name: GetItemByBarcode :one
+SELECT i.id AS item_id, i.sku, i.base_uom, u.uom, u.conv_factor
+FROM master.item_uoms u
+JOIN master.items i ON i.id = u.item_id
+WHERE u.barcode = $1
+LIMIT 1;
+
+-- name: CreateAllocation :one
+INSERT INTO doc.allocations (doc_line_id, balance_id, qty_allocated, qty_picked, created_at)
+VALUES ($1, $2, $3, 0, NOW())
+RETURNING id, doc_line_id, balance_id, qty_allocated, qty_picked, created_at;
+
+-- name: ListAllocationsByDocument :many
+SELECT a.id, a.doc_line_id, a.balance_id, a.qty_allocated, a.qty_picked,
+       b.item_id, b.location_id, b.batch_id,
+       l.code AS location_code, l.pick_seq,
+       bt.batch_no, bt.expiry_date,
+       i.sku, i.base_uom
+FROM doc.allocations a
+JOIN inv.stock_balances b ON b.id = a.balance_id
+JOIN master.locations l ON l.id = b.location_id
+JOIN master.items i ON i.id = b.item_id
+LEFT JOIN master.batches bt ON bt.id = b.batch_id
+JOIN doc.document_lines dl ON dl.id = a.doc_line_id
+WHERE dl.document_id = $1
+ORDER BY l.pick_seq NULLS LAST, l.code, a.id;
+
+-- name: UpdateAllocationPicked :exec
+UPDATE doc.allocations
+SET qty_picked = qty_picked + $2
+WHERE id = $1;
+
+-- name: GetDeliveryByDocument :one
+SELECT document_id, vehicle_no, driver_name, shipped_at, received_by, received_at, pod_file_url, signature_url
+FROM doc.deliveries
+WHERE document_id = $1;
+
+-- name: UpsertDelivery :exec
+INSERT INTO doc.deliveries (document_id, vehicle_no, driver_name, shipped_at, received_by, received_at, pod_file_url, signature_url)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+ON CONFLICT (document_id) DO UPDATE SET
+    vehicle_no    = COALESCE(EXCLUDED.vehicle_no,    doc.deliveries.vehicle_no),
+    driver_name   = COALESCE(EXCLUDED.driver_name,   doc.deliveries.driver_name),
+    shipped_at    = COALESCE(EXCLUDED.shipped_at,    doc.deliveries.shipped_at),
+    received_by   = COALESCE(EXCLUDED.received_by,   doc.deliveries.received_by),
+    received_at   = COALESCE(EXCLUDED.received_at,   doc.deliveries.received_at),
+    pod_file_url  = COALESCE(EXCLUDED.pod_file_url,  doc.deliveries.pod_file_url),
+    signature_url = COALESCE(EXCLUDED.signature_url, doc.deliveries.signature_url);
 
 -- ============ Dokumen (Fase 5.1 - BR-04) ============
 
@@ -311,3 +421,69 @@ ORDER BY r.code, p.code;
 
 -- name: ListWarehouseCodes :many
 SELECT code FROM master.warehouses WHERE is_active = TRUE ORDER BY code;
+
+-- ============ FASE 8 (M5 Transfer & M6 Stock Opname) ============
+
+-- name: GetTransitLocation :one
+-- Lokasi transit gudang tujuan (tempat saldo in_transit dicatat saat /send).
+SELECT id, warehouse_id, code, zone, rack, level, loc_type, pick_seq, capacity, is_active
+FROM master.locations
+WHERE warehouse_id = $1 AND loc_type = 'transit' AND is_active = TRUE
+ORDER BY code
+LIMIT 1;
+
+-- name: CreateTransferReceipt :one
+INSERT INTO doc.transfer_receipts (document_id, line_id, qty_sent, qty_received, received_by, notes)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id, document_id, line_id, qty_sent, qty_received, variance, received_by, received_at, notes;
+
+-- name: ListTransferReceipts :many
+SELECT id, document_id, line_id, qty_sent, qty_received, variance, received_by, received_at, notes
+FROM doc.transfer_receipts
+WHERE document_id = $1
+ORDER BY line_id;
+
+-- name: ListCountSnapshotBalances :many
+-- Sumber snapshot qty_system saat sesi opname dibuka (FR-6.1). Scope dapat
+-- dipersempit per zona ('' = semua) dan/atau per item (0 = semua).
+SELECT b.item_id, b.location_id, b.batch_id, b.status, b.qty_onhand
+FROM inv.stock_balances b
+JOIN master.locations l ON l.id = b.location_id
+WHERE l.warehouse_id = $1
+  AND ($2::varchar = '' OR l.zone = $2)
+  AND ($3::bigint = 0 OR b.item_id = $3)
+  AND b.qty_onhand > 0
+ORDER BY b.item_id, b.location_id, COALESCE(b.batch_id, 0);
+
+-- name: CreateCountLine :one
+INSERT INTO doc.count_lines (document_id, item_id, location_id, batch_id, qty_system)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING id, document_id, item_id, location_id, batch_id, qty_system, qty_counted, variance, reason_code, counted_by, counted_at;
+
+-- name: ListCountLines :many
+SELECT id, document_id, item_id, location_id, batch_id, qty_system, qty_counted, variance, reason_code, counted_by, counted_at
+FROM doc.count_lines
+WHERE document_id = $1
+ORDER BY id;
+
+-- name: UpdateCountLineCounted :exec
+UPDATE doc.count_lines
+SET qty_counted = $2, reason_code = $3, counted_by = $4, counted_at = NOW()
+WHERE id = $1;
+
+-- name: UpdateDocumentManagerApproval :exec
+UPDATE doc.documents
+SET manager_approved_by = $2, manager_approved_at = NOW()
+WHERE id = $1;
+
+-- name: GetLastUnitCostByItem :one
+-- Harga pokok terakhir item untuk menilai selisih opname (M6.4 threshold).
+SELECT unit_cost
+FROM inv.stock_movements
+WHERE item_id = $1 AND unit_cost IS NOT NULL
+ORDER BY moved_at DESC, id DESC
+LIMIT 1;
+
+-- name: InsertAuditLog :exec
+INSERT INTO aud.audit_logs (user_id, action, entity, entity_id, old_value, new_value)
+VALUES ($1, $2, $3, $4, $5, $6);
