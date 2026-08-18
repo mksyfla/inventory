@@ -84,7 +84,7 @@ describe('LoginPage Component', () => {
     });
   });
 
-  it('supports quick login with demo role buttons', async () => {
+  it('supports quick login with seed admin button', async () => {
     await act(async () => {
       render(
         <MemoryRouter>
@@ -93,16 +93,46 @@ describe('LoginPage Component', () => {
       );
     });
 
-    const inboundBtn = screen.getByTestId('btn-quick-login-inbound');
+    const adminBtn = screen.getByTestId('btn-quick-login-admin');
 
     await act(async () => {
-      fireEvent.click(inboundBtn);
+      fireEvent.click(adminBtn);
     });
 
     await waitFor(() => {
+      expect(authService.login).toHaveBeenCalledWith({
+        username: 'admin',
+        password: 'Admin@123456',
+      });
       expect(useAuthStore.getState().isAuthenticated).toBe(true);
-      expect(useAuthStore.getState().user?.username).toBe('budi.inbound');
+      expect(useAuthStore.getState().user?.username).toBe('dipo.inventory');
+    });
+  });
+
+  it('displays error alert when login fails', async () => {
+    (authService.login as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error('Username atau kata sandi salah')
+    );
+
+    await act(async () => {
+      render(
+        <MemoryRouter>
+          <LoginPage />
+        </MemoryRouter>
+      );
+    });
+
+    const submitBtn = screen.getByTestId('btn-login-submit');
+
+    await act(async () => {
+      fireEvent.click(submitBtn);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('login-error-alert')).toBeInTheDocument();
+      expect(screen.getByText('Username atau kata sandi salah')).toBeInTheDocument();
     });
   });
 });
+
 

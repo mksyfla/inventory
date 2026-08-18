@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Card, Input, Button, Typography, Alert, Checkbox, Space, Divider, Tag } from 'antd';
+import { Card, Input, Button, Typography, Alert, Checkbox, Space, Divider } from 'antd';
 import {
   UserOutlined,
   LockOutlined,
@@ -12,7 +12,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuthStore } from '../store/useAuthStore';
-import { MOCK_CURRENT_USER, MOCK_DEMO_USERS, User } from '../types/user';
+import { authService } from '../api/services/auth';
 
 const { Title, Text } = Typography;
 
@@ -32,7 +32,7 @@ export const LoginPage: React.FC = () => {
 
   const navigate = useNavigate();
   const location = useLocation();
-  const { login, isAuthenticated } = useAuthStore();
+  const { setSession, isAuthenticated } = useAuthStore();
 
   // Safely calculate destination path, avoiding redirecting back to /login
   const rawFrom = (location.state as any)?.from;
@@ -54,46 +54,43 @@ export const LoginPage: React.FC = () => {
   } = useForm<LoginFormValues>({
     resolver: zodResolver(loginSchema),
     defaultValues: {
-      username: 'dipo.inventory',
-      password: 'password123',
+      username: 'admin',
+      password: 'Admin@123456',
       rememberMe: true,
     },
   });
 
-  const performLogin = (userToLogin: User) => {
+  const executeLogin = async (username: string, pass: string) => {
     setLoading(true);
     setErrorMsg(null);
 
-    setTimeout(() => {
-      login(userToLogin, 'mock-jwt-token-xyz-12345', 'mock-refresh-token-xyz-99999');
-      setLoading(false);
+    try {
+      const pair = await authService.login({
+        username,
+        password: pass,
+      });
+      setSession(pair.access_token, pair.refresh_token);
       navigate(destination, { replace: true });
-    }, 400);
+    } catch (err: any) {
+      const message =
+        err?.response?.data?.message ||
+        err?.message ||
+        'Username atau kata sandi tidak sesuai.';
+      setErrorMsg(message);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const onSubmit = async (values: LoginFormValues) => {
-    // Find matching demo user by username keyword or fallback to default MOCK_CURRENT_USER
-    const lowerUser = values.username.toLowerCase();
-    let targetUser: User = MOCK_CURRENT_USER;
-
-    if (lowerUser.includes('inbound') || lowerUser.includes('budi')) {
-      targetUser = MOCK_DEMO_USERS.inbound;
-    } else if (lowerUser.includes('outbound') || lowerUser.includes('siti')) {
-      targetUser = MOCK_DEMO_USERS.outbound;
-    } else if (lowerUser.includes('supervisor') || lowerUser.includes('agus')) {
-      targetUser = MOCK_DEMO_USERS.supervisor;
-    }
-
-    performLogin(targetUser);
+    await executeLogin(values.username, values.password);
   };
 
-  const handleQuickLogin = (roleKey: 'manager' | 'inbound' | 'outbound' | 'supervisor') => {
-    const demoUser = MOCK_DEMO_USERS[roleKey] || MOCK_CURRENT_USER;
-    setValue('username', demoUser.username);
-    setValue('password', 'password123');
-    performLogin(demoUser);
+  const handleQuickLogin = (username: string, pass: string) => {
+    setValue('username', username);
+    setValue('password', pass);
+    executeLogin(username, pass);
   };
-
 
   return (
     <div
@@ -127,11 +124,6 @@ export const LoginPage: React.FC = () => {
             <Text type="secondary" style={{ fontSize: 13 }}>
               Sistem Manajemen Barang & Distribusi (PERURI)
             </Text>
-          </div>
-          <div style={{ marginTop: 8 }}>
-            <Tag color="processing" style={{ borderRadius: 10, fontSize: 11, padding: '0 10px' }}>
-              Mode Demo Frontend (Mock Auth)
-            </Tag>
           </div>
         </div>
 
@@ -250,55 +242,23 @@ export const LoginPage: React.FC = () => {
         </form>
 
         <Divider style={{ margin: '16px 0 12px', fontSize: 12, color: 'rgba(0,0,0,0.45)' }}>
-          <ThunderboltOutlined style={{ marginRight: 4 }} /> Quick Login (Akun Demo)
+          <ThunderboltOutlined style={{ marginRight: 4 }} /> Kredensial Cepat (Seed Backend)
         </Divider>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 8 }}>
           <Button
             size="small"
-            onClick={() => handleQuickLogin('manager')}
+            onClick={() => handleQuickLogin('admin', 'Admin@123456')}
             disabled={loading}
-            data-testid="btn-quick-login-manager"
-            style={{ textAlign: 'left', height: 'auto', padding: '6px 8px' }}
+            data-testid="btn-quick-login-admin"
+            style={{ textAlign: 'left', height: 'auto', padding: '6px 12px' }}
           >
-            <div style={{ fontSize: 12, fontWeight: 600 }}>Manager / Admin</div>
-            <div style={{ fontSize: 10, color: 'rgba(0,0,0,0.45)' }}>Semua Hak Akses</div>
-          </Button>
-
-          <Button
-            size="small"
-            onClick={() => handleQuickLogin('supervisor')}
-            disabled={loading}
-            data-testid="btn-quick-login-supervisor"
-            style={{ textAlign: 'left', height: 'auto', padding: '6px 8px' }}
-          >
-            <div style={{ fontSize: 12, fontWeight: 600 }}>Supervisor</div>
-            <div style={{ fontSize: 10, color: 'rgba(0,0,0,0.45)' }}>Approval & Audit</div>
-          </Button>
-
-          <Button
-            size="small"
-            onClick={() => handleQuickLogin('inbound')}
-            disabled={loading}
-            data-testid="btn-quick-login-inbound"
-            style={{ textAlign: 'left', height: 'auto', padding: '6px 8px' }}
-          >
-            <div style={{ fontSize: 12, fontWeight: 600 }}>Staf Inbound</div>
-            <div style={{ fontSize: 10, color: 'rgba(0,0,0,0.45)' }}>GRN & Putaway</div>
-          </Button>
-
-          <Button
-            size="small"
-            onClick={() => handleQuickLogin('outbound')}
-            disabled={loading}
-            data-testid="btn-quick-login-outbound"
-            style={{ textAlign: 'left', height: 'auto', padding: '6px 8px' }}
-          >
-            <div style={{ fontSize: 12, fontWeight: 600 }}>Staf Outbound</div>
-            <div style={{ fontSize: 10, color: 'rgba(0,0,0,0.45)' }}>DO, Picking & POD</div>
+            <div style={{ fontSize: 12, fontWeight: 600 }}>Administrator SIMBAR (admin)</div>
+            <div style={{ fontSize: 11, color: 'rgba(0,0,0,0.45)' }}>Role: sysadmin @ WH01 (Akses Penuh)</div>
           </Button>
         </div>
       </Card>
     </div>
   );
 };
+

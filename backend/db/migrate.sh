@@ -6,7 +6,7 @@
 # Jika migrasi sudah pernah diterapkan (marker ada ATAU objek khasnya sudah
 # ada di DB — mis. volume lama dari sebelum ada layanan migrate), versi itu
 # dilewati. Aman dijalankan ulang berkali-kali.
-set -e
+set -o errexit
 
 echo "[migrate] waiting for postgres..."
 until pg_isready -h "${PGHOST:-db}" -U "${PGUSER:-user}" -d "${PGDATABASE:-dbname}"; do
