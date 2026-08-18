@@ -8,7 +8,7 @@
 --    Materialized view agregasi mutasi bulanan untuk laporan/dashboard.
 
 -- ─── 1. inv.replenishment_suggestions ──────────────────────────────────────────
-CREATE TABLE inv.replenishment_suggestions (
+CREATE TABLE IF NOT EXISTS inv.replenishment_suggestions (
     id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     item_id         BIGINT NOT NULL REFERENCES master.items(id),
     avg_daily_usage NUMERIC(18,4) NOT NULL DEFAULT 0,
@@ -27,7 +27,7 @@ CREATE TABLE inv.replenishment_suggestions (
 CREATE INDEX idx_replenish_status ON inv.replenishment_suggestions (status) WHERE status IN ('pending','notified');
 
 -- ─── 2. aud.job_runs ───────────────────────────────────────────────────────────
-CREATE TABLE aud.job_runs (
+CREATE TABLE IF NOT EXISTS aud.job_runs (
     id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     job_name        VARCHAR(50) NOT NULL,
     started_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
