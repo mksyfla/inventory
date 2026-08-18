@@ -102,10 +102,10 @@ func registerCronJobs(scheduler *asynq.Scheduler) {
 	for _, j := range jobs {
 		entry, err := scheduler.Register(j.cron, asynq.NewTask(j.typ, nil))
 		if err != nil {
-			slog.Error("Failed to register cron job", slog.String("job", j.typ), slog.Any("error", err))
+			logger.Error(context.Background(), "Failed to register cron job", slog.String("job", j.typ), slog.Any("error", err))
 			continue
 		}
-		slog.Info("Registered cron job", slog.String("job", j.typ),
+		logger.Info(context.Background(), "Registered cron job", slog.String("job", j.typ),
 			slog.String("cron", j.cron), slog.String("entry", entry))
 	}
 }

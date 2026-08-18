@@ -55,3 +55,29 @@ func Init(env string) *slog.Logger {
 	slog.SetDefault(logger)
 	return logger
 }
+
+// Level helpers emit a structured log line at an explicit severity level.
+// They log through slog.Default() — the ContextHandler-wrapped logger set by
+// Init — so request_id and user_id are attached automatically when present
+// in ctx. Prefer these over the bare slog package functions so the level is
+// always explicit at the call site.
+
+// Debug logs at DEBUG level — verbose detail / troubleshooting only.
+func Debug(ctx context.Context, msg string, args ...any) {
+	slog.Log(ctx, slog.LevelDebug, msg, args...)
+}
+
+// Info logs at INFO level — normal successful operation.
+func Info(ctx context.Context, msg string, args ...any) {
+	slog.Log(ctx, slog.LevelInfo, msg, args...)
+}
+
+// Warn logs at WARN level — recoverable problem (a "warning").
+func Warn(ctx context.Context, msg string, args ...any) {
+	slog.Log(ctx, slog.LevelWarn, msg, args...)
+}
+
+// Error logs at ERROR level — failure needing attention.
+func Error(ctx context.Context, msg string, args ...any) {
+	slog.Log(ctx, slog.LevelError, msg, args...)
+}

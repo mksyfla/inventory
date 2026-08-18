@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"inventory/internal/domain/planning"
+	"inventory/internal/pkg/logger"
 )
 
 // AlertLevel is the severity used for notifications.
@@ -37,16 +38,16 @@ type Notifier interface {
 // LogNotifier is the default Notifier: structured slog output only.
 type LogNotifier struct{}
 
-func (LogNotifier) Notify(_ context.Context, level AlertLevel, title, message string) {
+func (LogNotifier) Notify(ctx context.Context, level AlertLevel, title, message string) {
 	switch level {
 	case AlertCrit:
-		slog.Error("JOB ALERT", slog.String("severity", string(level)),
+		logger.Error(ctx, "JOB ALERT", slog.String("severity", string(level)),
 			slog.String("title", title), slog.String("message", message))
 	case AlertWarn, AlertAlert:
-		slog.Warn("JOB ALERT", slog.String("severity", string(level)),
+		logger.Warn(ctx, "JOB ALERT", slog.String("severity", string(level)),
 			slog.String("title", title), slog.String("message", message))
 	default:
-		slog.Info("JOB ALERT", slog.String("severity", string(level)),
+		logger.Info(ctx, "JOB ALERT", slog.String("severity", string(level)),
 			slog.String("title", title), slog.String("message", message))
 	}
 }
@@ -234,7 +235,7 @@ func (u *Usecase) RunReorderCalc(ctx context.Context) (*ReorderCalcResult, error
 			rop, err := ComputeROP(it.AvgDailyUsage, it.LeadTimeDays, it.SafetyStock)
 			if err != nil {
 				// Data master tidak valid → lewati item, jangan matikan job.
-				slog.Warn("planning: reorder.calc skipped invalid item",
+				logger.Warn(ctx, "planning: reorder.calc skipped invalid item",
 					slog.Int64("item_id", it.ItemID), slog.Any("error", err))
 				continue
 			}
@@ -346,7 +347,7 @@ func (u *Usecase) RunLedgerReconcile(ctx context.Context) (*ReconcileResult, err
 				msg := fmt.Sprintf("LEDGER MISMATCH key=%s ledger_sum=%.4f balance_qty=%.4f delta=%.4f",
 					k, sum, oh, sum-oh)
 				res.DeviationDetail = append(res.DeviationDetail, msg)
-				slog.Error("ledger.reconcile CRITICAL", slog.String("key", k),
+				logger.Error(ctx, "ledger.reconcile CRITICAL", slog.String("key", k),
 					slog.Float64("ledger_sum", sum), slog.Float64("balance", oh))
 				u.not.Notify(ctx, AlertCrit,
 					"Selisih rekonsiliasi ledger-balance",
