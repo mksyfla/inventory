@@ -110,6 +110,43 @@ func (m *mockDocs) UpdateLinePutaway(ctx context.Context, lineID int64, qtyProce
 	return nil
 }
 
+// ─── Outbound-era additions (unused by inbound flows, harmless stubs) ──────
+
+func (m *mockDocs) UpdateLineProcessed(ctx context.Context, lineID int64, qtyProcessed float64) error {
+	for _, lines := range m.lines {
+		for _, ln := range lines {
+			if ln.ID == lineID {
+				ln.QtyProcessed = qtyProcessed
+			}
+		}
+	}
+	return nil
+}
+
+func (m *mockDocs) CreateAllocations(ctx context.Context, allocations []*document.Allocation) error {
+	return nil
+}
+
+func (m *mockDocs) ListAllocations(ctx context.Context, documentID int64) ([]*document.Allocation, error) {
+	return nil, nil
+}
+
+func (m *mockDocs) UpdateAllocationPicked(ctx context.Context, id int64, qtyPicked float64) error {
+	return nil
+}
+
+func (m *mockDocs) UpdateReasonCode(ctx context.Context, id int64, reasonCode string) error {
+	return nil
+}
+
+func (m *mockDocs) GetDelivery(ctx context.Context, documentID int64) (*document.Delivery, error) {
+	return nil, pgx.ErrNoRows
+}
+
+func (m *mockDocs) UpsertDelivery(ctx context.Context, d *document.Delivery) error {
+	return nil
+}
+
 // mockItems serves ItemLookup.
 type mockItems struct {
 	items map[int64]*ItemInfo

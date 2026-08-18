@@ -12,7 +12,6 @@ import {
   Progress,
   Badge,
   Divider,
-  notification,
 } from 'antd';
 import {
   ArrowLeftOutlined,
@@ -25,44 +24,83 @@ import {
   ExclamationCircleOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useParams } from 'react-router-dom';
-import { GoodsReceiptNote, MOCK_GRN_LIST, ReceiptItemLine } from '../../types/inbound';
+import { useQuery } from '@tanstack/react-query';
+import { receiptService } from '../../api/services/receipts';
+import { itemService } from '../../api/services/items';
+import { mapItemDTO } from '../../api/mappers';
+import { PutawaySuggestionDTO } from '../../api/dto';
+import { useMutationWithToast } from '../../hooks/useMutationWithToast';
 import { CameraScannerModal } from '../../components/CameraScannerModal';
 import { useScannerKeyboardWedge } from '../../hooks/useScannerKeyboardWedge';
 import { playSuccessBeep, playErrorBeep } from '../../utils/audioFeedback';
 
 const { Title, Paragraph, Text } = Typography;
 
-export interface PutawayItemRow extends ReceiptItemLine {
+export interface PutawayItemRow {
+  id: number;
+  line_id: number;
+  item_id: number;
+  sku: string;
+  itemName: string;
+  qtyRemaining: number;
   suggestedBinCode: string;
   scannedBinCode: string;
-  scannedSku: string;
   qtyPutaway: number;
   isBinMatched?: boolean;
-  isSkuMatched?: boolean;
   isPutawayCompleted: boolean;
 }
 
 export const PutawayPage: React.FC = () => {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
+  const receiptId = Number(id);
 
-  // Find GRN document
-  const existingGrn = MOCK_GRN_LIST.find((g) => g.id === Number(id)) || MOCK_GRN_LIST[0];
-  const [grn] = useState<GoodsReceiptNote>(existingGrn);
+  const { data: suggestions = [], isLoading } = useQuery<PutawaySuggestionDTO[]>({
+    queryKey: ['receipt', receiptId, 'putaway-suggestion'],
+    queryFn: () => receiptService.putawaySuggestion(receiptId),
+    enabled: Boolean(receiptId),
+  });
 
-  // Initialize Putaway rows with System Suggested Bin locations
-  const [putawayItems, setPutawayItems] = useState<PutawayItemRow[]>(() =>
-    grn.items.map((item, index) => ({
-      ...item,
-      suggestedBinCode: item.targetLocationCode || `JKT01-Z1-R01-B0${index + 1}`,
-      scannedBinCode: '',
-      scannedSku: '',
-      qtyPutaway: item.qtyReceived,
-      isBinMatched: undefined,
-      isSkuMatched: undefined,
-      isPutawayCompleted: false,
-    }))
-  );
+  const { data: items = [] } = useQuery({
+    queryKey: ['items'],
+    queryFn: async () => {
+      const dtos = await itemService.listItems();
+      return dtos.map(mapItemDTO);
+    },
+  });
+
+  const [putawayItems, setPutawayItems] = useState<PutawayItemRow[]>([]);
+
+  // Initialize rows from putaway suggestions when both suggestions and items are available.
+  React.useEffect(() => {
+    if (suggestions.length > 0 && items.length > 0 && putawayItems.length === 0) {
+      const rows: PutawayItemRow[] = suggestions.map((s) => {
+        const item = items.find((i) => i.id === s.item_id);
+        const firstLoc = s.locations?.[0];
+        return {
+          id: s.line_id,
+          line_id: s.line_id,
+          item_id: s.item_id,
+          sku: item?.sku || `#${s.item_id}`,
+          itemName: item?.name || `Item #${s.item_id}`,
+          qtyRemaining: s.qty_remaining,
+          suggestedBinCode: firstLoc?.code || '',
+          scannedBinCode: '',
+          qtyPutaway: s.qty_remaining,
+          isPutawayCompleted: false,
+        };
+      });
+      setPutawayItems(rows);
+    }
+  }, [suggestions, items]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const putawayMutation = useMutationWithToast({
+    mutationFn: (payload: { line_id: number; qty: number; location_code: string }) =>
+      receiptService.putaway(receiptId, { lines: [payload] }),
+    successTitle: 'Putaway Berhasil Diposting',
+    successMessage: 'Perpindahan stok dari staging ke bin tujuan telah dicatat.',
+    invalidateKeys: [['receipt', receiptId, 'putaway-suggestion']],
+  });
 
   const [activeIndex, setActiveIndex] = useState<number>(0);
   const [cameraModalOpen, setCameraModalOpen] = useState<boolean>(false);
@@ -72,24 +110,15 @@ export const PutawayPage: React.FC = () => {
 
   // Process barcode scan string
   const handleBarcodeScanned = (scannedCode: string) => {
-    if (!scannedCode) return;
+    if (!scannedCode || !currentActiveRow) return;
     const cleanCode = scannedCode.trim().toUpperCase();
 
     if (scanMode === 'bin') {
-      // Scan Bin Location
       const isMatch = cleanCode === currentActiveRow.suggestedBinCode.toUpperCase();
       if (isMatch) {
         playSuccessBeep();
-        notification.success({
-          message: 'Scan Barcode Bin Berhasil (Match)',
-          description: `Lokasi bin ${cleanCode} sesuai dengan saran sistem.`,
-        });
       } else {
         playErrorBeep();
-        notification.warning({
-          message: 'Lokasi Bin Berbeda dari Saran Sistem (Override)',
-          description: `Scan: ${cleanCode} vs Saran: ${currentActiveRow.suggestedBinCode}. Stok akan ditempatkan di lokasi override ini.`,
-        });
       }
 
       setPutawayItems((prev) =>
@@ -100,31 +129,17 @@ export const PutawayPage: React.FC = () => {
         )
       );
 
-      // Auto switch scan mode to SKU
       setScanMode('sku');
     } else {
-      // Scan SKU Barang
       const isMatch = cleanCode === currentActiveRow.sku.toUpperCase();
       if (isMatch) {
         playSuccessBeep();
-        notification.success({
-          message: 'Scan Barcode SKU Berhasil (Match)',
-          description: `Barang ${cleanCode} terverifikasi.`,
-        });
       } else {
         playErrorBeep();
-        notification.error({
-          message: 'Scan Barcode SKU Tidak Cocok',
-          description: `Barcode ${cleanCode} tidak sesuai dengan SKU target ${currentActiveRow.sku}.`,
-        });
       }
 
       setPutawayItems((prev) =>
-        prev.map((row, idx) =>
-          idx === activeIndex
-            ? { ...row, scannedSku: cleanCode, isSkuMatched: isMatch }
-            : row
-        )
+        prev.map((row, idx) => (idx === activeIndex ? { ...row, isBinMatched: isMatch && row.isBinMatched } : row))
       );
     }
   };
@@ -137,40 +152,35 @@ export const PutawayPage: React.FC = () => {
 
   const handleConfirmItemPutaway = (index: number) => {
     const item = putawayItems[index];
-    if (!item.scannedBinCode) {
-      notification.error({ message: 'Wajib melakukan scan barcode Bin tujuan terlebih dahulu' });
+    if (!item?.scannedBinCode) {
       return;
     }
 
-    setPutawayItems((prev) =>
-      prev.map((row, idx) =>
-        idx === index ? { ...row, isPutawayCompleted: true } : row
-      )
+    putawayMutation.mutate(
+      {
+        line_id: item.line_id,
+        qty: item.qtyPutaway,
+        location_code: item.scannedBinCode,
+      },
+      {
+        onSuccess: () => {
+          setPutawayItems((prev) =>
+            prev.map((row, idx) => (idx === index ? { ...row, isPutawayCompleted: true } : row))
+          );
+          playSuccessBeep();
+
+          const nextUncompleted = putawayItems.findIndex((row, idx) => idx > index && !row.isPutawayCompleted);
+          if (nextUncompleted !== -1) {
+            setActiveIndex(nextUncompleted);
+            setScanMode('bin');
+          }
+        },
+      }
     );
-
-    playSuccessBeep();
-    notification.success({
-      message: `Barang ${item.sku} Berhasil Ditempatkan di ${item.scannedBinCode}`,
-    });
-
-    // Move to next uncompleted row
-    const nextUncompleted = putawayItems.findIndex((row, idx) => idx > index && !row.isPutawayCompleted);
-    if (nextUncompleted !== -1) {
-      setActiveIndex(nextUncompleted);
-      setScanMode('bin');
-    }
-  };
-
-  const handleCompleteAllPutaway = () => {
-    notification.success({
-      message: 'Seluruh Alur Putaway Berhasil Selesai',
-      description: `Stok barang dari dokumen ${grn.documentNo} resmi dibukukan ke lokasi bin gudang.`,
-    });
-    navigate(`/inbound/receipts/${grn.id}`);
   };
 
   const completedCount = putawayItems.filter((i) => i.isPutawayCompleted).length;
-  const progressPercent = Math.round((completedCount / putawayItems.length) * 100);
+  const progressPercent = putawayItems.length > 0 ? Math.round((completedCount / putawayItems.length) * 100) : 0;
 
   const columns = [
     {
@@ -188,11 +198,11 @@ export const PutawayPage: React.FC = () => {
       ),
     },
     {
-      title: 'Qty Diterima',
-      dataIndex: 'qtyReceived',
-      key: 'qtyReceived',
+      title: 'Qty Sisa',
+      dataIndex: 'qtyRemaining',
+      key: 'qtyRemaining',
       width: 110,
-      render: (qty: number, record: PutawayItemRow) => `${qty} ${record.uom}`,
+      render: (qty: number) => `${qty}`,
     },
     {
       title: 'Saran Bin Sistem',
@@ -202,7 +212,7 @@ export const PutawayPage: React.FC = () => {
       render: (suggested: string) => (
         <Space>
           <EnvironmentOutlined style={{ color: '#0052cc' }} />
-          <Text strong>{suggested}</Text>
+          <Text strong>{suggested || '-'}</Text>
         </Space>
       ),
     },
@@ -259,6 +269,7 @@ export const PutawayPage: React.FC = () => {
             type="primary"
             style={{ background: '#52c41a', borderColor: '#52c41a' }}
             disabled={record.isPutawayCompleted || !record.scannedBinCode}
+            loading={putawayMutation.isPending}
             onClick={() => handleConfirmItemPutaway(idx)}
             data-testid={`btn-confirm-putaway-${idx}`}
           >
@@ -276,10 +287,10 @@ export const PutawayPage: React.FC = () => {
         <Row justify="space-between" align="middle">
           <Col>
             <Space align="center">
-              <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(`/inbound/receipts/${grn.id}`)} />
+              <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(`/inbound/receipts/${receiptId}`)} />
               <div>
                 <Title level={3} style={{ margin: 0 }}>
-                  Alur Putaway & Penempatan Rak Bin: {grn.documentNo}
+                  Alur Putaway & Penempatan Rak Bin: GRN #{receiptId}
                 </Title>
                 <Paragraph type="secondary" style={{ margin: 0 }}>
                   Scan barcode Bin lokasi tujuan & SKU barang menggunakan Scanner USB / Kamera PWA.
@@ -300,60 +311,62 @@ export const PutawayPage: React.FC = () => {
         </Row>
 
         {/* Active Scan Control Box */}
-        <Card variant="borderless" style={{ background: '#e6f7ff', border: '1.5px dashed #1890ff' }}>
-          <Row gutter={[16, 16]} align="middle">
-            <Col xs={24} md={12}>
-              <Text type="secondary" style={{ display: 'block', fontSize: 12 }}>
-                Target Baris Aktif ({activeIndex + 1} dari {putawayItems.length}):
-              </Text>
-              <Title level={4} style={{ margin: '4px 0', color: '#0052cc' }}>
-                {currentActiveRow.sku} - {currentActiveRow.itemName}
-              </Title>
-              <Text strong style={{ fontSize: 13 }}>
-                Saran Bin Sistem:{' '}
-                <Tag color="blue" icon={<EnvironmentOutlined />}>
-                  {currentActiveRow.suggestedBinCode}
-                </Tag>
-              </Text>
-            </Col>
-
-            <Col xs={24} md={12}>
-              <Space direction="vertical" style={{ width: '100%' }}>
-                <Text strong style={{ fontSize: 13 }}>
-                  Simulasi Manual Scan ({scanMode === 'bin' ? 'Barcode Bin' : 'Barcode SKU'}):
+        {currentActiveRow && (
+          <Card variant="borderless" style={{ background: '#e6f7ff', border: '1.5px dashed #1890ff' }}>
+            <Row gutter={[16, 16]} align="middle">
+              <Col xs={24} md={12}>
+                <Text type="secondary" style={{ display: 'block', fontSize: 12 }}>
+                  Target Baris Aktif ({activeIndex + 1} dari {putawayItems.length}):
                 </Text>
-                <Space style={{ width: '100%' }}>
-                  <Input
-                    placeholder={
-                      scanMode === 'bin'
-                        ? `Scan / Ketik Kode Bin (misal: ${currentActiveRow.suggestedBinCode})`
-                        : `Scan / Ketik Kode SKU (misal: ${currentActiveRow.sku})`
-                    }
-                    prefix={scanMode === 'bin' ? <ScanOutlined /> : <BarcodeOutlined />}
-                    onPressEnter={(e: any) => {
-                      handleBarcodeScanned(e.target.value);
-                      e.target.value = '';
-                    }}
-                    data-testid="input-manual-barcode-scan"
-                  />
-                  <Button
-                    type="primary"
-                    onClick={() => {
-                      const input = document.querySelector('[data-testid="input-manual-barcode-scan"]') as HTMLInputElement;
-                      if (input && input.value) {
-                        handleBarcodeScanned(input.value);
-                        input.value = '';
+                <Title level={4} style={{ margin: '4px 0', color: '#0052cc' }}>
+                  {currentActiveRow.sku} - {currentActiveRow.itemName}
+                </Title>
+                <Text strong style={{ fontSize: 13 }}>
+                  Saran Bin Sistem:{' '}
+                  <Tag color="blue" icon={<EnvironmentOutlined />}>
+                    {currentActiveRow.suggestedBinCode || '-'}
+                  </Tag>
+                </Text>
+              </Col>
+
+              <Col xs={24} md={12}>
+                <Space direction="vertical" style={{ width: '100%' }}>
+                  <Text strong style={{ fontSize: 13 }}>
+                    Simulasi Manual Scan ({scanMode === 'bin' ? 'Barcode Bin' : 'Barcode SKU'}):
+                  </Text>
+                  <Space style={{ width: '100%' }}>
+                    <Input
+                      placeholder={
+                        scanMode === 'bin'
+                          ? `Scan / Ketik Kode Bin (misal: ${currentActiveRow.suggestedBinCode})`
+                          : `Scan / Ketik Kode SKU (misal: ${currentActiveRow.sku})`
                       }
-                    }}
-                    data-testid="btn-submit-manual-scan"
-                  >
-                    Submit Scan
-                  </Button>
+                      prefix={scanMode === 'bin' ? <ScanOutlined /> : <BarcodeOutlined />}
+                      onPressEnter={(e: any) => {
+                        handleBarcodeScanned(e.target.value);
+                        e.target.value = '';
+                      }}
+                      data-testid="input-manual-barcode-scan"
+                    />
+                    <Button
+                      type="primary"
+                      onClick={() => {
+                        const input = document.querySelector('[data-testid="input-manual-barcode-scan"]') as HTMLInputElement;
+                        if (input && input.value) {
+                          handleBarcodeScanned(input.value);
+                          input.value = '';
+                        }
+                      }}
+                      data-testid="btn-submit-manual-scan"
+                    >
+                      Submit Scan
+                    </Button>
+                  </Space>
                 </Space>
-              </Space>
-            </Col>
-          </Row>
-        </Card>
+              </Col>
+            </Row>
+          </Card>
+        )}
 
         {/* Progress Overview Card */}
         <Card variant="borderless">
@@ -372,6 +385,7 @@ export const PutawayPage: React.FC = () => {
             rowKey="id"
             columns={columns}
             dataSource={putawayItems}
+            loading={isLoading}
             pagination={false}
             data-testid="table-putaway-items"
           />
@@ -383,8 +397,8 @@ export const PutawayPage: React.FC = () => {
               type="primary"
               size="large"
               icon={<RocketOutlined />}
-              disabled={completedCount < putawayItems.length}
-              onClick={handleCompleteAllPutaway}
+              disabled={putawayItems.length === 0 || completedCount < putawayItems.length}
+              onClick={() => navigate(`/inbound/receipts/${receiptId}`)}
               data-testid="btn-complete-all-putaway"
             >
               Selesaikan Putaway & Simpan Stok ke Bin Database

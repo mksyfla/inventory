@@ -38,10 +38,3 @@ func HandleImportSKUTask(ctx context.Context, t *asynq.Task) error {
 	slog.Info("SKU import job completed", slog.String("job_id", payload.JobID))
 	return nil
 }
-
-// NewServeMux wires all task handlers and returns a ready asynq.ServeMux.
-func NewServeMux() *asynq.ServeMux {
-	mux := asynq.NewServeMux()
-	mux.HandleFunc(TypeImportSKU, HandleImportSKUTask)
-	return mux
-}

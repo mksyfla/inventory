@@ -42,6 +42,37 @@ func TestContextHandler_NoRequestID(t *testing.T) {
 	assert.False(t, exists)
 }
 
+func TestContextHandler_UserID(t *testing.T) {
+	var buf bytes.Buffer
+	jsonHandler := slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})
+	logger := slog.New(&ContextHandler{Handler: jsonHandler})
+
+	ctx := context.WithValue(context.Background(), RequestIDKey, "req-1")
+	ctx = context.WithValue(ctx, UserIDKey, int64(42))
+	logger.InfoContext(ctx, "action by user")
+
+	var parsed map[string]any
+	err := json.Unmarshal(buf.Bytes(), &parsed)
+	assert.NoError(t, err)
+
+	assert.Equal(t, "req-1", parsed["request_id"])
+	assert.Equal(t, float64(42), parsed["user_id"])
+}
+
+func TestContextHandler_NoUserID(t *testing.T) {
+	var buf bytes.Buffer
+	jsonHandler := slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})
+	logger := slog.New(&ContextHandler{Handler: jsonHandler})
+
+	logger.InfoContext(context.Background(), "anonymous")
+
+	var parsed map[string]any
+	err := json.Unmarshal(buf.Bytes(), &parsed)
+	assert.NoError(t, err)
+	_, exists := parsed["user_id"]
+	assert.False(t, exists)
+}
+
 func TestInit(t *testing.T) {
 	lProd := Init("production")
 	assert.NotNil(t, lProd)

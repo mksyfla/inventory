@@ -37,7 +37,8 @@ func StatusForCode(code string) int {
 		return http.StatusForbidden
 	case "ERR_NOT_FOUND":
 		return http.StatusNotFound
-	case "ERR_STOCK_INSUFFICIENT", "ERR_INVALID_STATE", "ERR_DUPLICATE_KEY", "ERR_CONFLICT":
+	case "ERR_STOCK_INSUFFICIENT", "ERR_INVALID_STATE", "ERR_DUPLICATE_KEY", "ERR_CONFLICT",
+		"ERR_SCAN_MISMATCH", "ERR_EXPIRED_STOCK":
 		return http.StatusConflict
 	case "ERR_INTERNAL":
 		return http.StatusInternalServerError

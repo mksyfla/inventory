@@ -1,19 +1,45 @@
 import { render, screen, act, fireEvent, waitFor } from '@testing-library/react';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { QueryClientProvider } from '@tanstack/react-query';
+import React from 'react';
 import { ItemFormPage } from '../pages/master/ItemFormPage';
+import { itemService } from '../api/services/items';
+import { queryClient } from '../api/queryClient';
+
+vi.mock('../api/services/items', () => ({
+  itemService: {
+    listItems: vi.fn(),
+    getItem: vi.fn(),
+    createItem: vi.fn(),
+    updateItem: vi.fn(),
+    softDeleteItem: vi.fn(),
+    importItems: vi.fn(),
+  },
+}));
+
+const renderWithProviders = (ui: React.ReactElement) =>
+  render(
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={['/master/items/new']}>
+        <Routes>
+          <Route path="/master/items/new" element={ui} />
+          <Route path="/master/items" element={<div data-testid="items-list-target">Items List</div>} />
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>
+  );
 
 describe('ItemFormPage Component', () => {
+  beforeEach(() => {
+    queryClient.clear();
+    (itemService.createItem as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 999 });
+    (itemService.updateItem as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 999 });
+  });
+
   it('renders SKU creation form fields and submits valid form data', async () => {
     await act(async () => {
-      render(
-        <MemoryRouter initialEntries={['/master/items/new']}>
-          <Routes>
-            <Route path="/master/items/new" element={<ItemFormPage />} />
-            <Route path="/master/items" element={<div data-testid="items-list-target">Items List</div>} />
-          </Routes>
-        </MemoryRouter>
-      );
+      renderWithProviders(<ItemFormPage />);
     });
 
     expect(screen.getByTestId('item-form-page')).toBeInTheDocument();
@@ -42,11 +68,7 @@ describe('ItemFormPage Component', () => {
 
   it('automatically enables isBatch when isExpiry switch is toggled on', async () => {
     await act(async () => {
-      render(
-        <MemoryRouter initialEntries={['/master/items/new']}>
-          <ItemFormPage />
-        </MemoryRouter>
-      );
+      renderWithProviders(<ItemFormPage />);
     });
 
     const expirySwitch = screen.getByTestId('switch-is-expiry');

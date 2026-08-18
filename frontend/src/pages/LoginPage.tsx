@@ -12,7 +12,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuthStore } from '../store/useAuthStore';
-import { MOCK_CURRENT_USER, MOCK_DEMO_USERS, User } from '../types/user';
+import { authService } from '../api/services/auth';
 
 const { Title, Text } = Typography;
 
@@ -54,8 +54,8 @@ export const LoginPage: React.FC = () => {
   } = useForm<LoginFormValues>({
     resolver: zodResolver(loginSchema),
     defaultValues: {
-      username: 'dipo.inventory',
-      password: 'password123',
+      username: 'admin',
+      password: 'Admin@123456',
       rememberMe: true,
     },
   });
@@ -64,8 +64,13 @@ export const LoginPage: React.FC = () => {
     setLoading(true);
     setErrorMsg(null);
 
-    setTimeout(() => {
-      login(userToLogin, 'mock-jwt-token-xyz-12345', 'mock-refresh-token-xyz-99999');
+    try {
+      const pair = await authService.login({ username: values.username, password: values.password });
+      setSession(pair.access_token, pair.refresh_token);
+      navigate(from, { replace: true });
+    } catch {
+      setErrorMsg('Username atau kata sandi tidak sesuai.');
+    } finally {
       setLoading(false);
       navigate(destination, { replace: true });
     }, 400);

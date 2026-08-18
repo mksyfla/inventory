@@ -9,9 +9,11 @@ import {
   HomeOutlined,
   SettingOutlined,
 } from '@ant-design/icons';
+import { useNavigate } from 'react-router-dom';
 import { useWarehouseStore } from '../store/useWarehouseStore';
 import { useAuthStore } from '../store/useAuthStore';
 import { useOfflineDraft } from '../hooks/useOfflineDraft';
+import { authService } from '../api/services/auth';
 
 const { Header } = Layout;
 const { Text } = Typography;
@@ -22,9 +24,23 @@ interface HeaderBarProps {
 }
 
 export const HeaderBar: React.FC<HeaderBarProps> = ({ collapsed, onToggleCollapse }) => {
+  const navigate = useNavigate();
   const { warehouses, activeWarehouseId, setActiveWarehouseId } = useWarehouseStore();
-  const { user, logout } = useAuthStore();
+  const { user, logout, refreshToken } = useAuthStore();
   const { isOnline } = useOfflineDraft();
+
+  const handleLogout = async () => {
+    try {
+      if (refreshToken) {
+        await authService.logout(refreshToken);
+      }
+    } catch {
+      // Best-effort logout: still clear local session even if the API call fails.
+    } finally {
+      logout();
+      navigate('/login', { replace: true });
+    }
+  };
 
   const userMenuItems: MenuProps['items'] = [
     {
@@ -48,7 +64,7 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({ collapsed, onToggleCollaps
       icon: <LogoutOutlined />,
       danger: true,
       label: 'Keluar (Logout)',
-      onClick: logout,
+      onClick: handleLogout,
     },
   ];
 

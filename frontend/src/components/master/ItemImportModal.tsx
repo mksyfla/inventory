@@ -20,6 +20,7 @@ import {
   CloseCircleOutlined,
   FileExcelOutlined,
 } from '@ant-design/icons';
+import { itemService } from '../../api/services/items';
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -99,47 +100,42 @@ export const ItemImportModal: React.FC<ItemImportModalProps> = ({
 
     setCurrentStep(1);
     setProcessing(true);
-    setProgressPercent(10);
+    setProgressPercent(15);
 
-    // Simulate Async Import Job Progress (job_id: JOB-IMP-99)
-    await new Promise((r) => setTimeout(r, 400));
-    setProgressPercent(45);
+    try {
+      // POST /items/import (multipart) → 202 with job_id
+      const result = await itemService.importItems(uploadFile);
 
-    await new Promise((r) => setTimeout(r, 500));
-    setProgressPercent(85);
+      setProgressPercent(100);
+      setImportResult({
+        jobId: result.job_id,
+        totalRows: 0,
+        successCount: 0,
+        failedCount: 0,
+        errors: [],
+      });
+      setProcessing(false);
+      setCurrentStep(2);
 
-    await new Promise((r) => setTimeout(r, 400));
-    setProgressPercent(100);
-
-    // Mock Result with Row Errors (AC: "Jika ada kesalahan data ganda/format, UI menunjukkan baris mana yang gagal")
-    const mockErrors: ImportRowError[] = [
-      {
-        rowNo: 4,
-        sku: 'SKU-INK-001',
-        field: 'sku',
-        errorReason: 'Kode SKU sudah terdaftar di database master barang (Duplikat).',
-      },
-      {
-        rowNo: 7,
-        sku: 'SKU-FAIL-07',
-        field: 'maxQty',
-        errorReason: 'Batas Stok Maksimum (maxQty=5) lebih kecil dari Stok Minimum (minQty=10).',
-      },
-    ];
-
-    setImportResult({
-      jobId: `JOB-IMP-${Date.now()}`,
-      totalRows: 48,
-      successCount: 46,
-      failedCount: 2,
-      errors: mockErrors,
-    });
-
-    setProcessing(false);
-    setCurrentStep(2);
-
-    if (onSuccess) {
-      onSuccess();
+      if (onSuccess) {
+        onSuccess();
+      }
+    } catch {
+      setProcessing(false);
+      setImportResult({
+        jobId: `JOB-IMP-${Date.now()}`,
+        totalRows: 0,
+        successCount: 0,
+        failedCount: 1,
+        errors: [
+          {
+            rowNo: 0,
+            sku: '-',
+            errorReason: 'Impor ditolak oleh server. Periksa format CSV (wajib kolom sku, name, base_uom).',
+          },
+        ],
+      });
+      setCurrentStep(2);
     }
   };
 

@@ -2,7 +2,7 @@ import axios, { AxiosInstance, InternalAxiosRequestConfig, AxiosResponse, AxiosE
 import { useAuthStore } from '../store/useAuthStore';
 import { useWarehouseStore } from '../store/useWarehouseStore';
 import { generateUUID } from '../utils/uuid';
-import { ApiErrorDetail, ApiResponse } from './types';
+import { ApiErrorDetail, ApiResponse, TokenPair } from './types';
 import { showApiErrorNotification } from './errorMapper';
 
 // Base API URL configuration
@@ -41,10 +41,10 @@ apiClient.interceptors.request.use(
       customConfig.headers['X-Request-Id'] = generateUUID();
     }
 
-    // 3. X-Warehouse-Id Header (Active Warehouse Context)
-    const activeWarehouseId = useWarehouseStore.getState().activeWarehouseId;
-    if (activeWarehouseId && !customConfig.headers['X-Warehouse-Id']) {
-      customConfig.headers['X-Warehouse-Id'] = String(activeWarehouseId);
+    // 3. X-Warehouse-Id Header (Active Warehouse Code — backend expects the CODE e.g. "WH01")
+    const activeWarehouseCode = useWarehouseStore.getState().activeWarehouseCode;
+    if (activeWarehouseCode && !customConfig.headers['X-Warehouse-Id']) {
+      customConfig.headers['X-Warehouse-Id'] = activeWarehouseCode;
     }
 
     // 4. Idempotency-Key Header for Mutation Methods (POST, PUT, PATCH, DELETE)
@@ -98,22 +98,28 @@ apiClient.interceptors.response.use(
       originalRequest._retry = true;
 
       try {
-        // Attempt Token Rotation via /auth/refresh
-        const refreshResponse = await axios.post<ApiResponse<{ token: string }>>(
+        // Attempt Token Rotation via /auth/refresh (refresh token in body, per OpenAPI contract)
+        const refreshToken = useAuthStore.getState().refreshToken;
+        if (!refreshToken) {
+          throw new Error('No refresh token available');
+        }
+        const refreshResponse = await axios.post<ApiResponse<TokenPair>>(
           `${API_BASE_URL}/auth/refresh`,
-          {},
+          { refresh_token: refreshToken },
           {
             headers: {
-              Authorization: `Bearer ${useAuthStore.getState().token}`,
+              'Content-Type': 'application/json',
+              'X-Request-Id': generateUUID(),
             },
           }
         );
 
-        if (refreshResponse.data?.success && refreshResponse.data.data?.token) {
-          const newToken = refreshResponse.data.data.token;
+        if (refreshResponse.data?.success && refreshResponse.data.data?.access_token) {
+          const newToken = refreshResponse.data.data.access_token;
+          const newRefreshToken = refreshResponse.data.data.refresh_token;
           const currentUser = useAuthStore.getState().user;
           if (currentUser) {
-            useAuthStore.getState().login(currentUser, newToken);
+            useAuthStore.getState().login(currentUser, newToken, newRefreshToken);
           }
           originalRequest.headers.Authorization = `Bearer ${newToken}`;
           return apiClient(originalRequest);

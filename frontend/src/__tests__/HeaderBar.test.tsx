@@ -1,9 +1,13 @@
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { MemoryRouter } from 'react-router-dom';
 import { HeaderBar } from '../components/HeaderBar';
+
 import { useWarehouseStore } from '../store/useWarehouseStore';
 import { useAuthStore } from '../store/useAuthStore';
 import { MOCK_CURRENT_USER } from '../types/user';
+
+const renderWithRouter = (ui: React.ReactElement) => render(<MemoryRouter>{ui}</MemoryRouter>);
 
 describe('HeaderBar Component', () => {
   beforeEach(() => {
@@ -17,7 +21,7 @@ describe('HeaderBar Component', () => {
 
   it('renders correctly with active warehouse and user information', () => {
     const handleToggle = vi.fn();
-    render(<HeaderBar collapsed={false} onToggleCollapse={handleToggle} />);
+    renderWithRouter(<HeaderBar collapsed={false} onToggleCollapse={handleToggle} />);
 
     // Check header exists
     expect(screen.getByTestId('header-bar')).toBeInTheDocument();
@@ -34,7 +38,7 @@ describe('HeaderBar Component', () => {
 
   it('triggers onToggleCollapse when sidebar toggle button is clicked', () => {
     const handleToggle = vi.fn();
-    render(<HeaderBar collapsed={false} onToggleCollapse={handleToggle} />);
+    renderWithRouter(<HeaderBar collapsed={false} onToggleCollapse={handleToggle} />);
 
     const toggleBtn = screen.getByTestId('sidebar-toggle-btn');
     fireEvent.click(toggleBtn);
@@ -44,7 +48,7 @@ describe('HeaderBar Component', () => {
 
   it('allows changing the active warehouse context', () => {
     const handleToggle = vi.fn();
-    render(<HeaderBar collapsed={false} onToggleCollapse={handleToggle} />);
+    renderWithRouter(<HeaderBar collapsed={false} onToggleCollapse={handleToggle} />);
 
     // Initial warehouse is JKT01
     expect(useWarehouseStore.getState().activeWarehouseId).toBe(1);

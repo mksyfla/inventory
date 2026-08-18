@@ -1,0 +1,10 @@
+# Build artifacts lokal (Windows: go build menghasilkan *.exe di repo ini)
+*.exe
+*.test
+*.out
+
+.git
+.gitignore
+Dockerfile
+.dockerignore
+README.md

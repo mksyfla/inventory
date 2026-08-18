@@ -13,6 +13,25 @@ import (
 
 type txKey struct{}
 
+// docLineIDParam builds a pgtype.Int8 parameter for stock_movements.doc_line_id.
+// 0 means "no document line" (adjustment/count movements, Fase 8.4/8.5) and is
+// stored as NULL since the column is nullable.
+func docLineIDParam(id int64) pgtype.Int8 {
+	if id <= 0 {
+		return pgtype.Int8{}
+	}
+	return pgtype.Int8{Int64: id, Valid: true}
+}
+
+// docLineIDValue converts a nullable doc_line_id result back into the domain
+// int64 (0 = no line).
+func docLineIDValue(v pgtype.Int8) int64 {
+	if !v.Valid {
+		return 0
+	}
+	return v.Int64
+}
+
 // GetTx extracts the active pgx transaction from the context if present.
 func GetTx(ctx context.Context) pgx.Tx {
 	tx, _ := ctx.Value(txKey{}).(pgx.Tx)
@@ -80,6 +99,19 @@ func (r *PostgresStockRepository) GetBalancesForUpdate(ctx context.Context, keys
 		var batchID pgtype.Int8
 		if k.BatchID != nil {
 			batchID = pgtype.Int8{Int64: *k.BatchID, Valid: true}
+		}
+
+		// Materialize a zeroed row when the balance does not exist yet, so the
+		// FOR UPDATE below really locks it. Otherwise concurrent postings for
+		// a brand-new balance all read "0" and later overwrite each other
+		// (lost update — see integration test TestConcurrency_50GoroutinesSameSKU).
+		if err := q.EnsureBalanceExists(ctx, EnsureBalanceExistsParams{
+			ItemID:     k.ItemID,
+			LocationID: k.LocationID,
+			BatchID:    batchID,
+			Status:     k.Status,
+		}); err != nil {
+			return nil, fmt.Errorf("postgres: failed to materialize balance: %w", err)
 		}
 
 		row, err := q.GetStockBalanceForUpdate(ctx, GetStockBalanceForUpdateParams{
@@ -172,7 +204,7 @@ func (r *PostgresStockRepository) InsertMovement(ctx context.Context, m *stock.S
 		MovementType: m.MovementType, // interface{}
 		Qty:          qty,
 		QtyAfter:     qtyAfter,
-		DocLineID:    m.DocLineID,
+		DocLineID:    docLineIDParam(m.DocLineID),
 		DocNo:        m.DocNo,
 		CreatedBy:    m.CreatedBy,
 	})
@@ -180,6 +212,21 @@ func (r *PostgresStockRepository) InsertMovement(ctx context.Context, m *stock.S
 		return fmt.Errorf("postgres: failed to insert movement: %w", err)
 	}
 
+	return nil
+}
+
+func (r *PostgresStockRepository) UpdateBalanceReserved(ctx context.Context, id int64, delta float64) error {
+	q := r.getQuerier(ctx)
+	var d pgtype.Numeric
+	_ = d.Scan(fmt.Sprintf("%f", delta))
+
+	err := q.UpdateBalanceReserved(ctx, UpdateBalanceReservedParams{
+		ID:          id,
+		QtyReserved: d,
+	})
+	if err != nil {
+		return fmt.Errorf("postgres: failed to update balance reserved: %w", err)
+	}
 	return nil
 }
 
@@ -247,7 +294,7 @@ func (r *PostgresStockRepository) GetMovements(ctx context.Context, f stock.Move
 			Qty:          qty.Float64,
 			QtyAfter:     qtyAfter.Float64,
 			UnitCost:     unitCost,
-			DocLineID:    row.DocLineID,
+			DocLineID:    docLineIDValue(row.DocLineID),
 			DocNo:        row.DocNo,
 			CreatedBy:    row.CreatedBy,
 		})

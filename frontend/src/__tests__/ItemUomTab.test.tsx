@@ -1,26 +1,65 @@
 import { render, screen, act, fireEvent, waitFor } from '@testing-library/react';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { QueryClientProvider } from '@tanstack/react-query';
+import React from 'react';
 import { ItemUomTab } from '../components/master/ItemUomTab';
+import { itemService } from '../api/services/items';
+import { queryClient } from '../api/queryClient';
+
+vi.mock('../api/services/items', () => ({
+  itemService: {
+    listItems: vi.fn(),
+    getItem: vi.fn(),
+    createItem: vi.fn(),
+    updateItem: vi.fn(),
+    softDeleteItem: vi.fn(),
+    importItems: vi.fn(),
+  },
+}));
+
+const mockItemDetail = {
+  item: { id: 1, sku: 'SKU-001', base_uom: 'CAN' },
+  uoms: [
+    { id: 1, item_id: 1, uom: 'CAN', conv_factor: 1, barcode: '899000111222' },
+    { id: 2, item_id: 1, uom: 'BOX', conv_factor: 12, barcode: '899000111999' },
+    { id: 3, item_id: 1, uom: 'KARTON', conv_factor: 48, barcode: '899000111888' },
+  ],
+};
+
+const renderWithProviders = (ui: React.ReactElement) =>
+  render(
+    <QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>
+  );
 
 describe('ItemUomTab Component', () => {
+  beforeEach(() => {
+    queryClient.clear();
+    (itemService.getItem as ReturnType<typeof vi.fn>).mockResolvedValue(mockItemDetail);
+  });
+
   it('renders base UoM alert and conversion table list', async () => {
     await act(async () => {
-      render(<ItemUomTab itemId={1} baseUom="CAN" />);
+      renderWithProviders(<ItemUomTab itemId={1} baseUom="CAN" />);
     });
 
     expect(screen.getByTestId('item-uom-tab')).toBeInTheDocument();
     expect(screen.getByText(/Satuan Dasar Terdaftar: CAN/i)).toBeInTheDocument();
     expect(screen.getByTestId('btn-add-uom')).toBeInTheDocument();
 
-    // Check mock items
-    expect(screen.getByText('CAN')).toBeInTheDocument();
-    expect(screen.getByText('BOX')).toBeInTheDocument();
-    expect(screen.getByText('KARTON')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getAllByText('CAN')[0]).toBeInTheDocument();
+      expect(screen.getByText('BOX')).toBeInTheDocument();
+      expect(screen.getByText('KARTON')).toBeInTheDocument();
+    });
   });
 
   it('opens add modal and submits new UoM conversion', async () => {
     await act(async () => {
-      render(<ItemUomTab itemId={1} baseUom="CAN" />);
+      renderWithProviders(<ItemUomTab itemId={1} baseUom="CAN" />);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('btn-add-uom')).toBeInTheDocument();
     });
 
     const addBtn = screen.getByTestId('btn-add-uom');
@@ -52,7 +91,11 @@ describe('ItemUomTab Component', () => {
 
   it('prevents adding duplicate barcode for a different UoM', async () => {
     await act(async () => {
-      render(<ItemUomTab itemId={1} baseUom="CAN" />);
+      renderWithProviders(<ItemUomTab itemId={1} baseUom="CAN" />);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('btn-add-uom')).toBeInTheDocument();
     });
 
     const addBtn = screen.getByTestId('btn-add-uom');

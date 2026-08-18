@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
     title: SIMBAR - Sistem Manajemen Inventori
-    version: 0.2.0
+    version: 0.4.0
     description: |
         API contract for Sistem Manajemen Inventori (SIMBAR) per FSD v0.1.
 
@@ -16,6 +16,8 @@ info:
 servers:
     - url: /api/v1
       description: Same origin (behind reverse proxy)
+    - url: /
+      description: path for observability
 
 tags:
     - name: System
@@ -24,6 +26,10 @@ tags:
     - name: Locations
     - name: Partners
     - name: Stock
+    - name: Inbound M2
+    - name: Outbound M4
+    - name: Transfers M5
+    - name: Counting M6
     - name: API Docs
 
 security:
@@ -800,6 +806,994 @@ paths:
                 "409": { $ref: "#/components/responses/Error" }
                 "422": { $ref: "#/components/responses/ValidationError" }
 
+    /requests:
+        post:
+            tags: [Outbound M4]
+            summary: Create a request (REQ) draft (Fase 7.1, FR-4.1)
+            description: |
+                Membuka draft permintaan barang dari unit internal/customer:
+                header + lines divalidasi terhadap master data dan nomor
+                dokumen `REQ/{WAREHOUSE}/{YYMM}/{SEQ:5}` dialokasikan dalam satu
+                transaksi (FSD 4.3). Idempotensi via `Idempotency-Key` (FSD 4.5).
+                Requires `request.create`.
+
+                Validasi (422): `warehouse_id` wajib & aktif; `lines` minimal 1;
+                per baris — `item_id` dikenal & aktif, `qty` > 0, `uom` terdaftar.
+            security:
+                - bearerAuth: []
+            parameters:
+                - { $ref: "#/components/parameters/XWarehouseId" }
+                - { $ref: "#/components/parameters/IdempotencyKey" }
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            {
+                                $ref: "#/components/schemas/CreateRequestRequest",
+                            }
+            responses:
+                "201":
+                    description: Request draft created (or replayed for the same idempotency key)
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              {
+                                                  $ref: "#/components/schemas/RequestDocument",
+                                              }
+                "401": { $ref: "#/components/responses/Error" }
+                "403": { $ref: "#/components/responses/Error" }
+                "422": { $ref: "#/components/responses/ValidationError" }
+
+    /requests/{id}/submit:
+        post:
+            tags: [Outbound M4]
+            summary: Submit a request for approval (Fase 7.1, FSD 4.4)
+            description: |
+                Transisi `draft → submitted`. Requires `request.approve`.
+                Dokumen harus berstatus `draft` (selain itu 409 ERR_INVALID_STATE).
+            security:
+                - bearerAuth: []
+            parameters:
+                - { $ref: "#/components/parameters/XWarehouseId" }
+                - { $ref: "#/components/parameters/ItemID" }
+            responses:
+                "200":
+                    description: Submitted
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              {
+                                                  $ref: "#/components/schemas/OutboundStatus",
+                                              }
+                "401": { $ref: "#/components/responses/Error" }
+                "403": { $ref: "#/components/responses/Error" }
+                "404": { $ref: "#/components/responses/Error" }
+                "409": { $ref: "#/components/responses/Error" }
+                "422": { $ref: "#/components/responses/ValidationError" }
+
+    /requests/{id}/approve:
+        post:
+            tags: [Outbound M4]
+            summary: Approve a request (Fase 7.1, BR-05)
+            description: |
+                Transisi `submitted → approved` dengan maker-checker:
+                approver harus berbeda dari creator (ERR_SELF_APPROVAL, 403).
+                DO hanya bisa dibuat dari request berstatus `approved`.
+                Requires `request.approve`.
+            security:
+                - bearerAuth: []
+            parameters:
+                - { $ref: "#/components/parameters/XWarehouseId" }
+                - { $ref: "#/components/parameters/ItemID" }
+            responses:
+                "200":
+                    description: Approved
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              {
+                                                  $ref: "#/components/schemas/OutboundStatus",
+                                              }
+                "401": { $ref: "#/components/responses/Error" }
+                "403": { $ref: "#/components/responses/Error" }
+                "404": { $ref: "#/components/responses/Error" }
+                "409": { $ref: "#/components/responses/Error" }
+                "422": { $ref: "#/components/responses/ValidationError" }
+
+    /deliveries:
+        post:
+            tags: [Outbound M4]
+            summary: Create a delivery order (DO) from an approved request (Fase 7.1, FR-4.1)
+            description: |
+                Membuat dokumen DO/Surat Jalan dari permintaan yang sudah
+                disetujui: lines disalin dari request, `ref_doc_id` menunjuk
+                request, nomor `DO/{WAREHOUSE}/{YYMM}/{SEQ:5}` dialokasikan
+                dalam satu transaksi. Idempotensi via `Idempotency-Key`.
+                Requires `do.create`.
+
+                Validasi (422/404): `request_id` harus request (`REQ`) berstatus
+                `approved` dengan minimal 1 line; `warehouse_id` wajib & aktif.
+            security:
+                - bearerAuth: []
+            parameters:
+                - { $ref: "#/components/parameters/XWarehouseId" }
+                - { $ref: "#/components/parameters/IdempotencyKey" }
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            {
+                                $ref: "#/components/schemas/CreateDeliveryRequest",
+                            }
+            responses:
+                "201":
+                    description: DO draft created (or replayed for the same idempotency key)
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              {
+                                                  $ref: "#/components/schemas/DeliveryDocument",
+                                              }
+                "401": { $ref: "#/components/responses/Error" }
+                "403": { $ref: "#/components/responses/Error" }
+                "404": { $ref: "#/components/responses/Error" }
+                "409": { $ref: "#/components/responses/Error" }
+                "422": { $ref: "#/components/responses/ValidationError" }
+
+    /deliveries/{id}/submit:
+        post:
+            tags: [Outbound M4]
+            summary: Submit a DO for approval (Fase 7.1, FSD 4.4)
+            description: |
+                Transisi `draft → submitted`. Requires `do.approve`.
+            security:
+                - bearerAuth: []
+            parameters:
+                - { $ref: "#/components/parameters/XWarehouseId" }
+                - { $ref: "#/components/parameters/ItemID" }
+            responses:
+                "200":
+                    description: Submitted
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              {
+                                                  $ref: "#/components/schemas/OutboundStatus",
+                                              }
+                "401": { $ref: "#/components/responses/Error" }
+                "403": { $ref: "#/components/responses/Error" }
+                "404": { $ref: "#/components/responses/Error" }
+                "409": { $ref: "#/components/responses/Error" }
+                "422": { $ref: "#/components/responses/ValidationError" }
+
+    /deliveries/{id}/approve:
+        post:
+            tags: [Outbound M4]
+            summary: Approve a DO (Fase 7.1, BR-05)
+            description: |
+                Transisi `submitted → approved` dengan maker-checker. Alokasi
+                hanya bisa dilakukan pada DO berstatus `approved`.
+                Requires `do.approve`.
+            security:
+                - bearerAuth: []
+            parameters:
+                - { $ref: "#/components/parameters/XWarehouseId" }
+                - { $ref: "#/components/parameters/ItemID" }
+            responses:
+                "200":
+                    description: Approved
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              {
+                                                  $ref: "#/components/schemas/OutboundStatus",
+                                              }
+                "401": { $ref: "#/components/responses/Error" }
+                "403": { $ref: "#/components/responses/Error" }
+                "404": { $ref: "#/components/responses/Error" }
+                "409": { $ref: "#/components/responses/Error" }
+                "422": { $ref: "#/components/responses/ValidationError" }
+
+    /deliveries/{id}/allocate:
+        post:
+            tags: [Outbound M4]
+            summary: Allocate stock FEFO/FIFO (Fase 7.2, FR-4.2)
+            description: |
+                Menjalankan engine alokasi: kandidat stok `available` di lokasi
+                pick/bulk dikunci dengan `SELECT ... FOR UPDATE` dan diurutkan
+                `expiry_date NULLS LAST, b.id, pick_seq` (FEFO untuk barang
+                ber-expiry, FIFO sebagai tie-breaker). Setiap potongan membuat
+                baris `doc.allocations` dan menaikkan `qty_reserved`. Jika saldo
+                bebas tidak cukup, seluruh transaksi digagalkan dengan
+                409 ERR_STOCK_INSUFFICIENT + detail kekurangan per line.
+                Requires `do.allocate`; dokumen harus `approved`.
+
+                Validasi (422): `lines` minimal 1; per baris — `line_id` milik
+                DO ini, `qty` > 0 dan tidak melebihi sisa line.
+            security:
+                - bearerAuth: []
+            parameters:
+                - { $ref: "#/components/parameters/XWarehouseId" }
+                - { $ref: "#/components/parameters/ItemID" }
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema: { $ref: "#/components/schemas/AllocateRequest" }
+            responses:
+                "200":
+                    description: Allocations created (qty_reserved increased)
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              type: array
+                                              items:
+                                                  {
+                                                      $ref: "#/components/schemas/AllocationResult",
+                                                  }
+                "401": { $ref: "#/components/responses/Error" }
+                "403": { $ref: "#/components/responses/Error" }
+                "404": { $ref: "#/components/responses/Error" }
+                "409": { $ref: "#/components/responses/Error" }
+                "422": { $ref: "#/components/responses/ValidationError" }
+
+    /deliveries/{id}/allocate/override:
+        post:
+            tags: [Outbound M4]
+            summary: Override allocation to specific balances (Fase 7.3)
+            description: |
+                Alokasi manual ke balance tertentu (diluar urutan FEFO/FIFO).
+                Khusus pengguna dengan izin `outbound.override_allocation`
+                (ditegakkan middleware) dan wajib mengisi `reason_code` yang
+                disimpan di `doc.documents.reason_code`. Setiap line harus
+                menentukan `balance_id`; balance harus available, non-expired,
+                milik warehouse yang sama dan itemnya cocok dengan line.
+            security:
+                - bearerAuth: []
+            parameters:
+                - { $ref: "#/components/parameters/XWarehouseId" }
+                - { $ref: "#/components/parameters/ItemID" }
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            {
+                                $ref: "#/components/schemas/OverrideAllocateRequest",
+                            }
+            responses:
+                "200":
+                    description: Manual allocations created with reason recorded
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              type: array
+                                              items:
+                                                  {
+                                                      $ref: "#/components/schemas/AllocationResult",
+                                                  }
+                "401": { $ref: "#/components/responses/Error" }
+                "403": { $ref: "#/components/responses/Error" }
+                "404": { $ref: "#/components/responses/Error" }
+                "409": { $ref: "#/components/responses/Error" }
+                "422": { $ref: "#/components/responses/ValidationError" }
+
+    /deliveries/{id}/picking-list:
+        get:
+            tags: [Outbound M4]
+            summary: Picking list ordered by pick_seq (Fase 7.4, FR-4.3)
+            description: |
+                Daftar alokasi untuk pengambilan, diurutkan sekuensial
+                `pick_seq NULLS LAST, code, id` untuk meminimalkan jarak jalan
+                petugas. Dokumen harus `approved`/`in_progress`.
+                Requires `do.pick`.
+            security:
+                - bearerAuth: []
+            parameters:
+                - { $ref: "#/components/parameters/XWarehouseId" }
+                - { $ref: "#/components/parameters/ItemID" }
+            responses:
+                "200":
+                    description: Picking list (JSON)
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              type: array
+                                              items:
+                                                  {
+                                                      $ref: "#/components/schemas/PickingListItem",
+                                                  }
+                "401": { $ref: "#/components/responses/Error" }
+                "403": { $ref: "#/components/responses/Error" }
+                "404": { $ref: "#/components/responses/Error" }
+                "409": { $ref: "#/components/responses/Error" }
+                "422": { $ref: "#/components/responses/ValidationError" }
+
+    /deliveries/{id}/pick:
+        post:
+            tags: [Outbound M4]
+            summary: Confirm picking via barcode scan (Fase 7.5, FR-4.4)
+            description: |
+                Menerima hasil scan petugas (allocation_id + barcode lokasi +
+                barcode item + qty). Setiap scan divalidasi terhadap alokasi;
+                jika barcode item/lokasi tidak cocok, proses langsung diblokir
+                dengan 409 ERR_SCAN_MISMATCH dan tidak ada baris yang diproses.
+                Scan yang valid menaikkan `qty_picked` alokasi dan
+                `qty_processed` line. Requires `do.pick`.
+
+                Validasi (422): `scans` minimal 1; per scan — `allocation_id`
+                milik DO ini, `qty` > 0 dan ≤ sisa alokasi, barcode dikenal.
+            security:
+                - bearerAuth: []
+            parameters:
+                - { $ref: "#/components/parameters/XWarehouseId" }
+                - { $ref: "#/components/parameters/ItemID" }
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema: { $ref: "#/components/schemas/PickRequest" }
+            responses:
+                "200":
+                    description: Picking confirmed
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              {
+                                                  $ref: "#/components/schemas/OutboundStatus",
+                                              }
+                "401": { $ref: "#/components/responses/Error" }
+                "403": { $ref: "#/components/responses/Error" }
+                "404": { $ref: "#/components/responses/Error" }
+                "409": { $ref: "#/components/responses/Error" }
+                "422": { $ref: "#/components/responses/ValidationError" }
+
+    /deliveries/{id}/ship:
+        post:
+            tags: [Outbound M4]
+            summary: Post shipment & issue surat jalan (Fase 7.6, FR-4.5)
+            description: |
+                Posting pengeluaran akhir: melepas reservasi, mengurangi
+                `qty_onhand` dan `qty_reserved`, menulis baris `issue` negatif
+                ke ledger stok (FSD 4.1), mencatat kendaraan/sopir ke
+                `doc.deliveries`, dan mengubah status `approved → in_progress`.
+                Membutuhkan minimal satu alokasi yang sudah di-pick.
+                Requires `do.ship`.
+            security:
+                - bearerAuth: []
+            parameters:
+                - { $ref: "#/components/parameters/XWarehouseId" }
+                - { $ref: "#/components/parameters/ItemID" }
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema: { $ref: "#/components/schemas/ShipRequest" }
+            responses:
+                "200":
+                    description: Shipped; status after posting
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              {
+                                                  $ref: "#/components/schemas/OutboundStatus",
+                                              }
+                "401": { $ref: "#/components/responses/Error" }
+                "403": { $ref: "#/components/responses/Error" }
+                "404": { $ref: "#/components/responses/Error" }
+                "409": { $ref: "#/components/responses/Error" }
+                "422": { $ref: "#/components/responses/ValidationError" }
+
+    /deliveries/{id}/pod:
+        post:
+            tags: [Outbound M4]
+            summary: Record proof of delivery & close document (Fase 7.7, FR-4.6)
+            description: |
+                Mencatat serah terima: nama penerima, waktu kedatangan, dan URL
+                berkas foto/tanda tangan (diunggah klien terlebih dahulu). DO
+                ditutup final `in_progress → completed` (BR-10). Requires
+                `do.pod`; dokumen harus `in_progress`.
+
+                Validasi (422): `received_by` wajib; `received_at` format
+                RFC3339 bila diisi; dokumen harus `in_progress` (409).
+            security:
+                - bearerAuth: []
+            parameters:
+                - { $ref: "#/components/parameters/XWarehouseId" }
+                - { $ref: "#/components/parameters/ItemID" }
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema: { $ref: "#/components/schemas/PodRequest" }
+            responses:
+                "200":
+                    description: POD recorded; document completed
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              {
+                                                  $ref: "#/components/schemas/OutboundStatus",
+                                              }
+                "401": { $ref: "#/components/responses/Error" }
+                "403": { $ref: "#/components/responses/Error" }
+                "404": { $ref: "#/components/responses/Error" }
+                "409": { $ref: "#/components/responses/Error" }
+                "422": { $ref: "#/components/responses/ValidationError" }
+
+    /transfers:
+        post:
+            tags: [Transfers M5]
+            summary: Create inter-warehouse transfer draft (Fase 8.1, FR-5.1)
+            description: |
+                Membuka dokumen `TRF` draft dari gudang asal ke gudang tujuan.
+                Nomor dokumen `TRF/{KODE_GUDANG}/{YYMM}/{SEQ:5}`. Idempoten:
+                kirim ulang `Idempotency-Key` yang sama mengembalikan dokumen
+                yang sudah ada (FSD 4.5). Requires `transfer.create`.
+
+                Validasi (422): minimal 1 baris; `qty > 0`; UoM harus
+                terdaftar di item; gudang asal ≠ tujuan; kedua gudang aktif.
+            security:
+                - bearerAuth: []
+            parameters:
+                - { $ref: "#/components/parameters/XWarehouseId" }
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            {
+                                $ref: "#/components/schemas/TransferCreateRequest",
+                            }
+            responses:
+                "201":
+                    description: Transfer draft created
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              {
+                                                  $ref: "#/components/schemas/TransferDocumentResponse",
+                                              }
+                "401": { $ref: "#/components/responses/Error" }
+                "403": { $ref: "#/components/responses/Error" }
+                "404": { $ref: "#/components/responses/Error" }
+                "409": { $ref: "#/components/responses/Error" }
+                "422": { $ref: "#/components/responses/ValidationError" }
+
+    /transfers/{id}/submit:
+        post:
+            tags: [Transfers M5]
+            summary: Submit transfer draft (FSD 4.4)
+            description: "`draft → submitted`. Requires `transfer.approve`."
+            security:
+                - bearerAuth: []
+            parameters:
+                - { $ref: "#/components/parameters/XWarehouseId" }
+                - { $ref: "#/components/parameters/ItemID" }
+            responses:
+                "200":
+                    description: Transfer submitted
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              {
+                                                  $ref: "#/components/schemas/TransferStatusResponse",
+                                              }
+                "401": { $ref: "#/components/responses/Error" }
+                "403": { $ref: "#/components/responses/Error" }
+                "404": { $ref: "#/components/responses/Error" }
+                "409": { $ref: "#/components/responses/Error" }
+                "422": { $ref: "#/components/responses/ValidationError" }
+
+    /transfers/{id}/approve:
+        post:
+            tags: [Transfers M5]
+            summary: Approve transfer (maker-checker BR-05)
+            description: |
+                `submitted → approved`. Penyetuju harus berbeda dari pembuat
+                dokumen (`ERR_SELF_APPROVAL` 403). Requires `transfer.approve`.
+            security:
+                - bearerAuth: []
+            parameters:
+                - { $ref: "#/components/parameters/XWarehouseId" }
+                - { $ref: "#/components/parameters/ItemID" }
+            responses:
+                "200":
+                    description: Transfer approved
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              {
+                                                  $ref: "#/components/schemas/TransferStatusResponse",
+                                              }
+                "401": { $ref: "#/components/responses/Error" }
+                "403": { $ref: "#/components/responses/Error" }
+                "404": { $ref: "#/components/responses/Error" }
+                "409": { $ref: "#/components/responses/Error" }
+                "422": { $ref: "#/components/responses/ValidationError" }
+
+    /transfers/{id}/send:
+        post:
+            tags: [Transfers M5]
+            summary: Send transfer — issue source stock, book in_transit (FR-5.1)
+            description: |
+                `approved → in_progress`. Mengurangi `qty_onhand` gudang asal
+                (alokasi FEFO/FIFO, baris ledger `transfer_out`) dan memindahkan
+                kuantitas ke baris saldo berstatus **in_transit** di lokasi
+                transit gudang tujuan (`transfer_in`). Seluruh posting berjalan
+                satu transaksi (FSD 4.1).
+
+                Error (409): saldo asal tidak mencukupi
+                `ERR_STOCK_INSUFFICIENT` + detail shortage per baris; gudang
+                tujuan belum punya lokasi transit (422).
+            security:
+                - bearerAuth: []
+            parameters:
+                - { $ref: "#/components/parameters/XWarehouseId" }
+                - { $ref: "#/components/parameters/ItemID" }
+            responses:
+                "200":
+                    description: Transfer sent; stock in transit
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              {
+                                                  $ref: "#/components/schemas/TransferStatusResponse",
+                                              }
+                "401": { $ref: "#/components/responses/Error" }
+                "403": { $ref: "#/components/responses/Error" }
+                "404": { $ref: "#/components/responses/Error" }
+                "409": { $ref: "#/components/responses/Error" }
+                "422": { $ref: "#/components/responses/ValidationError" }
+
+    /transfers/{id}/receive:
+        post:
+            tags: [Transfers M5]
+            summary: Receive transfer at destination — close document (FR-5.1)
+            description: |
+                `in_progress → completed`. Memverifikasi jumlah barang yang
+                sampai per baris: memindahkan saldo `in_transit` lokasi transit
+                ke bin tujuan (status `available`) dan mencatat
+                `doc.transfer_receipts`. Jika jumlah diterima < dikirim,
+                selisih dicatat sebagai log audit severity `critical`
+                (`transfer.receive_discrepancy`) sebagai pemicu notifikasi
+                darurat. Seluruh baris dokumen wajib diterima dalam satu
+                request.
+
+                Validasi (422): `qty_received > 0` dan ≤ qty kirim; lokasi
+                tujuan milik gudang tujuan & bertipe pick/bulk/staging;
+                `batch_id` wajib untuk item batch-managed. Error (409):
+                saldo `in_transit` tidak mencukupi.
+            security:
+                - bearerAuth: []
+            parameters:
+                - { $ref: "#/components/parameters/XWarehouseId" }
+                - { $ref: "#/components/parameters/ItemID" }
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            {
+                                $ref: "#/components/schemas/TransferReceiveRequest",
+                            }
+            responses:
+                "200":
+                    description: Transfer received; document completed
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              {
+                                                  $ref: "#/components/schemas/TransferStatusResponse",
+                                              }
+                "401": { $ref: "#/components/responses/Error" }
+                "403": { $ref: "#/components/responses/Error" }
+                "404": { $ref: "#/components/responses/Error" }
+                "409": { $ref: "#/components/responses/Error" }
+                "422": { $ref: "#/components/responses/ValidationError" }
+
+    /counts:
+        post:
+            tags: [Counting M6]
+            summary: Open count session with blind qty_system snapshot (FR-6.1)
+            description: |
+                Membuka sesi opname `CNT` (draft): backend melakukan snapshot
+                instan kuantitas sistem per balance (status `available`) ke
+                `doc.count_lines.qty_system`. Pola **Blind Count** —
+                `qty_system` tidak pernah dikembalikan ke petugas penghitung.
+                Scope snapshot dapat dipersempit via `zone` dan/atau `item_ids`.
+                Requires `count.create`.
+
+                Validasi (422): gudang aktif; `zone`/`item_ids` opsional.
+            security:
+                - bearerAuth: []
+            parameters:
+                - { $ref: "#/components/parameters/XWarehouseId" }
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            { $ref: "#/components/schemas/CountCreateRequest" }
+            responses:
+                "201":
+                    description: Count session opened with snapshot lines
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              {
+                                                  $ref: "#/components/schemas/CountDocumentResponse",
+                                              }
+                "401": { $ref: "#/components/responses/Error" }
+                "403": { $ref: "#/components/responses/Error" }
+                "404": { $ref: "#/components/responses/Error" }
+                "409": { $ref: "#/components/responses/Error" }
+                "422": { $ref: "#/components/responses/ValidationError" }
+
+    /counts/{id}/lines:
+        post:
+            tags: [Counting M6]
+            summary: Input field count results (FR-6.2)
+            description: |
+                Petugas menginput `qty_counted` per baris snapshot. Backend
+                menghitung `variance = qty_counted - qty_system` dan
+                mengembalikan nilainya. Sesi harus masih terbuka (draft).
+                Requires `count.execute`.
+
+                Validasi (422): `count_line_id` milik sesi; `qty_counted ≥ 0`;
+                sesi sudah diposting (409).
+            security:
+                - bearerAuth: []
+            parameters:
+                - { $ref: "#/components/parameters/XWarehouseId" }
+                - { $ref: "#/components/parameters/ItemID" }
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            {
+                                $ref: "#/components/schemas/InputCountLinesRequest",
+                            }
+            responses:
+                "200":
+                    description: Count lines recorded (with computed variance)
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              type: array
+                                              items:
+                                                  {
+                                                      $ref: "#/components/schemas/CountLineSummary",
+                                                  }
+                "401": { $ref: "#/components/responses/Error" }
+                "403": { $ref: "#/components/responses/Error" }
+                "404": { $ref: "#/components/responses/Error" }
+                "409": { $ref: "#/components/responses/Error" }
+                "422": { $ref: "#/components/responses/ValidationError" }
+
+    /counts/{id}/post:
+        post:
+            tags: [Counting M6]
+            summary: Approve & post count session adjustments (M6.4 - M6.5)
+            description: |
+                Menyetujui dan memposting penyesuaian opname: seluruh baris
+                wajib sudah dihitung; pembuat ≠ penyetuju (BR-05). Bila total
+                nilai selisih (`Σ |variance| × unit_cost` terakhir) melebihi
+                ambang (default Rp 5.000.000), berlaku **persetujuan
+                berjenjang**: `manager_approver_id` wajib dan harus berbeda
+                dari pembuat maupun penyetuju (Supervisor → Inventory Manager).
+                Penyesuaian dicatat di ledger sebagai movement
+                `adjustment (ADJ)` dan dokumen ditutup `completed`.
+
+                Error (409): saldo tidak mencukupi `ERR_STOCK_INSUFFICIENT`;
+                ambang nilai variance butuh manager (422).
+            security:
+                - bearerAuth: []
+            parameters:
+                - { $ref: "#/components/parameters/XWarehouseId" }
+                - { $ref: "#/components/parameters/ItemID" }
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            { $ref: "#/components/schemas/PostCountRequest" }
+            responses:
+                "200":
+                    description: Count session posted (adjustments on ledger)
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              {
+                                                  $ref: "#/components/schemas/PostCountResponse",
+                                              }
+                "401": { $ref: "#/components/responses/Error" }
+                "403": { $ref: "#/components/responses/Error" }
+                "404": { $ref: "#/components/responses/Error" }
+                "409": { $ref: "#/components/responses/Error" }
+                "422": { $ref: "#/components/responses/ValidationError" }
+
+    /adjustments:
+        post:
+            tags: [Counting M6]
+            summary: Create direct manual adjustment (Fase 8.5, FR-6.5)
+            description: |
+                Penyesuaian langsung di luar stock opname (mis. barang rusak /
+                hilang mendadak). `reason_code` dan penjelasan tertulis
+                (`notes`) **wajib**. Posting langsung: dokumen `ADJ` dibuat dan
+                langsung ditutup `completed`, movement `adjustment` dicatat di
+                ledger (baris boleh positif/negatif, target status
+                available/damaged/quarantine). Requires `adj.create`.
+
+                Validasi (422): `reason_code` wajib (max 30); `notes` wajib;
+                `qty ≠ 0`; `status` ∈ {available, damaged, quarantine}.
+            security:
+                - bearerAuth: []
+            parameters:
+                - { $ref: "#/components/parameters/XWarehouseId" }
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            {
+                                $ref: "#/components/schemas/AdjustmentCreateRequest",
+                            }
+            responses:
+                "201":
+                    description: Adjustment posted (document completed)
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              {
+                                                  $ref: "#/components/schemas/AdjustmentDocumentResponse",
+                                              }
+                "401": { $ref: "#/components/responses/Error" }
+                "403": { $ref: "#/components/responses/Error" }
+                "404": { $ref: "#/components/responses/Error" }
+                "409": { $ref: "#/components/responses/Error" }
+                "422": { $ref: "#/components/responses/ValidationError" }
+
+    # ═══════════════════ Fase 10 ═══════════════════
+    # 10.4 Validasi kontrak: openapi_contract_test.go memastikan (1) dokumen
+    # ini valid secara struktur, (2) setiap path+method di sini terdaftar di
+    # router Echo, dan (3) response riil tervalidasi terhadap schema ini
+    # (openapi3filter.ValidateResponse). Dokumen ini juga menjadi sumber
+    # embedded spec di /api/v1/openapi.yaml dan Swagger UI (/swagger).
+    # 10.5 Observability: endpoint /healthz, /readyz, /metrics di bawah.
+
+    /healthz:
+        get:
+            tags: [Observability]
+            summary: Liveness probe — proses API hidup
+            description: |
+                Selalu 200 selama proses berjalan. Tidak menyentuh dependensi
+                (PostgreSQL/Redis) — gunakan /readyz untuk kesiapan sebenarnya.
+            security: []
+            responses:
+                "200":
+                    description: Service is alive
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    status: { type: string, example: ok }
+
+    /readyz:
+        get:
+            tags: [Observability]
+            summary: Readiness probe — dependensi siap (PostgreSQL & Redis)
+            description: |
+                Menjalankan ping ke PostgreSQL dan Redis secara paralel dengan
+                timeout 2 detik. 200 bila semuanya naik; 503 bila salah satu
+                gagal (detail per komponen di body).
+            security: []
+            responses:
+                "200":
+                    description: All dependencies are up
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    status: { type: string, example: ready }
+                                    checks:
+                                        type: object
+                                        additionalProperties: { type: string }
+                                        example: { postgres: up, redis: up }
+                "503":
+                    description: At least one dependency is down
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    status:
+                                        { type: string, example: unavailable }
+                                    checks:
+                                        type: object
+                                        additionalProperties: { type: string }
+                                        example:
+                                            {
+                                                postgres: up,
+                                                redis: "down: connection refused",
+                                            }
+
+    /metrics:
+        get:
+            tags: [Observability]
+            summary: Prometheus metrics (text exposition format)
+            description: |
+                Metrik runtime SIMBAR (FSD §10.5):
+
+                - `http_requests_total{method,path,status}` — jumlah request,
+                  label path memakai route pattern agar cardinality terkendali.
+                - `http_request_duration_seconds{quantile="0.95"}` — latensi
+                  p95 (summary objectives 0.5/0.9/0.95/0.99).
+                - `http_requests_in_flight` — request yang sedang diproses.
+                - `db_pool_max_conns / total_conns / idle_conns /
+                  acquired_conns` — okupansi koneksi PostgreSQL (pgxpool).
+                - `asynq_queue_pending / active / archived{queue}` — kedalaman
+                  antrean worker asynq per queue.
+            security: []
+            responses:
+                "200":
+                    description: Prometheus text exposition format
+                    content:
+                        text/plain; version=0.0.4:
+                            schema: { type: string }
+
     /openapi.yaml:
         get:
             tags: [API Docs]
@@ -890,7 +1884,11 @@ components:
             required: [success, data, error]
             properties:
                 success: { type: boolean }
-                data: {}
+                data:
+                    {
+                        nullable: true,
+                        description: "Payload; null pada response error",
+                    }
                 meta:
                     type: object
                     properties:
@@ -998,9 +1996,9 @@ components:
         TokenPair:
             type: object
             properties:
-                access_token: { type: string, description: JWT, 15 min TTL }
+                access_token: { type: string, description: "JWT, 15 min TTL" }
                 refresh_token:
-                    { type: string, description: Rotating JWT, 7 day TTL }
+                    { type: string, description: "Rotating JWT, 7 day TTL" }
                 token_type: { type: string, example: Bearer }
         RegisterResponse:
             type: object
@@ -1661,3 +2659,692 @@ components:
                         format: double,
                         description: "Sisa kapasitas (0 = tak terbatas / belum diisi kapasitas)",
                     }
+
+        CreateRequestRequest:
+            type: object
+            description: |
+                Aturan validasi (422 ERR_VALIDATION + field details):
+                - `warehouse_id` wajib (integer > 0) dan harus warehouse aktif.
+                - `lines` wajib berisi minimal 1 baris; per baris — `item_id`
+                  dikenal & aktif, `qty` > 0, `uom` terdaftar (kosong = base).
+                - `idempotency_key` (bila ada) harus UUIDv4 — atau kirim lewat
+                  header `Idempotency-Key` (FSD 4.5).
+            required: [warehouse_id, lines]
+            properties:
+                warehouse_id:
+                    {
+                        type: integer,
+                        format: int64,
+                        minimum: 1,
+                        description: "Wajib. ID warehouse tujuan (gt=0)",
+                    }
+                partner_id:
+                    {
+                        type: integer,
+                        format: int64,
+                        nullable: true,
+                        minimum: 1,
+                        description: "Optional. Unit/customer peminta (gt=0)",
+                    }
+                idempotency_key:
+                    {
+                        type: string,
+                        format: uuid,
+                        description: "Optional UUIDv4 — alternatif dari header Idempotency-Key (FSD 4.5)",
+                    }
+                notes:
+                    {
+                        type: string,
+                        maxLength: 1000,
+                        description: "Optional. Maksimal 1000 karakter",
+                    }
+                lines:
+                    type: array
+                    minItems: 1
+                    description: "Wajib, minimal 1 baris"
+                    items: { $ref: "#/components/schemas/RequestLineRequest" }
+
+        RequestLineRequest:
+            type: object
+            required: [item_id, qty]
+            properties:
+                item_id:
+                    {
+                        type: integer,
+                        format: int64,
+                        minimum: 1,
+                        description: "Wajib. ID item master (gt=0); item harus aktif",
+                    }
+                qty:
+                    {
+                        type: number,
+                        format: double,
+                        exclusiveMinimum: 0,
+                        description: "Wajib, > 0. Quantity dalam UOM baris",
+                    }
+                uom:
+                    {
+                        type: string,
+                        maxLength: 20,
+                        description: "Optional. Kosong = base UOM item; harus terdaftar di item",
+                    }
+                notes:
+                    {
+                        type: string,
+                        maxLength: 500,
+                        description: "Optional. Maksimal 500 karakter",
+                    }
+
+        RequestDocument:
+            type: object
+            properties:
+                id: { type: integer, format: int64 }
+                public_id: { type: string, format: uuid }
+                doc_no: { type: string, example: "REQ/WH01/2608/00016" }
+                doc_type: { type: string, example: REQ }
+                doc_date: { type: string, format: date }
+                status:
+                    {
+                        type: string,
+                        enum:
+                            [
+                                draft,
+                                submitted,
+                                approved,
+                                in_progress,
+                                completed,
+                                cancelled,
+                            ],
+                    }
+                warehouse_id: { type: integer, format: int64 }
+                partner_id: { type: integer, format: int64, nullable: true }
+                notes: { type: string, nullable: true }
+                created_by: { type: integer, format: int64 }
+                lines:
+                    type: array
+                    items: { $ref: "#/components/schemas/RequestLineSummary" }
+
+        RequestLineSummary:
+            type: object
+            properties:
+                id: { type: integer, format: int64 }
+                line_no: { type: integer }
+                item_id: { type: integer, format: int64 }
+                uom: { type: string }
+                qty_request: { type: number, format: double }
+                qty_processed: { type: number, format: double }
+
+        CreateDeliveryRequest:
+            type: object
+            description: |
+                Aturan validasi (422 ERR_VALIDATION + field details):
+                - `request_id` wajib (gt=0) dan harus request (`REQ`) berstatus
+                  `approved` dengan minimal 1 line.
+                - `warehouse_id` wajib (gt=0) dan harus warehouse aktif.
+                - `idempotency_key` (bila ada) harus UUIDv4.
+            required: [warehouse_id, request_id]
+            properties:
+                warehouse_id:
+                    {
+                        type: integer,
+                        format: int64,
+                        minimum: 1,
+                        description: "Wajib. ID warehouse pengirim (gt=0)",
+                    }
+                request_id:
+                    {
+                        type: integer,
+                        format: int64,
+                        minimum: 1,
+                        description: "Wajib. ID request yang sudah disetujui",
+                    }
+                partner_id:
+                    {
+                        type: integer,
+                        format: int64,
+                        nullable: true,
+                        minimum: 1,
+                        description: "Optional. Customer tujuan (gt=0)",
+                    }
+                idempotency_key:
+                    {
+                        type: string,
+                        format: uuid,
+                        description: "Optional UUIDv4 — alternatif dari header Idempotency-Key (FSD 4.5)",
+                    }
+                notes:
+                    {
+                        type: string,
+                        maxLength: 1000,
+                        description: "Optional. Maksimal 1000 karakter",
+                    }
+
+        DeliveryDocument:
+            type: object
+            properties:
+                id: { type: integer, format: int64 }
+                public_id: { type: string, format: uuid }
+                doc_no: { type: string, example: "DO/WH01/2608/00016" }
+                doc_type: { type: string, example: DO }
+                doc_date: { type: string, format: date }
+                status:
+                    {
+                        type: string,
+                        enum:
+                            [
+                                draft,
+                                submitted,
+                                approved,
+                                in_progress,
+                                completed,
+                                cancelled,
+                            ],
+                    }
+                warehouse_id: { type: integer, format: int64 }
+                request_id: { type: integer, format: int64, nullable: true }
+                partner_id: { type: integer, format: int64, nullable: true }
+                notes: { type: string, nullable: true }
+                created_by: { type: integer, format: int64 }
+                lines:
+                    type: array
+                    items: { $ref: "#/components/schemas/DeliveryLineSummary" }
+
+        DeliveryLineSummary:
+            type: object
+            properties:
+                id: { type: integer, format: int64 }
+                line_no: { type: integer }
+                item_id: { type: integer, format: int64 }
+                uom: { type: string }
+                qty_request: { type: number, format: double }
+                qty_processed: { type: number, format: double }
+
+        AllocateRequest:
+            type: object
+            description: |
+                Aturan validasi (422 ERR_VALIDATION + field details):
+                - `lines` wajib, minimal 1.
+                - Per baris: `line_id` harus milik DO ini; `qty` > 0 dan tidak
+                  boleh melebihi sisa line (qty × conv_factor dihitung di
+                  backend). Dokumen harus `approved` (409 bila bukan).
+            required: [lines]
+            properties:
+                lines:
+                    type: array
+                    minItems: 1
+                    items: { $ref: "#/components/schemas/AllocateLineRequest" }
+
+        AllocateLineRequest:
+            type: object
+            required: [line_id, qty]
+            properties:
+                line_id:
+                    {
+                        type: integer,
+                        format: int64,
+                        minimum: 1,
+                        description: "Wajib. ID baris DO yang dialokasikan",
+                    }
+                qty:
+                    {
+                        type: number,
+                        format: double,
+                        exclusiveMinimum: 0,
+                        description: "Wajib, > 0. Quantity dalam UOM line",
+                    }
+
+        OverrideAllocateRequest:
+            type: object
+            description: |
+                Aturan validasi (422 ERR_VALIDATION + field details):
+                - `reason_code` wajib (maksimal 30 karakter) — disimpan di
+                  `doc.documents.reason_code`.
+                - `lines` wajib, minimal 1; per baris `balance_id` wajib dan
+                  balance harus available, non-expired, milik warehouse yang
+                  sama dan itemnya cocok dengan line.
+            required: [reason_code, lines]
+            properties:
+                reason_code:
+                    {
+                        type: string,
+                        maxLength: 30,
+                        description: "Wajib. Alasan override (dicatat, BR-03)",
+                    }
+                lines:
+                    type: array
+                    minItems: 1
+                    items: { $ref: "#/components/schemas/OverrideLineRequest" }
+
+        OverrideLineRequest:
+            type: object
+            required: [line_id, qty, balance_id]
+            properties:
+                line_id:
+                    {
+                        type: integer,
+                        format: int64,
+                        minimum: 1,
+                        description: "Wajib. ID baris DO",
+                    }
+                qty:
+                    {
+                        type: number,
+                        format: double,
+                        exclusiveMinimum: 0,
+                        description: "Wajib, > 0. Quantity dalam UOM line",
+                    }
+                balance_id:
+                    {
+                        type: integer,
+                        format: int64,
+                        minimum: 1,
+                        description: "Wajib. Balance spesifik yang dialokasikan manual",
+                    }
+
+        AllocationResult:
+            type: object
+            properties:
+                line_id: { type: integer, format: int64 }
+                allocation_id: { type: integer, format: int64 }
+                balance_id: { type: integer, format: int64 }
+                location_code: { type: string }
+                batch_id: { type: integer, format: int64, nullable: true }
+                qty_allocated: { type: number, format: double }
+
+        PickingListItem:
+            type: object
+            properties:
+                allocation_id: { type: integer, format: int64 }
+                line_id: { type: integer, format: int64 }
+                item_id: { type: integer, format: int64 }
+                sku: { type: string }
+                base_uom: { type: string }
+                location_code: { type: string }
+                pick_seq: { type: integer, nullable: true }
+                batch_id: { type: integer, format: int64, nullable: true }
+                batch_no: { type: string }
+                qty_allocated: { type: number, format: double }
+                qty_picked: { type: number, format: double }
+                qty_remaining: { type: number, format: double }
+
+        PickRequest:
+            type: object
+            description: |
+                Aturan validasi (422 ERR_VALIDATION + field details):
+                - `scans` wajib, minimal 1.
+                - Per scan: `allocation_id` harus milik DO ini; `qty` > 0 dan
+                  ≤ sisa alokasi; barcode item & lokasi harus cocok dengan
+                  alokasi (jika tidak 409 ERR_SCAN_MISMATCH).
+            required: [scans]
+            properties:
+                scans:
+                    type: array
+                    minItems: 1
+                    items: { $ref: "#/components/schemas/PickScanRequest" }
+
+        PickScanRequest:
+            type: object
+            required: [allocation_id, location_barcode, item_barcode, qty]
+            properties:
+                allocation_id:
+                    {
+                        type: integer,
+                        format: int64,
+                        minimum: 1,
+                        description: "Wajib. ID alokasi yang di-pick",
+                    }
+                location_barcode:
+                    {
+                        type: string,
+                        maxLength: 30,
+                        description: "Wajib. Barcode/kode bin tujuan",
+                    }
+                item_barcode:
+                    {
+                        type: string,
+                        maxLength: 64,
+                        description: "Wajib. Barcode item yang discan",
+                    }
+                qty:
+                    {
+                        type: number,
+                        format: double,
+                        exclusiveMinimum: 0,
+                        description: "Wajib, > 0. Quantity yang di-pick",
+                    }
+
+        ShipRequest:
+            type: object
+            properties:
+                vehicle_no:
+                    {
+                        type: string,
+                        maxLength: 20,
+                        description: "Optional. Nomor kendaraan (surat jalan)",
+                    }
+                driver_name:
+                    {
+                        type: string,
+                        maxLength: 100,
+                        description: "Optional. Nama sopir/kurir",
+                    }
+
+        PodRequest:
+            type: object
+            description: |
+                Aturan validasi (422 ERR_VALIDATION + field details):
+                - `received_by` wajib (maksimal 100 karakter).
+                - `received_at` optional, format RFC3339 bila diisi.
+                - `pod_file_url` / `signature_url` optional (URL berkas foto /
+                  tanda tangan, diunggah klien terlebih dahulu).
+            required: [received_by]
+            properties:
+                received_by:
+                    {
+                        type: string,
+                        maxLength: 100,
+                        description: "Wajib. Nama penerima barang",
+                    }
+                received_at:
+                    {
+                        type: string,
+                        format: date-time,
+                        description: "Optional. Waktu kedatangan/serah terima (RFC3339)",
+                    }
+                pod_file_url:
+                    {
+                        type: string,
+                        maxLength: 1000,
+                        description: "Optional. URL bukti serah terima (foto)",
+                    }
+                signature_url:
+                    {
+                        type: string,
+                        maxLength: 1000,
+                        description: "Optional. URL tanda tangan",
+                    }
+
+        OutboundStatus:
+            type: object
+            properties:
+                id: { type: integer, format: int64 }
+                status:
+                    {
+                        type: string,
+                        description: "Status dokumen setelah aksi",
+                        example: approved,
+                    }
+
+        # ═══════════════ Fase 8 (M5 Transfer & M6 Stock Opname) ═══════════════
+
+        TransferLineRequest:
+            type: object
+            required: [item_id, qty]
+            properties:
+                item_id: { type: integer, format: int64, example: 1 }
+                qty: { type: number, format: double, example: 10 }
+                uom:
+                    {
+                        type: string,
+                        maxLength: 20,
+                        description: "Kosong = satuan dasar item",
+                        example: BOX,
+                    }
+                notes: { type: string, maxLength: 500 }
+
+        TransferCreateRequest:
+            type: object
+            description: |
+                Validasi (422): `lines` minimal 1; `qty > 0`; UoM terdaftar;
+                gudang asal ≠ tujuan; keduanya aktif.
+            required: [warehouse_id, dest_warehouse_id, lines]
+            properties:
+                warehouse_id: { type: integer, format: int64, example: 1 }
+                dest_warehouse_id: { type: integer, format: int64, example: 2 }
+                idempotency_key:
+                    {
+                        type: string,
+                        format: uuid,
+                        description: "Opsional. Idempotensi (FSD 4.5)",
+                    }
+                notes: { type: string, maxLength: 1000 }
+                lines:
+                    type: array
+                    items: { $ref: "#/components/schemas/TransferLineRequest" }
+
+        TransferLineSummary:
+            type: object
+            properties:
+                id: { type: integer, format: int64 }
+                line_no: { type: integer }
+                item_id: { type: integer, format: int64 }
+                uom: { type: string }
+                qty_request: { type: number, format: double }
+                qty_processed: { type: number, format: double }
+
+        TransferDocumentResponse:
+            type: object
+            properties:
+                id: { type: integer, format: int64 }
+                public_id: { type: string, format: uuid }
+                doc_no: { type: string, example: TRF/WH01/2608/00001 }
+                doc_type: { type: string, example: TRF }
+                doc_date: { type: string, format: date }
+                status: { type: string, example: draft }
+                warehouse_id: { type: integer, format: int64 }
+                dest_warehouse_id: { type: integer, format: int64 }
+                notes: { type: string }
+                created_by: { type: integer, format: int64 }
+                lines:
+                    type: array
+                    items: { $ref: "#/components/schemas/TransferLineSummary" }
+
+        TransferReceiveLineRequest:
+            type: object
+            required: [line_id, qty_received, location_id]
+            properties:
+                line_id: { type: integer, format: int64 }
+                qty_received: { type: number, format: double, example: 100 }
+                location_id:
+                    {
+                        type: integer,
+                        format: int64,
+                        description: "Bin tujuan di gudang tujuan (pick/bulk/staging)",
+                    }
+                batch_id:
+                    {
+                        type: integer,
+                        format: int64,
+                        description: "Wajib untuk item batch-managed",
+                    }
+                notes: { type: string, maxLength: 500 }
+
+        TransferReceiveRequest:
+            type: object
+            required: [lines]
+            properties:
+                lines:
+                    type: array
+                    items:
+                        {
+                            $ref: "#/components/schemas/TransferReceiveLineRequest",
+                        }
+
+        TransferReceiptSummary:
+            type: object
+            properties:
+                id: { type: integer, format: int64 }
+                line_id: { type: integer, format: int64 }
+                qty_sent: { type: number, format: double }
+                qty_received: { type: number, format: double }
+                variance: { type: number, format: double }
+                received_by: { type: integer, format: int64 }
+
+        TransferStatusResponse:
+            type: object
+            properties:
+                id: { type: integer, format: int64 }
+                status: { type: string, example: in_progress }
+                receipts:
+                    type: array
+                    items:
+                        { $ref: "#/components/schemas/TransferReceiptSummary" }
+                discrepancy:
+                    {
+                        type: boolean,
+                        description: "true bila ada selisih (barang kurang dari kiriman)",
+                    }
+
+        CountCreateRequest:
+            type: object
+            required: [warehouse_id]
+            properties:
+                warehouse_id: { type: integer, format: int64 }
+                zone:
+                    {
+                        type: string,
+                        maxLength: 20,
+                        description: "Opsional. Batasi snapshot per zona lokasi",
+                    }
+                item_ids:
+                    type: array
+                    items: { type: integer, format: int64 }
+                    description: "Opsional. Batasi snapshot per item"
+                idempotency_key:
+                    {
+                        type: string,
+                        format: uuid,
+                        description: "Opsional. Idempotensi (FSD 4.5)",
+                    }
+                notes: { type: string, maxLength: 1000 }
+
+        CountLineSummary:
+            type: object
+            description: |
+                Blind Count (FR-6.1): `qty_system` sengaja TIDAK dikembalikan
+                ke petugas penghitung. `variance` muncul setelah input.
+            properties:
+                id: { type: integer, format: int64 }
+                item_id: { type: integer, format: int64 }
+                location_id: { type: integer, format: int64 }
+                batch_id: { type: integer, format: int64 }
+                qty_counted: { type: number, format: double }
+                variance: { type: number, format: double }
+                reason_code: { type: string }
+
+        CountDocumentResponse:
+            type: object
+            properties:
+                id: { type: integer, format: int64 }
+                public_id: { type: string, format: uuid }
+                doc_no: { type: string, example: CNT/WH01/2608/00001 }
+                doc_type: { type: string, example: CNT }
+                doc_date: { type: string, format: date }
+                status: { type: string, example: draft }
+                warehouse_id: { type: integer, format: int64 }
+                notes: { type: string }
+                created_by: { type: integer, format: int64 }
+                lines:
+                    type: array
+                    items: { $ref: "#/components/schemas/CountLineSummary" }
+
+        InputCountLineRequest:
+            type: object
+            required: [count_line_id, qty_counted]
+            properties:
+                count_line_id: { type: integer, format: int64 }
+                qty_counted: { type: number, format: double, minimum: 0 }
+                reason_code: { type: string, maxLength: 30 }
+
+        InputCountLinesRequest:
+            type: object
+            required: [lines]
+            properties:
+                lines:
+                    type: array
+                    items:
+                        { $ref: "#/components/schemas/InputCountLineRequest" }
+
+        PostCountRequest:
+            type: object
+            description: |
+                `manager_approver_id` wajib bila total nilai variance melebihi
+                ambang persetujuan berjenjang (M6.4, default Rp 5.000.000).
+            properties:
+                manager_approver_id:
+                    {
+                        type: integer,
+                        format: int64,
+                        description: "Inventory Manager (berbeda dari pembuat dan penyetuju)",
+                    }
+
+        PostCountResponse:
+            type: object
+            properties:
+                id: { type: integer, format: int64 }
+                status: { type: string, example: completed }
+                total_variance: { type: number, format: double }
+                total_variance_value: { type: number, format: double }
+                needs_manager_approval: { type: boolean }
+                posted_adjustment_lines: { type: integer }
+
+        AdjustmentLineRequest:
+            type: object
+            required: [item_id, location_id, qty]
+            properties:
+                item_id: { type: integer, format: int64 }
+                location_id: { type: integer, format: int64 }
+                batch_id: { type: integer, format: int64 }
+                qty:
+                    {
+                        type: number,
+                        format: double,
+                        description: "Bertanda: (+) menambah saldo, (-) mengurangi saldo",
+                        example: -10,
+                    }
+                status:
+                    {
+                        type: string,
+                        enum: [available, damaged, quarantine],
+                        description: "Default: available",
+                    }
+                reason_code: { type: string, maxLength: 30 }
+
+        AdjustmentCreateRequest:
+            type: object
+            description: |
+                Penyesuaian manual (FR-6.5): `reason_code` dan `notes` wajib.
+            required: [warehouse_id, reason_code, notes, lines]
+            properties:
+                warehouse_id: { type: integer, format: int64 }
+                reason_code: { type: string, maxLength: 30, example: RUSAK }
+                notes:
+                    {
+                        type: string,
+                        maxLength: 1000,
+                        description: "Penjelasan tertulis wajib",
+                    }
+                idempotency_key:
+                    {
+                        type: string,
+                        format: uuid,
+                        description: "Opsional. Idempotensi (FSD 4.5)",
+                    }
+                lines:
+                    type: array
+                    items:
+                        { $ref: "#/components/schemas/AdjustmentLineRequest" }
+
+        AdjustmentDocumentResponse:
+            type: object
+            properties:
+                id: { type: integer, format: int64 }
+                public_id: { type: string, format: uuid }
+                doc_no: { type: string, example: ADJ/WH01/2608/00001 }
+                doc_type: { type: string, example: ADJ }
+                doc_date: { type: string, format: date }
+                status: { type: string, example: completed }
+                warehouse_id: { type: integer, format: int64 }
+                reason_code: { type: string }
+                notes: { type: string }
+                created_by: { type: integer, format: int64 }
