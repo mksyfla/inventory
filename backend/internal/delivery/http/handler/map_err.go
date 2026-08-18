@@ -28,9 +28,16 @@ func writeUsecaseError(c echo.Context, err error, fallbackMsg string) error {
 		return nil
 	}
 	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == "23505" { // unique_violation
-		_ = response.Error(c, http.StatusConflict, "ERR_DUPLICATE_KEY", "Duplicate key", nil, reqID(c))
-		return nil
+	if errors.As(err, &pgErr) {
+		switch pgErr.Code {
+		case "23505": // unique_violation
+			_ = response.Error(c, http.StatusConflict, "ERR_DUPLICATE_KEY", "Duplicate key", nil, reqID(c))
+			return nil
+		case "23503": // foreign_key_violation
+			_ = response.Error(c, http.StatusUnprocessableEntity, "ERR_VALIDATION",
+				"Referenced resource does not exist", nil, reqID(c))
+			return nil
+		}
 	}
 	_ = response.Error(c, http.StatusInternalServerError, "ERR_INTERNAL", fallbackMsg, nil, reqID(c))
 	return nil

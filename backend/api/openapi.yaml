@@ -520,6 +520,34 @@ paths:
                 "404": { $ref: "#/components/responses/Error" }
                 "422": { $ref: "#/components/responses/ValidationError" }
 
+    /categories:
+        get:
+            tags: [Items]
+            summary: List active categories
+            description: Requires `item.read`.
+            parameters:
+                - { $ref: "#/components/parameters/XWarehouseId" }
+            responses:
+                "200":
+                    description: Category list
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              type: array
+                                              items:
+                                                  {
+                                                      $ref: "#/components/schemas/Category",
+                                                  }
+                "401": { $ref: "#/components/responses/Error" }
+                "403": { $ref: "#/components/responses/Error" }
+
     /stock/movements:
         get:
             tags: [Stock]
@@ -2362,6 +2390,14 @@ components:
                 address: { type: string, nullable: true }
                 contact_name: { type: string, nullable: true }
                 contact_phone: { type: string, nullable: true }
+                is_active: { type: boolean }
+
+        Category:
+            type: object
+            properties:
+                id: { type: integer, format: int64 }
+                code: { type: string }
+                name: { type: string }
                 is_active: { type: boolean }
 
         StockMovement:

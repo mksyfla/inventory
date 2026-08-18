@@ -20,7 +20,7 @@ Pemetaan kontrol keamanan terhadap **OWASP Top 10 (2021)** dan acuan FSD §6 / P
 - **Rate limiter fail-open**: bila Redis down, rate limit dilewati (trade-off ketersediaan vs. brute-force) — pantau Redis.
 - **Admin bawaan**: migrasi `000002` membuat pengguna `admin` (password `Admin@123456`) — **wajib diganti setelah login pertama** (`hashpass` tersedia: `go run ./cmd/hashpass -password "<baru>"`).
 - **Pengguna demo (migrasi `000003`)**: satu akun per peran PRD §5 — `imanager`, `supervisor`, `receiving`, `picker`, `masterdata`, `courier`, `requester`, `auditor`, semuanya berpassword **`Simbar@123456`** (dev/demo only) — **wajib diganti/ganti password di lingkungan selain dev**. Sebaran gudang: `admin`/`imanager`/`auditor` = WH01+WH02, sisanya WH01 saja.
-- **Pengguna baru tidak punya peran**: registrasi hanya membuat akun; akses RBAC diberikan lewat `sec.user_roles` oleh admin.
+- **Registrasi otomatis peran `requester` @ `WH01`**: pengguna baru langsung mendapat peran dasar `requester` terikat gudang `WH01` sehingga dapat login dan membuat permintaan; peran/wilayah lain tetap diberikan admin lewat `sec.user_roles`. Kegagalan lookup peran/gudang membatalkan registrasi (transaksional).
 - **Kunci AES partner** (`item_usecase.go`) masih hardcoded — backlog: pindahkan ke env/Vault + jalur rotasi.
 - **CORS**: tidak diaktifkan (API dikonsumsi same-origin / non-browser).
 - **HSTS** hanya aktif di `APP_ENV=production` atau di balik proxy dengan `X-Forwarded-Proto: https`.

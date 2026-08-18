@@ -52,6 +52,12 @@ INSERT INTO master.categories (code, name, is_active)
 VALUES ($1, $2, $3)
 RETURNING id, code, name, is_active;
 
+-- name: ListCategories :many
+SELECT id, code, name, is_active
+FROM master.categories
+WHERE is_active = TRUE
+ORDER BY name;
+
 -- ============ ITEMS & UOMS ============
 
 -- name: CreateItem :one
@@ -418,6 +424,15 @@ FROM sec.roles r
 JOIN sec.role_permissions rp ON rp.role_id = r.id
 JOIN sec.permissions p ON p.id = rp.permission_id
 ORDER BY r.code, p.code;
+
+-- name: GetRoleByCode :one
+SELECT id, code, name FROM sec.roles WHERE code = $1 LIMIT 1;
+
+-- name: AssignUserRole :one
+INSERT INTO sec.user_roles (user_id, role_id, warehouse_id)
+VALUES ($1, $2, $3)
+ON CONFLICT (user_id, role_id, warehouse_id) DO NOTHING
+RETURNING user_id, role_id, warehouse_id;
 
 -- name: ListWarehouseCodes :many
 SELECT code FROM master.warehouses WHERE is_active = TRUE ORDER BY code;

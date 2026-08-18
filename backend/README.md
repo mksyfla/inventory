@@ -138,7 +138,7 @@ curl -b cookies.txt http://localhost:8080/api/v1/items \
 | `requester` | `Simbar@123456` | requester @ WH01 |
 | `auditor` | `Simbar@123456` | auditor @ WH01, WH02 |
 
-**Change these passwords before any non-dev deployment** (`go run ./cmd/hashpass -password "<new>"`, see §7.3). Newly registered users have **no roles** until an admin assigns them via `sec.user_roles`.
+**Change these passwords before any non-dev deployment** (`go run ./cmd/hashpass -password "<new>"`, see §7.3). Newly registered users are **automatically assigned the `requester` role bound to warehouse `WH01`** via `sec.user_roles`, so they can log in and create requests immediately; further roles are assigned by an admin.
 
 ### 5.3 Endpoints
 

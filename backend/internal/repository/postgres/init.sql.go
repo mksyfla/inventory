@@ -11,6 +11,26 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const assignUserRole = `-- name: AssignUserRole :one
+INSERT INTO sec.user_roles (user_id, role_id, warehouse_id)
+VALUES ($1, $2, $3)
+ON CONFLICT (user_id, role_id, warehouse_id) DO NOTHING
+RETURNING user_id, role_id, warehouse_id
+`
+
+type AssignUserRoleParams struct {
+	UserID      int64 `json:"user_id"`
+	RoleID      int64 `json:"role_id"`
+	WarehouseID int64 `json:"warehouse_id"`
+}
+
+func (q *Queries) AssignUserRole(ctx context.Context, arg AssignUserRoleParams) (SecUserRoles, error) {
+	row := q.db.QueryRow(ctx, assignUserRole, arg.UserID, arg.RoleID, arg.WarehouseID)
+	var i SecUserRoles
+	err := row.Scan(&i.UserID, &i.RoleID, &i.WarehouseID)
+	return i, err
+}
+
 const createAllocation = `-- name: CreateAllocation :one
 INSERT INTO doc.allocations (doc_line_id, balance_id, qty_allocated, qty_picked, created_at)
 VALUES ($1, $2, $3, 0, NOW())
@@ -1054,6 +1074,17 @@ func (q *Queries) GetPartnerByID(ctx context.Context, id int64) (MasterPartners,
 	return i, err
 }
 
+const getRoleByCode = `-- name: GetRoleByCode :one
+SELECT id, code, name FROM sec.roles WHERE code = $1 LIMIT 1
+`
+
+func (q *Queries) GetRoleByCode(ctx context.Context, code pgtype.Text) (SecRoles, error) {
+	row := q.db.QueryRow(ctx, getRoleByCode, code)
+	var i SecRoles
+	err := row.Scan(&i.ID, &i.Code, &i.Name)
+	return i, err
+}
+
 const getStagingLocation = `-- name: GetStagingLocation :one
 SELECT id, warehouse_id, code, zone, rack, level, loc_type, pick_seq, capacity, is_active
 FROM master.locations
@@ -1452,6 +1483,38 @@ func (q *Queries) ListAllocationsByDocument(ctx context.Context, documentID int6
 			&i.ExpiryDate,
 			&i.Sku,
 			&i.BaseUom,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCategories = `-- name: ListCategories :many
+SELECT id, code, name, is_active
+FROM master.categories
+WHERE is_active = TRUE
+ORDER BY name
+`
+
+func (q *Queries) ListCategories(ctx context.Context) ([]MasterCategories, error) {
+	rows, err := q.db.Query(ctx, listCategories)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []MasterCategories
+	for rows.Next() {
+		var i MasterCategories
+		if err := rows.Scan(
+			&i.ID,
+			&i.Code,
+			&i.Name,
+			&i.IsActive,
 		); err != nil {
 			return nil, err
 		}

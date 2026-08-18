@@ -360,6 +360,10 @@ func (u *Usecase) CreateCategory(ctx context.Context, code, name string) (postgr
 	})
 }
 
+func (u *Usecase) ListCategories(ctx context.Context) ([]postgres.MasterCategories, error) {
+	return u.repo.ListCategories(ctx)
+}
+
 // ============ GET ITEM / LIST ITEMS ============
 func (u *Usecase) GetItem(ctx context.Context, id int64) (postgres.MasterItems, []postgres.MasterItemUoms, error) {
 	item, err := u.repo.GetItemByID(ctx, id)

@@ -11,6 +11,7 @@ import (
 )
 
 type Querier interface {
+	AssignUserRole(ctx context.Context, arg AssignUserRoleParams) (SecUserRoles, error)
 	CreateAllocation(ctx context.Context, arg CreateAllocationParams) (DocAllocations, error)
 	CreateBatch(ctx context.Context, arg CreateBatchParams) (MasterBatches, error)
 	// ============ CATEGORIES ============
@@ -52,6 +53,7 @@ type Querier interface {
 	GetLocationByID(ctx context.Context, id int64) (MasterLocations, error)
 	GetLocationByWarehouseCode(ctx context.Context, arg GetLocationByWarehouseCodeParams) (MasterLocations, error)
 	GetPartnerByID(ctx context.Context, id int64) (MasterPartners, error)
+	GetRoleByCode(ctx context.Context, code pgtype.Text) (SecRoles, error)
 	GetStagingLocation(ctx context.Context, warehouseID int64) (MasterLocations, error)
 	GetStockBalanceByIDForUpdate(ctx context.Context, id int64) (GetStockBalanceByIDForUpdateRow, error)
 	GetStockBalanceForUpdate(ctx context.Context, arg GetStockBalanceForUpdateParams) (InvStockBalances, error)
@@ -72,6 +74,7 @@ type Querier interface {
 	// is race-safe against concurrent allocators/posters.
 	ListAllocationCandidates(ctx context.Context, arg ListAllocationCandidatesParams) ([]ListAllocationCandidatesRow, error)
 	ListAllocationsByDocument(ctx context.Context, documentID int64) ([]ListAllocationsByDocumentRow, error)
+	ListCategories(ctx context.Context) ([]MasterCategories, error)
 	ListCountLines(ctx context.Context, documentID int64) ([]DocCountLines, error)
 	// Sumber snapshot qty_system saat sesi opname dibuka (FR-6.1). Scope dapat
 	// dipersempit per zona ('' = semua) dan/atau per item (0 = semua).

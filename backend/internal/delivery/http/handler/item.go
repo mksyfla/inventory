@@ -292,6 +292,17 @@ func (h *ItemHandler) ListPartners(c echo.Context) error {
 	return response.Success(c, http.StatusOK, partners, nil)
 }
 
+// ─── CATEGORY ENDPOINTS ─────────────────────────────────────────────────────
+
+// ListCategories handles GET /api/v1/categories
+func (h *ItemHandler) ListCategories(c echo.Context) error {
+	categories, err := h.uc.ListCategories(c.Request().Context())
+	if err != nil {
+		return writeUsecaseError(c, err, "Failed to list categories")
+	}
+	return response.Success(c, http.StatusOK, categories, nil)
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 func userIDFromCtx(c echo.Context) int64 {

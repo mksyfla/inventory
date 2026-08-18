@@ -151,8 +151,20 @@ func main() {
 	}
 
 	// 6. Wire user registration (Fase 2.1)
+	// New accounts are auto-assigned the seeded `requester` role bound to the
+	// `WH01` warehouse, so a freshly registered user can immediately log in and
+	// create requests. Runs in one transaction: if the role/warehouse lookup or
+	// assignment fails, the user row is rolled back (no orphan account).
 	createUser := func(ctx context.Context, username, email, fullName, passwordHash string) (int64, error) {
-		row, err := queries.CreateUser(ctx, postgres.CreateUserParams{
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			return 0, err
+		}
+		defer tx.Rollback(ctx) // no-op after Commit
+
+		txQueries := queries.WithTx(tx)
+
+		row, err := txQueries.CreateUser(ctx, postgres.CreateUserParams{
 			Username:     username,
 			Email:        pgtype.Text{String: email, Valid: true},
 			FullName:     fullName,
@@ -160,6 +172,26 @@ func main() {
 			IsActive:     true,
 		})
 		if err != nil {
+			return 0, err
+		}
+
+		role, err := txQueries.GetRoleByCode(ctx, pgtype.Text{String: "requester", Valid: true})
+		if err != nil {
+			return 0, fmt.Errorf("assign requester role: %w", err)
+		}
+		wh, err := txQueries.GetWarehouseByCode(ctx, "WH01")
+		if err != nil {
+			return 0, fmt.Errorf("assign WH01 warehouse: %w", err)
+		}
+		if _, err := txQueries.AssignUserRole(ctx, postgres.AssignUserRoleParams{
+			UserID:      row.ID,
+			RoleID:      role.ID,
+			WarehouseID: wh.ID,
+		}); err != nil {
+			return 0, err
+		}
+
+		if err := tx.Commit(ctx); err != nil {
 			return 0, err
 		}
 		return row.ID, nil

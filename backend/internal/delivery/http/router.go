@@ -142,6 +142,9 @@ func NewRouter(cfg ...RouterConfig) *echo.Echo {
 			protected.GET("/partners", itemHandler.ListPartners, rbacMW(c, "partner", "read")...)
 			protected.POST("/partners", itemHandler.CreatePartner, append(rbacMW(c, "partner", "write"), echoMiddleware.BodyLimit("1M"))...)
 			protected.GET("/partners/:id", itemHandler.GetPartner, rbacMW(c, "partner", "read")...)
+
+			// Categories (guarded by item.read — no category.* permission exists in the RBAC seed)
+			protected.GET("/categories", itemHandler.ListCategories, rbacMW(c, "item", "read")...)
 		}
 
 		// ─── Stock Ledger endpoints (Phase 4) ───────────────────────────

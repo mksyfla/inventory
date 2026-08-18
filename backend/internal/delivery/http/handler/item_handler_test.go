@@ -93,6 +93,13 @@ func (m *itemMock) ListPartners(ctx context.Context) ([]postgres.MasterPartners,
 	return result, nil
 }
 
+func (m *itemMock) ListCategories(ctx context.Context) ([]postgres.MasterCategories, error) {
+	return []postgres.MasterCategories{
+		{ID: 31, Code: "CAT-RAW", Name: "Bahan Baku", IsActive: true},
+		{ID: 36, Code: "CAT-PHA", Name: "Farmasi", IsActive: true},
+	}, nil
+}
+
 func newItemHandler() (*ItemHandler, *echo.Echo, *itemuc.Usecase) {
 	mock := &itemMock{
 		items:    make(map[int64]postgres.MasterItems),
@@ -314,6 +321,23 @@ func TestListPartners_Handler(t *testing.T) {
 	err := h.ListPartners(e.NewContext(req, rec))
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestListCategories_Handler_Success(t *testing.T) {
+	h, e, _ := newItemHandler()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/categories", nil)
+	rec := httptest.NewRecorder()
+
+	err := h.ListCategories(e.NewContext(req, rec))
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var resp response.Response
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.True(t, resp.Success)
+	cats, ok := resp.Data.([]any)
+	require.True(t, ok)
+	assert.Len(t, cats, 2)
 }
 
 
