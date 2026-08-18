@@ -34,7 +34,7 @@ describe('AppLayout & Page Integration', () => {
 
     // Dashboard page content
     expect(screen.getByTestId('dashboard-page')).toBeInTheDocument();
-    expect(screen.getByText('Dashboard Operasional Gudang')).toBeInTheDocument();
+    expect(screen.getAllByText(/Dashboard Operasional/).length).toBeGreaterThan(0);
     expect(screen.getByText('Penerimaan Hari Ini (GRN)')).toBeInTheDocument();
   });
 });

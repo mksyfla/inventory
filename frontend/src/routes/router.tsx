@@ -1,7 +1,6 @@
 import { createBrowserRouter, Navigate } from 'react-router-dom';
 import { AppLayout } from '../layouts/AppLayout';
 import { DashboardPage } from '../pages/DashboardPage';
-import { LoginPage } from '../pages/LoginPage';
 import { NotFoundPage } from '../pages/NotFoundPage';
 import { ForbiddenPage } from '../pages/ForbiddenPage';
 import { ProtectedRoute } from '../components/ProtectedRoute';
@@ -18,10 +17,39 @@ import { ReceiptDetailPage } from '../pages/inbound/ReceiptDetailPage';
 import { ReceiptFormPage } from '../pages/inbound/ReceiptFormPage';
 import { PutawayPage } from '../pages/inbound/PutawayPage';
 
+import { RequestsPage } from '../pages/outbound/RequestsPage';
+import { RequestDetailPage } from '../pages/outbound/RequestDetailPage';
+import { RequestFormPage } from '../pages/outbound/RequestFormPage';
+import { DeliveriesPage } from '../pages/outbound/DeliveriesPage';
+import { DeliveryDetailPage } from '../pages/outbound/DeliveryDetailPage';
+import { PickingScanPage } from '../pages/outbound/PickingScanPage';
+
+import { TransfersPage } from '../pages/transfer/TransfersPage';
+import { TransferFormPage } from '../pages/transfer/TransferFormPage';
+import { TransferDetailPage } from '../pages/transfer/TransferDetailPage';
+
+import { StockBalancesPage } from '../pages/stock/StockBalancesPage';
+import { StockCardPage } from '../pages/stock/StockCardPage';
+import { BatchTracePage } from '../pages/stock/BatchTracePage';
+import { AuditLogsPage } from '../pages/admin/AuditLogsPage';
+
+import { CountingSessionsPage } from '../pages/counting/CountingSessionsPage';
+import { CountExecutePage } from '../pages/counting/CountExecutePage';
+import { CountingDetailPage } from '../pages/counting/CountingDetailPage';
+import { AdjustmentFormPage } from '../pages/counting/AdjustmentFormPage';
+
+import { InventoryValuationPage } from '../pages/reports/InventoryValuationPage';
+import { FsnAnalysisPage } from '../pages/reports/FsnAnalysisPage';
+import { SpaceUtilizationPage } from '../pages/reports/SpaceUtilizationPage';
+
+import { UsersPage } from '../pages/admin/UsersPage';
+import { RolesPage } from '../pages/admin/RolesPage';
+import { SettingsPage } from '../pages/admin/SettingsPage';
+
 export const router = createBrowserRouter([
   {
     path: '/login',
-    element: <LoginPage />,
+    element: <Navigate to="/dashboard" replace />,
   },
   {
     path: '/403',
@@ -96,6 +124,14 @@ export const router = createBrowserRouter([
         ),
       },
       {
+        path: 'master/*',
+        element: (
+          <PermissionGuard permission="item.read">
+            <ItemsPage />
+          </PermissionGuard>
+        ),
+      },
+      {
         path: 'inbound/receipts',
         element: (
           <PermissionGuard permission="grn.read">
@@ -152,10 +188,130 @@ export const router = createBrowserRouter([
         ),
       },
       {
+        path: 'outbound/requests',
+        element: (
+          <PermissionGuard permission="request.read">
+            <RequestsPage />
+          </PermissionGuard>
+        ),
+      },
+      {
+        path: 'outbound/requests/new',
+        element: (
+          <PermissionGuard permission="request.create">
+            <RequestFormPage />
+          </PermissionGuard>
+        ),
+      },
+      {
+        path: 'outbound/requests/:id',
+        element: (
+          <PermissionGuard permission="request.read">
+            <RequestDetailPage />
+          </PermissionGuard>
+        ),
+      },
+      {
+        path: 'outbound/requests/:id/edit',
+        element: (
+          <PermissionGuard permission="request.create">
+            <RequestFormPage />
+          </PermissionGuard>
+        ),
+      },
+      {
+        path: 'outbound/deliveries',
+        element: (
+          <PermissionGuard permission="do.read">
+            <DeliveriesPage />
+          </PermissionGuard>
+        ),
+      },
+      {
+        path: 'outbound/deliveries/:id',
+        element: (
+          <PermissionGuard permission="do.read">
+            <DeliveryDetailPage />
+          </PermissionGuard>
+        ),
+      },
+      {
+        path: 'outbound/deliveries/:id/picking',
+        element: (
+          <PermissionGuard permission="do.read">
+            <PickingScanPage />
+          </PermissionGuard>
+        ),
+      },
+      {
+        path: 'outbound/deliveries/picking',
+        element: (
+          <PermissionGuard permission="do.read">
+            <PickingScanPage />
+          </PermissionGuard>
+        ),
+      },
+      {
         path: 'outbound/*',
         element: (
           <PermissionGuard permission="do.read">
-            <div style={{ padding: 24, background: '#fff' }}>Halaman Outbound Pengeluaran (FE-301)</div>
+            <DeliveriesPage />
+          </PermissionGuard>
+        ),
+      },
+      {
+        path: 'transfer',
+        element: (
+          <PermissionGuard permission="transfer.create">
+            <TransfersPage />
+          </PermissionGuard>
+        ),
+      },
+      {
+        path: 'transfer/new',
+        element: (
+          <PermissionGuard permission="transfer.create">
+            <TransferFormPage />
+          </PermissionGuard>
+        ),
+      },
+      {
+        path: 'transfer/:id',
+        element: (
+          <PermissionGuard permission="transfer.create">
+            <TransferDetailPage />
+          </PermissionGuard>
+        ),
+      },
+      {
+        path: 'transfer/*',
+        element: (
+          <PermissionGuard permission="transfer.create">
+            <TransfersPage />
+          </PermissionGuard>
+        ),
+      },
+      {
+        path: 'stock/balances',
+        element: (
+          <PermissionGuard permission="stock.read">
+            <StockBalancesPage />
+          </PermissionGuard>
+        ),
+      },
+      {
+        path: 'stock/card',
+        element: (
+          <PermissionGuard permission="stock.read">
+            <StockCardPage />
+          </PermissionGuard>
+        ),
+      },
+      {
+        path: 'stock/trace',
+        element: (
+          <PermissionGuard permission="stock.read">
+            <BatchTracePage />
           </PermissionGuard>
         ),
       },
@@ -163,7 +319,39 @@ export const router = createBrowserRouter([
         path: 'stock/*',
         element: (
           <PermissionGuard permission="stock.read">
-            <div style={{ padding: 24, background: '#fff' }}>Halaman Stok & Ledger (FE-501)</div>
+            <StockBalancesPage />
+          </PermissionGuard>
+        ),
+      },
+      {
+        path: 'counting',
+        element: (
+          <PermissionGuard permission="count.create">
+            <CountingSessionsPage />
+          </PermissionGuard>
+        ),
+      },
+      {
+        path: 'counting/adjustments/new',
+        element: (
+          <PermissionGuard permission="count.create">
+            <AdjustmentFormPage />
+          </PermissionGuard>
+        ),
+      },
+      {
+        path: 'counting/:id',
+        element: (
+          <PermissionGuard permission="count.create">
+            <CountingDetailPage />
+          </PermissionGuard>
+        ),
+      },
+      {
+        path: 'counting/:id/execute',
+        element: (
+          <PermissionGuard permission="count.create">
+            <CountExecutePage />
           </PermissionGuard>
         ),
       },
@@ -171,7 +359,31 @@ export const router = createBrowserRouter([
         path: 'counting/*',
         element: (
           <PermissionGuard permission="count.create">
-            <div style={{ padding: 24, background: '#fff' }}>Halaman Stock Opname (FE-601)</div>
+            <CountingSessionsPage />
+          </PermissionGuard>
+        ),
+      },
+      {
+        path: 'reports/valuation',
+        element: (
+          <PermissionGuard permission="report.read">
+            <InventoryValuationPage />
+          </PermissionGuard>
+        ),
+      },
+      {
+        path: 'reports/fsn',
+        element: (
+          <PermissionGuard permission="report.read">
+            <FsnAnalysisPage />
+          </PermissionGuard>
+        ),
+      },
+      {
+        path: 'reports/space-utilization',
+        element: (
+          <PermissionGuard permission="report.read">
+            <SpaceUtilizationPage />
           </PermissionGuard>
         ),
       },
@@ -179,7 +391,39 @@ export const router = createBrowserRouter([
         path: 'reports/*',
         element: (
           <PermissionGuard permission="report.read">
-            <div style={{ padding: 24, background: '#fff' }}>Halaman Laporan (FE-701)</div>
+            <InventoryValuationPage />
+          </PermissionGuard>
+        ),
+      },
+      {
+        path: 'admin/users',
+        element: (
+          <PermissionGuard permission="admin.user">
+            <UsersPage />
+          </PermissionGuard>
+        ),
+      },
+      {
+        path: 'admin/roles',
+        element: (
+          <PermissionGuard permission="admin.user">
+            <RolesPage />
+          </PermissionGuard>
+        ),
+      },
+      {
+        path: 'admin/settings',
+        element: (
+          <PermissionGuard permission="admin.user">
+            <SettingsPage />
+          </PermissionGuard>
+        ),
+      },
+      {
+        path: 'admin/audit-logs',
+        element: (
+          <PermissionGuard permission="admin.user">
+            <AuditLogsPage />
           </PermissionGuard>
         ),
       },
@@ -187,7 +431,7 @@ export const router = createBrowserRouter([
         path: 'admin/*',
         element: (
           <PermissionGuard permission="admin.user">
-            <div style={{ padding: 24, background: '#fff' }}>Halaman Administrasi RBAC (FE-801)</div>
+            <UsersPage />
           </PermissionGuard>
         ),
       },

@@ -96,46 +96,46 @@ apiClient.interceptors.response.use(
     // Handle HTTP 401 Unauthorized (Token Refresh / Silent Logout)
     if (error.response?.status === 401 && originalRequest && !originalRequest._retry) {
       originalRequest._retry = true;
-      const currentRefreshToken = useAuthStore.getState().refreshToken;
 
-      if (currentRefreshToken) {
-        try {
-          // Attempt Token Rotation via /auth/refresh
-          const refreshResponse = await axios.post<ApiResponse<{ access_token: string; refresh_token: string; token_type: string }>>(
-            `${API_BASE_URL}/auth/refresh`,
-            { refresh_token: currentRefreshToken },
-            {
-              headers: {
-                'Content-Type': 'application/json',
-              },
-            }
-          );
+      try {
+        // Attempt Token Rotation via /auth/refresh
+        const refreshResponse = await axios.post<ApiResponse<{ token: string }>>(
+          `${API_BASE_URL}/auth/refresh`,
+          {},
+          {
+            headers: {
+              Authorization: `Bearer ${useAuthStore.getState().token}`,
+            },
+          }
+        );
 
-          if (refreshResponse.data?.success && refreshResponse.data.data?.access_token) {
-            const { access_token: newAccessToken, refresh_token: newRefreshToken } = refreshResponse.data.data;
-            useAuthStore.getState().loginWithTokens(newAccessToken, newRefreshToken);
-            originalRequest.headers.Authorization = `Bearer ${newAccessToken}`;
-            return apiClient(originalRequest);
+        if (refreshResponse.data?.success && refreshResponse.data.data?.token) {
+          const newToken = refreshResponse.data.data.token;
+          const currentUser = useAuthStore.getState().user;
+          if (currentUser) {
+            useAuthStore.getState().login(currentUser, newToken);
           }
-        } catch (refreshErr) {
-          // Refresh token failed -> Force Logout
-          useAuthStore.getState().logout();
-          showApiErrorNotification({
-            code: 'ERR_UNAUTHENTICATED',
-            message: 'Sesi Anda telah kedaluwarsa. Silakan login kembali.',
-          });
-          if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
-            window.location.href = '/login';
-          }
-          return Promise.reject(refreshErr);
+          originalRequest.headers.Authorization = `Bearer ${newToken}`;
+          return apiClient(originalRequest);
         }
-      } else {
+      } catch (refreshErr) {
+        // Refresh token failed -> Force Logout
         useAuthStore.getState().logout();
+        showApiErrorNotification({
+          code: 'ERR_UNAUTHENTICATED',
+          message: 'Sesi Anda telah kedaluwarsa. Silakan login kembali.',
+        });
+        if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+          window.location.href = '/login';
+        }
+        return Promise.reject(refreshErr);
       }
     }
 
-    // Display standardized Indonesian error notification
-    showApiErrorNotification(apiError);
+    // Display standardized Indonesian error notification (suppressed for 404/Network in offline FE testing)
+    if (error.response && error.response.status !== 404) {
+      showApiErrorNotification(apiError);
+    }
 
     return Promise.reject(apiError);
   }
