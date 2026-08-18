@@ -1,12 +1,18 @@
 import React, { useState, useEffect } from 'react';
-import { Card, Input, Button, Typography, Alert, Checkbox, Space } from 'antd';
-import { UserOutlined, LockOutlined, SafetyOutlined, AuditOutlined } from '@ant-design/icons';
+import { Card, Input, Button, Typography, Alert, Checkbox, Space, Divider, Tag } from 'antd';
+import {
+  UserOutlined,
+  LockOutlined,
+  SafetyOutlined,
+  AuditOutlined,
+  ThunderboltOutlined,
+} from '@ant-design/icons';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuthStore } from '../store/useAuthStore';
-import { MOCK_CURRENT_USER } from '../types/user';
+import { MOCK_CURRENT_USER, MOCK_DEMO_USERS, User } from '../types/user';
 
 const { Title, Text } = Typography;
 
@@ -33,7 +39,7 @@ export const LoginPage: React.FC = () => {
   const targetPath = typeof rawFrom === 'string' ? rawFrom : rawFrom?.pathname;
   const destination = targetPath && targetPath !== '/login' ? targetPath : '/dashboard';
 
-  // If user is already authenticated, redirect straight to dashboard
+  // If user is already authenticated, redirect straight to destination / dashboard
   useEffect(() => {
     if (isAuthenticated) {
       navigate(destination, { replace: true });
@@ -43,6 +49,7 @@ export const LoginPage: React.FC = () => {
   const {
     control,
     handleSubmit,
+    setValue,
     formState: { errors },
   } = useForm<LoginFormValues>({
     resolver: zodResolver(loginSchema),
@@ -53,34 +60,38 @@ export const LoginPage: React.FC = () => {
     },
   });
 
-  const onSubmit = async (_values: LoginFormValues) => {
+  const performLogin = (userToLogin: User) => {
     setLoading(true);
     setErrorMsg(null);
 
-    /* 
-    ==========================================================================
-    KODE FUNGSIONAL ASLI INTERAKSI BACKEND API (TEMPORARILY COMMENTED FOR TESTING)
-    ==========================================================================
-    try {
-      // const response = await apiClient.post('/auth/login', {
-      //   username: _values.username,
-      //   password: _values.password,
-      //   mfaCode: _values.mfaCode,
-      // });
-      // login(response.data.user, response.data.accessToken, response.data.refreshToken);
-      // navigate(destination, { replace: true });
-    } catch {
-      setErrorMsg('Terjadi kesalahan pada server saat login.');
-    } finally {
+    setTimeout(() => {
+      login(userToLogin, 'mock-jwt-token-xyz-12345', 'mock-refresh-token-xyz-99999');
       setLoading(false);
-    }
-    ==========================================================================
-    */
+      navigate(destination, { replace: true });
+    }, 400);
+  };
 
-    // DEFAULT MOCK BACKEND VALUES FOR DIRECT FRONTEND TESTING
-    login(MOCK_CURRENT_USER, 'mock-jwt-token-xyz-12345', 'mock-refresh-token-xyz-99999');
-    navigate(destination, { replace: true });
-    setLoading(false);
+  const onSubmit = async (values: LoginFormValues) => {
+    // Find matching demo user by username keyword or fallback to default MOCK_CURRENT_USER
+    const lowerUser = values.username.toLowerCase();
+    let targetUser: User = MOCK_CURRENT_USER;
+
+    if (lowerUser.includes('inbound') || lowerUser.includes('budi')) {
+      targetUser = MOCK_DEMO_USERS.inbound;
+    } else if (lowerUser.includes('outbound') || lowerUser.includes('siti')) {
+      targetUser = MOCK_DEMO_USERS.outbound;
+    } else if (lowerUser.includes('supervisor') || lowerUser.includes('agus')) {
+      targetUser = MOCK_DEMO_USERS.supervisor;
+    }
+
+    performLogin(targetUser);
+  };
+
+  const handleQuickLogin = (roleKey: 'manager' | 'inbound' | 'outbound' | 'supervisor') => {
+    const demoUser = MOCK_DEMO_USERS[roleKey] || MOCK_CURRENT_USER;
+    setValue('username', demoUser.username);
+    setValue('password', 'password123');
+    performLogin(demoUser);
   };
 
   return (
@@ -98,20 +109,28 @@ export const LoginPage: React.FC = () => {
       <Card
         style={{
           width: '100%',
-          maxWidth: 420,
-          borderRadius: 12,
-          boxShadow: '0 12px 32px rgba(0, 0, 0, 0.25)',
+          maxWidth: 440,
+          borderRadius: 14,
+          boxShadow: '0 16px 40px rgba(0, 0, 0, 0.3)',
+          border: '1px solid rgba(255, 255, 255, 0.1)',
         }}
       >
-        <div style={{ textAlign: 'center', marginBottom: 24 }}>
-          <Space align="center" style={{ marginBottom: 8 }}>
-            <AuditOutlined style={{ fontSize: 36, color: '#0052cc' }} />
+        <div style={{ textAlign: 'center', marginBottom: 20 }}>
+          <Space align="center" style={{ marginBottom: 6 }}>
+            <AuditOutlined style={{ fontSize: 34, color: '#0052cc' }} />
             <Title level={2} style={{ margin: 0, fontWeight: 800, letterSpacing: 1 }}>
               SIMBAR
             </Title>
           </Space>
           <div>
-            <Text type="secondary">Sistem Manajemen Barang & Distribusi (PERURI)</Text>
+            <Text type="secondary" style={{ fontSize: 13 }}>
+              Sistem Manajemen Barang & Distribusi (PERURI)
+            </Text>
+          </div>
+          <div style={{ marginTop: 8 }}>
+            <Tag color="processing" style={{ borderRadius: 10, fontSize: 11, padding: '0 10px' }}>
+              Mode Demo Frontend (Mock Auth)
+            </Tag>
           </div>
         </div>
 
@@ -128,7 +147,9 @@ export const LoginPage: React.FC = () => {
         <form onSubmit={handleSubmit(onSubmit)} data-testid="login-form">
           {/* Username Field */}
           <div style={{ marginBottom: 16 }}>
-            <label style={{ display: 'block', marginBottom: 6, fontWeight: 500 }}>Username / Email</label>
+            <label style={{ display: 'block', marginBottom: 6, fontWeight: 500, fontSize: 13 }}>
+              Username / Email
+            </label>
             <Controller
               name="username"
               control={control}
@@ -152,7 +173,9 @@ export const LoginPage: React.FC = () => {
 
           {/* Password Field */}
           <div style={{ marginBottom: 16 }}>
-            <label style={{ display: 'block', marginBottom: 6, fontWeight: 500 }}>Kata Sandi</label>
+            <label style={{ display: 'block', marginBottom: 6, fontWeight: 500, fontSize: 13 }}>
+              Kata Sandi
+            </label>
             <Controller
               name="password"
               control={control}
@@ -177,7 +200,9 @@ export const LoginPage: React.FC = () => {
           {/* Optional MFA / 2FA TOTP Toggle */}
           {showMfa && (
             <div style={{ marginBottom: 16 }}>
-              <label style={{ display: 'block', marginBottom: 6, fontWeight: 500 }}>Kode 2FA / TOTP (6 Digit)</label>
+              <label style={{ display: 'block', marginBottom: 6, fontWeight: 500, fontSize: 13 }}>
+                Kode 2FA / TOTP (6 Digit)
+              </label>
               <Controller
                 name="mfaCode"
                 control={control}
@@ -195,7 +220,7 @@ export const LoginPage: React.FC = () => {
             </div>
           )}
 
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 24, alignItems: 'center' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 20, alignItems: 'center' }}>
             <Controller
               name="rememberMe"
               control={control}
@@ -217,11 +242,61 @@ export const LoginPage: React.FC = () => {
             block
             loading={loading}
             data-testid="btn-login-submit"
-            style={{ fontWeight: 600, height: 44 }}
+            style={{ fontWeight: 600, height: 44, marginBottom: 12 }}
           >
             Masuk Aplikasi
           </Button>
         </form>
+
+        <Divider style={{ margin: '16px 0 12px', fontSize: 12, color: 'rgba(0,0,0,0.45)' }}>
+          <ThunderboltOutlined style={{ marginRight: 4 }} /> Quick Login (Akun Demo)
+        </Divider>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+          <Button
+            size="small"
+            onClick={() => handleQuickLogin('manager')}
+            disabled={loading}
+            data-testid="btn-quick-login-manager"
+            style={{ textAlign: 'left', height: 'auto', padding: '6px 8px' }}
+          >
+            <div style={{ fontSize: 12, fontWeight: 600 }}>Manager / Admin</div>
+            <div style={{ fontSize: 10, color: 'rgba(0,0,0,0.45)' }}>Semua Hak Akses</div>
+          </Button>
+
+          <Button
+            size="small"
+            onClick={() => handleQuickLogin('supervisor')}
+            disabled={loading}
+            data-testid="btn-quick-login-supervisor"
+            style={{ textAlign: 'left', height: 'auto', padding: '6px 8px' }}
+          >
+            <div style={{ fontSize: 12, fontWeight: 600 }}>Supervisor</div>
+            <div style={{ fontSize: 10, color: 'rgba(0,0,0,0.45)' }}>Approval & Audit</div>
+          </Button>
+
+          <Button
+            size="small"
+            onClick={() => handleQuickLogin('inbound')}
+            disabled={loading}
+            data-testid="btn-quick-login-inbound"
+            style={{ textAlign: 'left', height: 'auto', padding: '6px 8px' }}
+          >
+            <div style={{ fontSize: 12, fontWeight: 600 }}>Staf Inbound</div>
+            <div style={{ fontSize: 10, color: 'rgba(0,0,0,0.45)' }}>GRN & Putaway</div>
+          </Button>
+
+          <Button
+            size="small"
+            onClick={() => handleQuickLogin('outbound')}
+            disabled={loading}
+            data-testid="btn-quick-login-outbound"
+            style={{ textAlign: 'left', height: 'auto', padding: '6px 8px' }}
+          >
+            <div style={{ fontSize: 12, fontWeight: 600 }}>Staf Outbound</div>
+            <div style={{ fontSize: 10, color: 'rgba(0,0,0,0.45)' }}>DO, Picking & POD</div>
+          </Button>
+        </div>
       </Card>
     </div>
   );

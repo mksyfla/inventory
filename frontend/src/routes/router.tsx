@@ -1,4 +1,5 @@
 import { createBrowserRouter, Navigate } from 'react-router-dom';
+import { LoginPage } from '../pages/LoginPage';
 import { AppLayout } from '../layouts/AppLayout';
 import { DashboardPage } from '../pages/DashboardPage';
 import { NotFoundPage } from '../pages/NotFoundPage';
@@ -49,7 +50,7 @@ import { SettingsPage } from '../pages/admin/SettingsPage';
 export const router = createBrowserRouter([
   {
     path: '/login',
-    element: <Navigate to="/dashboard" replace />,
+    element: <LoginPage />,
   },
   {
     path: '/403',

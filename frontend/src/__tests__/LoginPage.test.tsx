@@ -48,4 +48,26 @@ describe('LoginPage Component', () => {
       expect(useAuthStore.getState().user?.username).toBe('dipo.inventory');
     });
   });
+
+  it('supports quick login with demo role buttons', async () => {
+    await act(async () => {
+      render(
+        <MemoryRouter>
+          <LoginPage />
+        </MemoryRouter>
+      );
+    });
+
+    const inboundBtn = screen.getByTestId('btn-quick-login-inbound');
+
+    await act(async () => {
+      fireEvent.click(inboundBtn);
+    });
+
+    await waitFor(() => {
+      expect(useAuthStore.getState().isAuthenticated).toBe(true);
+      expect(useAuthStore.getState().user?.username).toBe('budi.inbound');
+    });
+  });
 });
+

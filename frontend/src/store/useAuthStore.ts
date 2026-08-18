@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { User, UserRole, PermissionCode, MOCK_CURRENT_USER } from '../types/user';
+import { User, UserRole, PermissionCode } from '../types/user';
 
 interface AuthState {
   user: User | null;
@@ -12,27 +12,64 @@ interface AuthState {
   hasRole: (role: UserRole) => boolean;
 }
 
-export const useAuthStore = create<AuthState>((set, get) => ({
-  user: MOCK_CURRENT_USER,
-  token: 'mock-jwt-token-xyz-12345',
-  refreshToken: 'mock-refresh-token-xyz-99999',
-  isAuthenticated: true,
+const getStoredAuth = () => {
+  try {
+    const storedUser = localStorage.getItem('simbar_auth_user');
+    const storedToken = localStorage.getItem('simbar_auth_token');
+    if (storedUser && storedToken) {
+      return {
+        user: JSON.parse(storedUser) as User,
+        token: storedToken,
+        isAuthenticated: true,
+      };
+    }
+  } catch {
+    // Ignore storage errors
+  }
+  return {
+    user: null,
+    token: null,
+    isAuthenticated: false,
+  };
+};
 
-  login: (user, token, refreshToken = 'mock-refresh-token-xyz-99999') =>
+const initialAuth = getStoredAuth();
+
+export const useAuthStore = create<AuthState>((set, get) => ({
+  user: initialAuth.user,
+  token: initialAuth.token,
+  refreshToken: initialAuth.token ? 'mock-refresh-token-xyz-99999' : null,
+  isAuthenticated: initialAuth.isAuthenticated,
+
+  login: (user, token, refreshToken = 'mock-refresh-token-xyz-99999') => {
+    try {
+      localStorage.setItem('simbar_auth_user', JSON.stringify(user));
+      localStorage.setItem('simbar_auth_token', token);
+    } catch {
+      // Ignore storage errors
+    }
     set({
       user,
       token,
       refreshToken,
       isAuthenticated: true,
-    }),
+    });
+  },
 
-  logout: () =>
+  logout: () => {
+    try {
+      localStorage.removeItem('simbar_auth_user');
+      localStorage.removeItem('simbar_auth_token');
+    } catch {
+      // Ignore storage errors
+    }
     set({
       user: null,
       token: null,
       refreshToken: null,
       isAuthenticated: false,
-    }),
+    });
+  },
 
   hasPermission: (permission: PermissionCode) => {
     const user = get().user;
