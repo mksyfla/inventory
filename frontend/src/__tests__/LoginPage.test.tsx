@@ -83,4 +83,6 @@ describe('LoginPage Component', () => {
       expect(useAuthStore.getState().user?.username).toBe('dipo.inventory');
     });
   });
+
 });
+

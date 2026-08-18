@@ -73,6 +73,13 @@ export const MOCK_WAREHOUSES: Warehouse[] = [
   { id: 3, code: 'WH-KRW01', name: 'Gudang Karawang Plant 2', address: 'Kawasan Industri Peruri, Karawang', isActive: true },
 ];
 
+export const MOCK_LOCATIONS = [
+  { id: 1001, code: 'JKT01-Z1-R01-B01', name: 'Bin A1-01 (Tinta Intaglio)', type: 'bin' },
+  { id: 1002, code: 'JKT01-Z1-R01-B02', name: 'Bin A1-02 (Tinta Offset)', type: 'bin' },
+  { id: 1003, code: 'SBY01-Z1-R01-B01', name: 'Bin B1-01 Gudang Surabaya', type: 'bin' },
+  { id: 1004, code: 'KRW01-Z1-R01-B02', name: 'Bin K1-02 Gudang Karawang', type: 'bin' },
+];
+
 export const MOCK_LOCATIONS_TREE: LocationNode[] = [
   {
     id: 10,
