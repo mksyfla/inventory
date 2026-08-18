@@ -153,7 +153,7 @@ Skema dipisah per domain: `master`, `inv`, `doc`, `sec`, `aud`.
 
 ```sql
 -- ============ MASTER ============
-CREATE TABLE master.items (
+CREATE TABLE IF NOT EXISTS master.items (
     id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     public_id     UUID NOT NULL DEFAULT gen_random_uuid() UNIQUE,
     sku           VARCHAR(50)  NOT NULL UNIQUE,
@@ -178,7 +178,7 @@ CREATE TABLE master.items (
 );
 CREATE INDEX idx_items_name_trgm ON master.items USING gin (name gin_trgm_ops);
 
-CREATE TABLE master.item_uoms (
+CREATE TABLE IF NOT EXISTS master.item_uoms (
     id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     item_id       BIGINT NOT NULL REFERENCES master.items(id),
     uom           VARCHAR(20) NOT NULL,
@@ -188,7 +188,7 @@ CREATE TABLE master.item_uoms (
     UNIQUE (barcode)
 );
 
-CREATE TABLE master.warehouses (
+CREATE TABLE IF NOT EXISTS master.warehouses (
     id        BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     code      VARCHAR(20) NOT NULL UNIQUE,
     name      VARCHAR(150) NOT NULL,
@@ -198,7 +198,7 @@ CREATE TABLE master.warehouses (
 
 CREATE TYPE inv.location_type AS ENUM ('staging','pick','bulk','quarantine','damaged','transit');
 
-CREATE TABLE master.locations (
+CREATE TABLE IF NOT EXISTS master.locations (
     id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     warehouse_id BIGINT NOT NULL REFERENCES master.warehouses(id),
     code         VARCHAR(30) NOT NULL,          -- contoh: A-01-03-B
@@ -212,7 +212,7 @@ CREATE TABLE master.locations (
     UNIQUE (warehouse_id, code)
 );
 
-CREATE TABLE master.batches (
+CREATE TABLE IF NOT EXISTS master.batches (
     id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     item_id     BIGINT NOT NULL REFERENCES master.items(id),
     batch_no    VARCHAR(60) NOT NULL,
@@ -222,7 +222,7 @@ CREATE TABLE master.batches (
 );
 CREATE INDEX idx_batches_expiry ON master.batches (item_id, expiry_date);
 
-CREATE TABLE master.partners (
+CREATE TABLE IF NOT EXISTS master.partners (
     id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     code         VARCHAR(30) NOT NULL UNIQUE,
     partner_type VARCHAR(20) NOT NULL CHECK (partner_type IN ('supplier','customer','internal_unit')),
@@ -236,7 +236,7 @@ CREATE TABLE master.partners (
 -- ============ INVENTORY ============
 CREATE TYPE inv.stock_status AS ENUM ('available','quarantine','damaged','expired','in_transit');
 
-CREATE TABLE inv.stock_balances (
+CREATE TABLE IF NOT EXISTS inv.stock_balances (
     id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     item_id      BIGINT NOT NULL REFERENCES master.items(id),
     location_id  BIGINT NOT NULL REFERENCES master.locations(id),
@@ -257,7 +257,7 @@ CREATE INDEX idx_balance_item_status ON inv.stock_balances (item_id, status)
 CREATE TYPE inv.movement_type AS ENUM
   ('receipt','issue','transfer_out','transfer_in','adjustment','putaway','internal_move','return_in','return_out','opening');
 
-CREATE TABLE inv.stock_movements (
+CREATE TABLE IF NOT EXISTS inv.stock_movements (
     id            BIGINT GENERATED ALWAYS AS IDENTITY,
     moved_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     item_id       BIGINT NOT NULL REFERENCES master.items(id),
@@ -286,7 +286,7 @@ REVOKE UPDATE, DELETE ON inv.stock_movements FROM app_user;
 CREATE TYPE doc.doc_type   AS ENUM ('GRN','DO','TRF','ADJ','RTN_IN','RTN_OUT','CNT','OPN','REQ');
 CREATE TYPE doc.doc_status AS ENUM ('draft','submitted','approved','in_progress','completed','cancelled');
 
-CREATE TABLE doc.documents (
+CREATE TABLE IF NOT EXISTS doc.documents (
     id             BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     public_id      UUID NOT NULL DEFAULT gen_random_uuid() UNIQUE,
     doc_no         VARCHAR(40) NOT NULL UNIQUE,          -- BR-04
@@ -310,7 +310,7 @@ CREATE TABLE doc.documents (
 );
 CREATE INDEX idx_doc_type_status ON doc.documents (doc_type, status, doc_date DESC);
 
-CREATE TABLE doc.document_lines (
+CREATE TABLE IF NOT EXISTS doc.document_lines (
     id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     document_id   BIGINT NOT NULL REFERENCES doc.documents(id) ON DELETE CASCADE,
     line_no       SMALLINT NOT NULL,
@@ -326,7 +326,7 @@ CREATE TABLE doc.document_lines (
     UNIQUE (document_id, line_no)
 );
 
-CREATE TABLE doc.allocations (               -- FR-4.2, BR-07
+CREATE TABLE IF NOT EXISTS doc.allocations (               -- FR-4.2, BR-07
     id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     doc_line_id   BIGINT NOT NULL REFERENCES doc.document_lines(id) ON DELETE CASCADE,
     balance_id    BIGINT NOT NULL REFERENCES inv.stock_balances(id),
@@ -335,14 +335,14 @@ CREATE TABLE doc.allocations (               -- FR-4.2, BR-07
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE TABLE doc.document_numbers (          -- generator nomor per tipe per periode
+CREATE TABLE IF NOT EXISTS doc.document_numbers (          -- generator nomor per tipe per periode
     doc_type   doc.doc_type NOT NULL,
     period     CHAR(6) NOT NULL,             -- YYYYMM
     last_seq   INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (doc_type, period)
 );
 
-CREATE TABLE doc.deliveries (                -- pelengkap DO
+CREATE TABLE IF NOT EXISTS doc.deliveries (                -- pelengkap DO
     document_id     BIGINT PRIMARY KEY REFERENCES doc.documents(id),
     vehicle_no      VARCHAR(20),
     driver_name     VARCHAR(100),
@@ -353,7 +353,7 @@ CREATE TABLE doc.deliveries (                -- pelengkap DO
     signature_url   TEXT
 );
 
-CREATE TABLE doc.count_lines (               -- FR-6.x
+CREATE TABLE IF NOT EXISTS doc.count_lines (               -- FR-6.x
     id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     document_id   BIGINT NOT NULL REFERENCES doc.documents(id),
     item_id       BIGINT NOT NULL REFERENCES master.items(id),
@@ -368,7 +368,7 @@ CREATE TABLE doc.count_lines (               -- FR-6.x
 );
 
 -- ============ SECURITY & AUDIT ============
-CREATE TABLE sec.users (
+CREATE TABLE IF NOT EXISTS sec.users (
     id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     username      VARCHAR(50) NOT NULL UNIQUE,
     email         VARCHAR(150) UNIQUE,
@@ -378,12 +378,12 @@ CREATE TABLE sec.users (
     mfa_secret    TEXT,
     last_login_at TIMESTAMPTZ
 );
-CREATE TABLE sec.roles (id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, code VARCHAR(40) UNIQUE, name VARCHAR(100));
-CREATE TABLE sec.permissions (id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, code VARCHAR(60) UNIQUE); -- contoh: grn.approve
-CREATE TABLE sec.role_permissions (role_id BIGINT, permission_id BIGINT, PRIMARY KEY (role_id, permission_id));
-CREATE TABLE sec.user_roles (user_id BIGINT, role_id BIGINT, warehouse_id BIGINT, PRIMARY KEY (user_id, role_id, warehouse_id));
+CREATE TABLE IF NOT EXISTS sec.roles (id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, code VARCHAR(40) UNIQUE, name VARCHAR(100));
+CREATE TABLE IF NOT EXISTS sec.permissions (id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, code VARCHAR(60) UNIQUE); -- contoh: grn.approve
+CREATE TABLE IF NOT EXISTS sec.role_permissions (role_id BIGINT, permission_id BIGINT, PRIMARY KEY (role_id, permission_id));
+CREATE TABLE IF NOT EXISTS sec.user_roles (user_id BIGINT, role_id BIGINT, warehouse_id BIGINT, PRIMARY KEY (user_id, role_id, warehouse_id));
 
-CREATE TABLE aud.audit_logs (
+CREATE TABLE IF NOT EXISTS aud.audit_logs (
     id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     occurred_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     user_id     BIGINT,
