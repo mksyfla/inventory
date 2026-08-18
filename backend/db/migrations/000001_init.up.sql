@@ -30,7 +30,7 @@ BEGIN
 END
 $$;
 
--- ============ CREATE TABLES ============
+-- ============ CREATE TABLE IF NOT EXISTSS ============
 
 -- 1. master.categories
 CREATE TABLE IF NOT EXISTS master.categories (

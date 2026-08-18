@@ -16,8 +16,8 @@ type AdjustmentLineInput struct {
 	ItemID     int64
 	LocationID int64
 	BatchID    *int64
-	Qty        float64  // bertanda: (+) menambah saldo, (-) mengurangi saldo
-	Status     string   // available | damaged | quarantine (default available)
+	Qty        float64 // bertanda: (+) menambah saldo, (-) mengurangi saldo
+	Status     string  // available | damaged | quarantine (default available)
 	ReasonCode string
 }
 
