@@ -1,6 +1,7 @@
 package http
 
 import (
+	"log/slog"
 	"net/http"
 
 	"inventory/internal/delivery/http/handler"
@@ -42,6 +43,9 @@ type RouterConfig struct {
 	// Observability (FSD 10.5) — all optional; omitted in unit tests.
 	Metrics        *metrics.Metrics
 	HealthCheckers []HealthChecker
+
+	// Logger untuk access log (satu baris per request). Nil → slog.Default().
+	Logger *slog.Logger
 }
 
 // NewRouter initializes an Echo instance, registers global middlewares, and configures route mapping.
@@ -57,6 +61,15 @@ func NewRouter(cfg ...RouterConfig) *echo.Echo {
 	// Register global middlewares
 	e.Use(echoMiddleware.Recover())
 	e.Use(middleware.RequestID())
+
+	// Access log: satu baris per request (status, durasi, bytes, remote IP).
+	// request_id/user_id ditambahkan otomatis dari ctx oleh ContextHandler.
+	var accessLog *slog.Logger
+	if len(cfg) > 0 {
+		accessLog = cfg[0].Logger
+	}
+	e.Use(middleware.AccessLog(accessLog))
+
 	if len(cfg) > 0 {
 		e.Use(middleware.SecurityHeaders(cfg[0].AppEnv))
 	} else {

@@ -33,7 +33,7 @@ $$;
 -- ============ CREATE TABLES ============
 
 -- 1. master.categories
-CREATE TABLE master.categories (
+CREATE TABLE IF NOT EXISTS master.categories (
     id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     code        VARCHAR(50) NOT NULL UNIQUE,
     name        VARCHAR(100) NOT NULL,
@@ -41,7 +41,7 @@ CREATE TABLE master.categories (
 );
 
 -- 2. master.items
-CREATE TABLE master.items (
+CREATE TABLE IF NOT EXISTS master.items (
     id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     public_id     UUID NOT NULL DEFAULT gen_random_uuid() UNIQUE,
     sku           VARCHAR(50)  NOT NULL UNIQUE,
@@ -67,7 +67,7 @@ CREATE TABLE master.items (
 CREATE INDEX idx_items_name_trgm ON master.items USING gin (name gin_trgm_ops);
 
 -- 3. master.item_uoms
-CREATE TABLE master.item_uoms (
+CREATE TABLE IF NOT EXISTS master.item_uoms (
     id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     item_id       BIGINT NOT NULL REFERENCES master.items(id),
     uom           VARCHAR(20) NOT NULL,
@@ -78,7 +78,7 @@ CREATE TABLE master.item_uoms (
 );
 
 -- 4. master.warehouses
-CREATE TABLE master.warehouses (
+CREATE TABLE IF NOT EXISTS master.warehouses (
     id        BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     code      VARCHAR(20) NOT NULL UNIQUE,
     name      VARCHAR(150) NOT NULL,
@@ -87,7 +87,7 @@ CREATE TABLE master.warehouses (
 );
 
 -- 5. master.locations
-CREATE TABLE master.locations (
+CREATE TABLE IF NOT EXISTS master.locations (
     id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     warehouse_id BIGINT NOT NULL REFERENCES master.warehouses(id),
     code         VARCHAR(30) NOT NULL,
@@ -102,7 +102,7 @@ CREATE TABLE master.locations (
 );
 
 -- 6. master.batches
-CREATE TABLE master.batches (
+CREATE TABLE IF NOT EXISTS master.batches (
     id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     item_id     BIGINT NOT NULL REFERENCES master.items(id),
     batch_no    VARCHAR(60) NOT NULL,
@@ -113,7 +113,7 @@ CREATE TABLE master.batches (
 CREATE INDEX idx_batches_expiry ON master.batches (item_id, expiry_date);
 
 -- 7. master.partners
-CREATE TABLE master.partners (
+CREATE TABLE IF NOT EXISTS master.partners (
     id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     code         VARCHAR(30) NOT NULL UNIQUE,
     partner_type VARCHAR(20) NOT NULL CHECK (partner_type IN ('supplier','customer','internal_unit')),
@@ -125,7 +125,7 @@ CREATE TABLE master.partners (
 );
 
 -- 8. inv.stock_balances
-CREATE TABLE inv.stock_balances (
+CREATE TABLE IF NOT EXISTS inv.stock_balances (
     id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     item_id      BIGINT NOT NULL REFERENCES master.items(id),
     location_id  BIGINT NOT NULL REFERENCES master.locations(id),
@@ -141,7 +141,7 @@ CREATE UNIQUE INDEX uq_balance_key ON inv.stock_balances (item_id, location_id, 
 CREATE INDEX idx_balance_item_status ON inv.stock_balances (item_id, status) WHERE qty_onhand > 0;
 
 -- 9. doc.documents
-CREATE TABLE doc.documents (
+CREATE TABLE IF NOT EXISTS doc.documents (
     id             BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     public_id      UUID NOT NULL DEFAULT gen_random_uuid() UNIQUE,
     doc_no         VARCHAR(40) NOT NULL UNIQUE,
@@ -166,7 +166,7 @@ CREATE TABLE doc.documents (
 CREATE INDEX idx_doc_type_status ON doc.documents (doc_type, status, doc_date DESC);
 
 -- 10. doc.document_lines
-CREATE TABLE doc.document_lines (
+CREATE TABLE IF NOT EXISTS doc.document_lines (
     id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     document_id   BIGINT NOT NULL REFERENCES doc.documents(id) ON DELETE CASCADE,
     line_no       SMALLINT NOT NULL,
@@ -183,7 +183,7 @@ CREATE TABLE doc.document_lines (
 );
 
 -- 11. inv.stock_movements
-CREATE TABLE inv.stock_movements (
+CREATE TABLE IF NOT EXISTS inv.stock_movements (
     id            BIGINT GENERATED ALWAYS AS IDENTITY,
     moved_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     item_id       BIGINT NOT NULL REFERENCES master.items(id),
@@ -203,7 +203,7 @@ CREATE INDEX idx_mov_item_time ON inv.stock_movements (item_id, moved_at DESC);
 CREATE INDEX idx_mov_doc ON inv.stock_movements (doc_line_id);
 
 -- Enforce partitioned table default partition to handle insertions cleanly
-CREATE TABLE inv.stock_movements_default PARTITION OF inv.stock_movements DEFAULT;
+CREATE TABLE IF NOT EXISTS inv.stock_movements_default PARTITION OF inv.stock_movements DEFAULT;
 
 -- Enforce append-only rules
 CREATE RULE no_update_movements AS ON UPDATE TO inv.stock_movements DO INSTEAD NOTHING;
@@ -218,7 +218,7 @@ END
 $$;
 
 -- 12. doc.allocations
-CREATE TABLE doc.allocations (
+CREATE TABLE IF NOT EXISTS doc.allocations (
     id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     doc_line_id   BIGINT NOT NULL REFERENCES doc.document_lines(id) ON DELETE CASCADE,
     balance_id    BIGINT NOT NULL REFERENCES inv.stock_balances(id),
@@ -228,7 +228,7 @@ CREATE TABLE doc.allocations (
 );
 
 -- 13. doc.document_numbers
-CREATE TABLE doc.document_numbers (
+CREATE TABLE IF NOT EXISTS doc.document_numbers (
     doc_type   doc.doc_type NOT NULL,
     period     CHAR(6) NOT NULL,
     last_seq   INTEGER NOT NULL DEFAULT 0,
@@ -236,7 +236,7 @@ CREATE TABLE doc.document_numbers (
 );
 
 -- 14. doc.deliveries
-CREATE TABLE doc.deliveries (
+CREATE TABLE IF NOT EXISTS doc.deliveries (
     document_id     BIGINT PRIMARY KEY REFERENCES doc.documents(id),
     vehicle_no      VARCHAR(20),
     driver_name     VARCHAR(100),
@@ -248,7 +248,7 @@ CREATE TABLE doc.deliveries (
 );
 
 -- 15. doc.count_lines
-CREATE TABLE doc.count_lines (
+CREATE TABLE IF NOT EXISTS doc.count_lines (
     id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     document_id   BIGINT NOT NULL REFERENCES doc.documents(id),
     item_id       BIGINT NOT NULL REFERENCES master.items(id),
@@ -263,7 +263,7 @@ CREATE TABLE doc.count_lines (
 );
 
 -- 16. sec.users
-CREATE TABLE sec.users (
+CREATE TABLE IF NOT EXISTS sec.users (
     id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     username      VARCHAR(50) NOT NULL UNIQUE,
     email         VARCHAR(150) UNIQUE,
@@ -275,27 +275,27 @@ CREATE TABLE sec.users (
 );
 
 -- 17. sec.roles
-CREATE TABLE sec.roles (
+CREATE TABLE IF NOT EXISTS sec.roles (
     id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     code          VARCHAR(40) UNIQUE,
     name          VARCHAR(100)
 );
 
 -- 18. sec.permissions
-CREATE TABLE sec.permissions (
+CREATE TABLE IF NOT EXISTS sec.permissions (
     id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     code          VARCHAR(60) UNIQUE
 );
 
 -- 19. sec.role_permissions
-CREATE TABLE sec.role_permissions (
+CREATE TABLE IF NOT EXISTS sec.role_permissions (
     role_id       BIGINT REFERENCES sec.roles(id) ON DELETE CASCADE,
     permission_id BIGINT REFERENCES sec.permissions(id) ON DELETE CASCADE,
     PRIMARY KEY (role_id, permission_id)
 );
 
 -- 20. sec.user_roles
-CREATE TABLE sec.user_roles (
+CREATE TABLE IF NOT EXISTS sec.user_roles (
     user_id       BIGINT REFERENCES sec.users(id) ON DELETE CASCADE,
     role_id       BIGINT REFERENCES sec.roles(id) ON DELETE CASCADE,
     warehouse_id  BIGINT REFERENCES master.warehouses(id) ON DELETE CASCADE,
@@ -303,7 +303,7 @@ CREATE TABLE sec.user_roles (
 );
 
 -- 21. aud.audit_logs
-CREATE TABLE aud.audit_logs (
+CREATE TABLE IF NOT EXISTS aud.audit_logs (
     id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     occurred_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     user_id     BIGINT,
