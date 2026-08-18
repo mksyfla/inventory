@@ -29,7 +29,9 @@ export const ItemFormPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const isEditMode = Boolean(id && id !== 'new');
 
-  const existingItem = isEditMode ? MOCK_ITEMS.find((i) => i.id === Number(id)) : null;
+  const existingItem = isEditMode
+    ? MOCK_ITEMS.find((i) => i.id === Number(id) || String(i.id) === String(id)) || MOCK_ITEMS[0]
+    : null;
 
   const {
     control,

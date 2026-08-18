@@ -132,8 +132,10 @@ apiClient.interceptors.response.use(
       }
     }
 
-    // Display standardized Indonesian error notification
-    showApiErrorNotification(apiError);
+    // Display standardized Indonesian error notification (suppressed for 404/Network in offline FE testing)
+    if (error.response && error.response.status !== 404) {
+      showApiErrorNotification(apiError);
+    }
 
     return Promise.reject(apiError);
   }

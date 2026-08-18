@@ -1,9 +1,20 @@
 import { render, screen, fireEvent, act } from '@testing-library/react';
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { HeaderBar } from '../components/HeaderBar';
 import { useWarehouseStore } from '../store/useWarehouseStore';
+import { useAuthStore } from '../store/useAuthStore';
+import { MOCK_CURRENT_USER } from '../types/user';
 
 describe('HeaderBar Component', () => {
+  beforeEach(() => {
+    useAuthStore.setState({
+      user: MOCK_CURRENT_USER,
+      token: 'mock-jwt-token-xyz-12345',
+      refreshToken: 'mock-refresh-token-xyz-99999',
+      isAuthenticated: true,
+    });
+  });
+
   it('renders correctly with active warehouse and user information', () => {
     const handleToggle = vi.fn();
     render(<HeaderBar collapsed={false} onToggleCollapse={handleToggle} />);
