@@ -7,7 +7,7 @@
 --                                    tinggi (M6.4: Supervisor -> Inventory Manager).
 
 -- 1. Tabel catatan penerimaan transfer (FR-5.1)
-CREATE TABLE doc.transfer_receipts (
+CREATE TABLE IF NOT EXISTS doc.transfer_receipts (
     id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     document_id   BIGINT NOT NULL REFERENCES doc.documents(id),
     line_id       BIGINT NOT NULL REFERENCES doc.document_lines(id),

@@ -290,6 +290,7 @@ func main() {
 			{Name: "postgres", Check: pool.Ping},
 			{Name: "redis", Check: store.Ping},
 		},
+		Logger: log,
 	})
 
 	// 10. Start HTTP Server with hardened timeouts and header limits
