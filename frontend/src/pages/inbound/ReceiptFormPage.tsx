@@ -44,7 +44,9 @@ export const ReceiptFormPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const isEditMode = Boolean(id && id !== 'new');
 
-  const existingGrn = isEditMode ? MOCK_GRN_LIST.find((g) => g.id === Number(id)) : null;
+  const existingGrn = isEditMode
+    ? MOCK_GRN_LIST.find((r) => r.id === Number(id) || String(r.id) === String(id)) || MOCK_GRN_LIST[0]
+    : null;
 
   const {
     control,

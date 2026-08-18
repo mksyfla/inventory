@@ -5,6 +5,8 @@ import { Outlet } from 'react-router-dom';
 import { SidebarMenu } from '../components/SidebarMenu';
 import { HeaderBar } from '../components/HeaderBar';
 import { BreadcrumbNav } from '../components/BreadcrumbNav';
+import { ErrorBoundary } from '../components/common/ErrorBoundary';
+import { OfflineSyncBanner } from '../components/common/OfflineSyncBanner';
 import { simbarTheme } from '../utils/theme';
 
 const { Content, Footer } = Layout;
@@ -19,43 +21,46 @@ export const AppLayout: React.FC = () => {
 
   return (
     <ConfigProvider locale={idID} theme={simbarTheme}>
-      <Layout style={{ minHeight: '100vh' }} data-testid="app-layout">
-        {/* Fixed Collapsible Sider */}
-        <SidebarMenu collapsed={collapsed} />
+      <ErrorBoundary>
+        <Layout style={{ minHeight: '100vh' }} data-testid="app-layout">
+          {/* Fixed Collapsible Sider */}
+          <SidebarMenu collapsed={collapsed} />
 
-        {/* Main Content Layout Container */}
-        <Layout
-          style={{
-            marginLeft: collapsed ? 80 : 250,
-            transition: 'margin-left 0.2s',
-            background: '#f5f7fa',
-          }}
-        >
-          {/* Top Header */}
-          <HeaderBar collapsed={collapsed} onToggleCollapse={toggleCollapse} />
+          {/* Main Content Layout Container */}
+          <Layout
+            style={{
+              marginLeft: collapsed ? 80 : 250,
+              transition: 'margin-left 0.2s',
+              background: '#f5f7fa',
+            }}
+          >
+            {/* Top Header */}
+            <HeaderBar collapsed={collapsed} onToggleCollapse={toggleCollapse} />
 
-          {/* Body Content Area */}
-          <Content style={{ padding: '0 24px 24px 24px' }}>
-            <BreadcrumbNav />
-            <div
-              style={{
-                marginTop: 16,
-                minHeight: 360,
-              }}
-              data-testid="main-content-area"
-            >
-              <Outlet />
-            </div>
-          </Content>
+            {/* Body Content Area */}
+            <Content style={{ padding: '0 24px 24px 24px' }}>
+              <BreadcrumbNav />
+              <OfflineSyncBanner />
+              <div
+                style={{
+                  marginTop: 16,
+                  minHeight: 360,
+                }}
+                data-testid="main-content-area"
+              >
+                <Outlet />
+              </div>
+            </Content>
 
-          {/* Footer */}
-          <Footer style={{ textAlign: 'center', background: '#f5f7fa', padding: '16px 24px' }}>
-            <Text type="secondary" style={{ fontSize: 13 }}>
-              SIMBAR — Sistem Manajemen Barang & Distribusi ©2026 PT Perusahaan Umum Percetakan Uang Republik Indonesia
-            </Text>
-          </Footer>
+            {/* Footer */}
+            <Footer style={{ textAlign: 'center', background: '#f5f7fa', padding: '16px 24px' }}>
+              <Text type="secondary" style={{ fontSize: 13 }}>
+                SIMBAR — Sistem Manajemen Barang & Distribusi ©2026 PT Perusahaan Umum Percetakan Uang Republik Indonesia
+              </Text>
+            </Footer>
+          </Layout>
         </Layout>
-      </Layout>
+      </ErrorBoundary>
     </ConfigProvider>
   );
 };

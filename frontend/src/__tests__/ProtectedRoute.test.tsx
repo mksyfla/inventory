@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { RouterProvider, createMemoryRouter } from 'react-router-dom';
 import { ProtectedRoute } from '../components/ProtectedRoute';
 import { useAuthStore } from '../store/useAuthStore';
+import { MOCK_CURRENT_USER } from '../types/user';
 
 describe('ProtectedRoute Component', () => {
   beforeEach(() => {
@@ -13,7 +14,7 @@ describe('ProtectedRoute Component', () => {
     });
   });
 
-  it('redirects to /login when user is unauthenticated', () => {
+  it('redirects unauthenticated user to /login', () => {
     const router = createMemoryRouter(
       [
         {
@@ -41,16 +42,8 @@ describe('ProtectedRoute Component', () => {
   it('renders protected content when user is authenticated', () => {
     useAuthStore.setState({
       isAuthenticated: true,
-      user: {
-        id: 1,
-        username: 'test.user',
-        fullName: 'Test User',
-        email: 'test@peruri.co.id',
-        roles: ['manager'],
-        permissions: ['dashboard.read'],
-        assignedWarehouseIds: [1],
-      },
-      token: 'jwt-token',
+      user: MOCK_CURRENT_USER,
+      token: 'mock-token',
     });
 
     const router = createMemoryRouter(
@@ -72,3 +65,4 @@ describe('ProtectedRoute Component', () => {
     expect(screen.getByTestId('dashboard-screen')).toBeInTheDocument();
   });
 });
+
