@@ -68,4 +68,26 @@ describe('ApiClient Interceptors & Headers', () => {
 
     expect(config.headers['Idempotency-Key']).toBe(customKey);
   });
+
+  it('rejects response if envelope contains success: false', async () => {
+    const handlers = (apiClient.interceptors.response as any).handlers;
+    const responseHandler = handlers[0]?.fulfilled;
+
+    const mockResponse = {
+      data: {
+        success: false,
+        data: null,
+        error: {
+          code: 'ERR_STOCK_INSUFFICIENT',
+          message: 'Stok tidak mencukupi',
+        },
+      },
+    };
+
+    await expect(responseHandler(mockResponse)).rejects.toEqual({
+      code: 'ERR_STOCK_INSUFFICIENT',
+      message: 'Stok tidak mencukupi',
+    });
+  });
 });
+
