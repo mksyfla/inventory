@@ -311,7 +311,7 @@ paths:
                 "403": { $ref: "#/components/responses/Error" }
                 "404": { $ref: "#/components/responses/Error" }
                 "422": { $ref: "#/components/responses/ValidationError" }
-        put:
+        patch:
             tags: [Items]
             summary: Update an item
             description: Requires `item.write`. Body limited to 1 MB.

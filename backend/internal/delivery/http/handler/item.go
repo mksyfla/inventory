@@ -78,7 +78,7 @@ func (h *ItemHandler) CreateItem(c echo.Context) error {
 	return response.Success(c, http.StatusCreated, item, nil)
 }
 
-// UpdateItem handles PUT /api/v1/items/:id
+// UpdateItem handles PATCH /api/v1/items/:id
 func (h *ItemHandler) UpdateItem(c echo.Context) error {
 	id, ok := pathIDParam(c, "id")
 	if !ok {
