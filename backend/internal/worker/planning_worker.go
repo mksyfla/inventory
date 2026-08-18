@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"inventory/internal/pkg/logger"
 	planninguc "inventory/internal/usecase/planning"
 
 	"github.com/hibiken/asynq"
@@ -50,7 +51,7 @@ func (w *PlanningWorker) HandleExpiryAlert(ctx context.Context, t *asynq.Task) e
 	if err != nil {
 		return fmt.Errorf("worker: expiry.alert failed: %w", err)
 	}
-	slog.Info("expiry.alert completed",
+	logger.Info(ctx, "expiry.alert completed",
 		slog.Int("h90", len(res.Near90)),
 		slog.Int("h30", len(res.Near30)),
 		slog.Int("quarantined", res.Quarantined))
@@ -66,7 +67,7 @@ func (w *PlanningWorker) HandleReorderCalc(ctx context.Context, t *asynq.Task) e
 	if err != nil {
 		return fmt.Errorf("worker: reorder.calc failed: %w", err)
 	}
-	slog.Info("reorder.calc completed",
+	logger.Info(ctx, "reorder.calc completed",
 		slog.Int("evaluated", res.Evaluated),
 		slog.Int("below_rop", res.BelowROP),
 		slog.Int("notified", res.Notified))
@@ -82,7 +83,7 @@ func (w *PlanningWorker) HandleLedgerReconcile(ctx context.Context, t *asynq.Tas
 	if err != nil {
 		return fmt.Errorf("worker: ledger.reconcile failed: %w", err)
 	}
-	slog.Info("ledger.reconcile completed",
+	logger.Info(ctx, "ledger.reconcile completed",
 		slog.Int("checked", res.Checked),
 		slog.Int("deviations", res.Deviations))
 	return nil
@@ -97,7 +98,7 @@ func (w *PlanningWorker) HandlePartitionMaintain(ctx context.Context, t *asynq.T
 	if err != nil {
 		return fmt.Errorf("worker: partition.maintain failed: %w", err)
 	}
-	slog.Info("partition.maintain completed",
+	logger.Info(ctx, "partition.maintain completed",
 		slog.String("partition", res.Partition),
 		slog.String("range", res.Range))
 	return nil
@@ -112,7 +113,7 @@ func (w *PlanningWorker) HandleReportRefresh(ctx context.Context, t *asynq.Task)
 	if err != nil {
 		return fmt.Errorf("worker: report.refresh failed: %w", err)
 	}
-	slog.Info("report.refresh completed", slog.Int("views", len(res.Views)))
+	logger.Info(ctx, "report.refresh completed", slog.Int("views", len(res.Views)))
 	return nil
 }
 

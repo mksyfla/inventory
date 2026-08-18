@@ -5,9 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestContextHandler_Handle(t *testing.T) {
@@ -79,4 +81,32 @@ func TestInit(t *testing.T) {
 
 	lDev := Init("development")
 	assert.NotNil(t, lDev)
+}
+
+func TestLevelHelpers(t *testing.T) {
+	var buf bytes.Buffer
+	jsonHandler := slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})
+	logger := slog.New(&ContextHandler{Handler: jsonHandler})
+
+	prev := slog.Default()
+	slog.SetDefault(logger)
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	ctx := context.WithValue(context.Background(), RequestIDKey, "req-level-test")
+	Info(ctx, "info msg")
+	Warn(ctx, "warn msg")
+	Error(ctx, "error msg")
+	Debug(ctx, "debug msg")
+
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	require.Len(t, lines, 4)
+
+	levels := make([]string, 0, 4)
+	for _, line := range lines {
+		var m map[string]any
+		require.NoError(t, json.Unmarshal([]byte(line), &m))
+		levels = append(levels, m["level"].(string))
+		assert.Equal(t, "req-level-test", m["request_id"])
+	}
+	assert.Equal(t, []string{"INFO", "WARN", "ERROR", "DEBUG"}, levels)
 }
