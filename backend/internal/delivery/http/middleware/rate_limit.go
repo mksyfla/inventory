@@ -53,7 +53,7 @@ func UserRateLimiter(store redisclient.KVStore) echo.MiddlewareFunc {
 
 // LoginRateLimiter returns a stricter per-IP limiter for login: 5 attempts/15 minutes.
 func LoginRateLimiter(store redisclient.KVStore) echo.MiddlewareFunc {
-	return RateLimitMiddleware(store, 5, 15*time.Minute, func(c echo.Context) string {
+	return RateLimitMiddleware(store, 25, 15*time.Minute, func(c echo.Context) string {
 		return "login:" + c.RealIP()
 	})
 }

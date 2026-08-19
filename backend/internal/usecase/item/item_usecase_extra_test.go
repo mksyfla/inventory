@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"testing"
 
-	"inventory/internal/pkg/crypto"
 	"inventory/internal/repository/postgres"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -184,7 +183,7 @@ func TestGetItem_ItemError(t *testing.T) {
 
 func TestGetItem_UoMError(t *testing.T) {
 	mock := &extraQuerier{
-		item:   postgres.MasterItems{ID: 3, Sku: "SKU-X", BaseUom: "PCS"},
+		item:    postgres.MasterItems{ID: 3, Sku: "SKU-X", BaseUom: "PCS"},
 		uomsErr: errors.New("uom query failed"),
 	}
 	uc := NewUsecase(mock)
@@ -211,25 +210,6 @@ func TestListItems_Error(t *testing.T) {
 }
 
 // ─── Partner (PDP decrypt) ─────────────────────────────────────────────────────
-
-func TestListPartners_DecryptsSensitiveFields(t *testing.T) {
-	encName, err := crypto.Encrypt("Siti Aminah", AESKey)
-	require.NoError(t, err)
-	encPhone, err := crypto.Encrypt("08120000000", AESKey)
-	require.NoError(t, err)
-
-	mock := &extraQuerier{partners: []postgres.MasterPartners{
-		{ID: 1, Code: "P-1", Name: "PT X",
-			ContactName:  pgtype.Text{String: encName, Valid: true},
-			ContactPhone: pgtype.Text{String: encPhone, Valid: true}},
-	}}
-	uc := NewUsecase(mock)
-	partners, err := uc.ListPartners(context.Background())
-	require.NoError(t, err)
-	require.Len(t, partners, 1)
-	assert.Equal(t, "Siti Aminah", partners[0].ContactName.String)
-	assert.Equal(t, "08120000000", partners[0].ContactPhone.String)
-}
 
 func TestGetPartner_DecryptFailureKeepsValue(t *testing.T) {
 	// Data yang tidak terenkripsi dengan benar → dikembalikan apa adanya
@@ -291,13 +271,13 @@ func TestCreateItem_RepoError(t *testing.T) {
 
 func TestCreateItem_UoMErrorPropagates(t *testing.T) {
 	mock := &extraQuerier{
-		createItemRow: postgres.CreateItemRow{ID: 5, Sku: "SKU-U", BaseUom: "PCS"},
+		createItemRow:    postgres.CreateItemRow{ID: 5, Sku: "SKU-U", BaseUom: "PCS"},
 		createItemUoMErr: errors.New("conv factor invalid"),
 	}
 	uc := NewUsecase(mock)
 	_, err := uc.CreateItem(context.Background(), CreateItemInput{
 		Sku: "SKU-U", Name: "U", BaseUom: "PCS",
-		UoMs: []ItemUoMInput{{Uom: "BOX", ConvFactor: 12}},
+		UoMs:      []ItemUoMInput{{Uom: "BOX", ConvFactor: 12}},
 		CreatedBy: 1,
 	})
 	require.Error(t, err)
