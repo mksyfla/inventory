@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
 	"sort"
 	"time"
 
@@ -35,7 +36,7 @@ type txRunner interface {
 // aud.audit_logs — the escalation hook for the emergency notification
 // pipeline (FR-5.1).
 type AuditLogWriter interface {
-	InsertAuditLog(ctx context.Context, userID int64, action, entity string, entityID int64, newValue []byte) error
+	InsertAuditLog(ctx context.Context, userID int64, action, entity string, entityID int64, newValue []byte, ipAddress *netip.Addr) error
 }
 
 // TransferUsecase implements the inter-warehouse transfer module (Fase 8.1):
@@ -110,12 +111,12 @@ type CreateLineInput struct {
 
 // CreateTransferInput is the payload of POST /transfers (FR-5.1).
 type CreateTransferInput struct {
-	WarehouseID    int64 // gudang asal
+	WarehouseID     int64 // gudang asal
 	DestWarehouseID int64 // gudang tujuan
-	IdempotencyKey string
-	Notes          string
-	CreatedBy      int64
-	Lines          []CreateLineInput
+	IdempotencyKey  string
+	Notes           string
+	CreatedBy       int64
+	Lines           []CreateLineInput
 }
 
 // CreateTransfer opens a TRF draft: validates both warehouses and the lines,
@@ -430,7 +431,7 @@ type ReceiveResult struct {
 // doc.transfer_receipts row per line and — when the received quantity differs
 // from what was sent — writes a durable discrepancy audit log (the emergency
 // notification pipeline consumes it). Status becomes completed.
-func (u *TransferUsecase) ReceiveTransfer(ctx context.Context, id int64, in ReceiveInput) (*ReceiveResult, error) {
+func (u *TransferUsecase) ReceiveTransfer(ctx context.Context, id int64, in ReceiveInput, ipAddress *netip.Addr) (*ReceiveResult, error) {
 	doc, lines, err := u.docs.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
@@ -571,8 +572,7 @@ func (u *TransferUsecase) ReceiveTransfer(ctx context.Context, id int64, in Rece
 		// critical sebagai pemicu notifikasi darurat (FR-5.1).
 		if hasDiscrepancy && u.audit != nil {
 			payload, _ := jsonMarshal(receiptSummary(resolvedLines))
-			return u.audit.InsertAuditLog(txCtx, in.UserID,
-				"transfer.receive_discrepancy", "transfer", id, payload)
+			return u.audit.InsertAuditLog(txCtx, in.UserID, "transfer.receive_discrepancy", "transfer", id, payload, ipAddress)
 		}
 		return nil
 	})

@@ -7,6 +7,7 @@ package postgres
 
 import (
 	"context"
+	"net/netip"
 
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -2010,17 +2011,18 @@ func (q *Queries) GetWarehouseByID(ctx context.Context, id int64) (GetWarehouseB
 }
 
 const insertAuditLog = `-- name: InsertAuditLog :exec
-INSERT INTO aud.audit_logs (user_id, action, entity, entity_id, old_value, new_value)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO aud.audit_logs (user_id, action, entity, entity_id, old_value, new_value, ip_address)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 `
 
 type InsertAuditLogParams struct {
-	UserID   pgtype.Int8 `json:"user_id"`
-	Action   string      `json:"action"`
-	Entity   string      `json:"entity"`
-	EntityID pgtype.Int8 `json:"entity_id"`
-	OldValue []byte      `json:"old_value"`
-	NewValue []byte      `json:"new_value"`
+	UserID    pgtype.Int8 `json:"user_id"`
+	Action    string      `json:"action"`
+	Entity    string      `json:"entity"`
+	EntityID  pgtype.Int8 `json:"entity_id"`
+	OldValue  []byte      `json:"old_value"`
+	NewValue  []byte      `json:"new_value"`
+	IpAddress *netip.Addr `json:"ip_address"`
 }
 
 func (q *Queries) InsertAuditLog(ctx context.Context, arg InsertAuditLogParams) error {
@@ -2031,6 +2033,7 @@ func (q *Queries) InsertAuditLog(ctx context.Context, arg InsertAuditLogParams) 
 		arg.EntityID,
 		arg.OldValue,
 		arg.NewValue,
+		arg.IpAddress,
 	)
 	return err
 }

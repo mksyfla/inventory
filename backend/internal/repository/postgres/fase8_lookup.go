@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"net/netip"
 
 	"inventory/internal/usecase/counting"
 	"inventory/internal/usecase/transfer"
@@ -136,13 +137,14 @@ func (r *TransferLookup) LockCandidates(ctx context.Context, itemID, warehouseID
 
 // InsertAuditLog writes a durable event (e.g. receive discrepancy) into
 // aud.audit_logs inside the caller's transaction.
-func (r *TransferLookup) InsertAuditLog(ctx context.Context, userID int64, action, entity string, entityID int64, newValue []byte) error {
+func (r *TransferLookup) InsertAuditLog(ctx context.Context, userID int64, action, entity string, entityID int64, newValue []byte, ipAddress *netip.Addr) error {
 	err := r.querier(ctx).InsertAuditLog(ctx, InsertAuditLogParams{
-		UserID:   pgtype.Int8{Int64: userID, Valid: true},
-		Action:   action,
-		Entity:   entity,
-		EntityID: pgtype.Int8{Int64: entityID, Valid: true},
-		NewValue: newValue,
+		UserID:    pgtype.Int8{Int64: userID, Valid: true},
+		Action:    action,
+		Entity:    entity,
+		EntityID:  pgtype.Int8{Int64: entityID, Valid: true},
+		NewValue:  newValue,
+		IpAddress: ipAddress,
 	})
 	if err != nil {
 		return fmt.Errorf("postgres: failed to insert audit log: %w", err)

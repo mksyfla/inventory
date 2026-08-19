@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/netip"
 
 	"inventory/internal/domain/admin"
 	"inventory/internal/pkg/apperr"
@@ -25,7 +26,7 @@ type txRunner interface {
 
 // AuditLogWriter records durable events into aud.audit_logs.
 type AuditLogWriter interface {
-	InsertAuditLog(ctx context.Context, userID int64, action, entity string, entityID int64, newValue []byte) error
+	InsertAuditLog(ctx context.Context, userID int64, action, entity string, entityID int64, newValue []byte, ipAddress *netip.Addr) error
 }
 
 // CreateUserInput is the payload of POST /users.
@@ -107,7 +108,7 @@ func WithPasswordHasher(hash func(password string) (string, error)) Option {
 
 // CreateUser hashes the password, resolves role codes to ids and stores the
 // user with its role×warehouse assignments atomically.
-func (u *AdminUsecase) CreateUser(ctx context.Context, in CreateUserInput) (int64, error) {
+func (u *AdminUsecase) CreateUser(ctx context.Context, in CreateUserInput, ipAddress *netip.Addr) (int64, error) {
 	if in.Username == "" || in.FullName == "" {
 		return 0, apperr.New("ERR_VALIDATION", "username and full_name are required")
 	}
@@ -145,7 +146,7 @@ func (u *AdminUsecase) CreateUser(ctx context.Context, in CreateUserInput) (int6
 				"roles":         in.Roles,
 				"warehouse_ids": in.WarehouseIDs,
 			})
-			return u.audit.InsertAuditLog(ctx, in.ActorID, "create", "user", id, payload)
+			return u.audit.InsertAuditLog(ctx, in.ActorID, "create", "user", id, payload, ipAddress)
 		}
 		return nil
 	})
@@ -159,7 +160,7 @@ func (u *AdminUsecase) CreateUser(ctx context.Context, in CreateUserInput) (int6
 }
 
 // UpdateUser applies profile/password/assignment changes atomically.
-func (u *AdminUsecase) UpdateUser(ctx context.Context, in UpdateUserInput) error {
+func (u *AdminUsecase) UpdateUser(ctx context.Context, in UpdateUserInput, ipAddress *netip.Addr) error {
 	if in.FullName == "" {
 		return apperr.New("ERR_VALIDATION", "full_name is required")
 	}
@@ -199,7 +200,7 @@ func (u *AdminUsecase) UpdateUser(ctx context.Context, in UpdateUserInput) error
 				"warehouse_ids": in.WarehouseIDs,
 				"is_active":     in.IsActive,
 			})
-			return u.audit.InsertAuditLog(ctx, in.ActorID, "update", "user", in.ID, payload)
+			return u.audit.InsertAuditLog(ctx, in.ActorID, "update", "user", in.ID, payload, ipAddress)
 		}
 		return nil
 	})
@@ -210,7 +211,7 @@ func (u *AdminUsecase) UpdateUser(ctx context.Context, in UpdateUserInput) error
 }
 
 // CreateRole stores a role and its permission set atomically.
-func (u *AdminUsecase) CreateRole(ctx context.Context, in CreateRoleInput) (int64, error) {
+func (u *AdminUsecase) CreateRole(ctx context.Context, in CreateRoleInput, ipAddress *netip.Addr) (int64, error) {
 	if in.Code == "" || in.Name == "" {
 		return 0, apperr.New("ERR_VALIDATION", "code and name are required")
 	}
@@ -231,7 +232,7 @@ func (u *AdminUsecase) CreateRole(ctx context.Context, in CreateRoleInput) (int6
 				"name":        in.Name,
 				"permissions": in.Permissions,
 			})
-			return u.audit.InsertAuditLog(ctx, in.ActorID, "create", "role", id, payload)
+			return u.audit.InsertAuditLog(ctx, in.ActorID, "create", "role", id, payload, ipAddress)
 		}
 		return nil
 	})
@@ -245,7 +246,7 @@ func (u *AdminUsecase) CreateRole(ctx context.Context, in CreateRoleInput) (int6
 }
 
 // UpdateRole applies role fields and permission set atomically.
-func (u *AdminUsecase) UpdateRole(ctx context.Context, in UpdateRoleInput) error {
+func (u *AdminUsecase) UpdateRole(ctx context.Context, in UpdateRoleInput, ipAddress *netip.Addr) error {
 	if in.Code == "" || in.Name == "" {
 		return apperr.New("ERR_VALIDATION", "code and name are required")
 	}
@@ -266,7 +267,7 @@ func (u *AdminUsecase) UpdateRole(ctx context.Context, in UpdateRoleInput) error
 				"name":        in.Name,
 				"permissions": in.Permissions,
 			})
-			return u.audit.InsertAuditLog(ctx, in.ActorID, "update", "role", in.ID, payload)
+			return u.audit.InsertAuditLog(ctx, in.ActorID, "update", "role", in.ID, payload, ipAddress)
 		}
 		return nil
 	})
@@ -289,7 +290,7 @@ func (u *AdminUsecase) GetSettings(ctx context.Context) (map[string]json.RawMess
 }
 
 // UpdateSettings upserts every key of the flat JSON object.
-func (u *AdminUsecase) UpdateSettings(ctx context.Context, settings map[string]json.RawMessage, actorID int64) error {
+func (u *AdminUsecase) UpdateSettings(ctx context.Context, settings map[string]json.RawMessage, actorID int64, ipAddress *netip.Addr) error {
 	if len(settings) == 0 {
 		return apperr.New("ERR_VALIDATION", "no settings provided")
 	}
@@ -302,7 +303,7 @@ func (u *AdminUsecase) UpdateSettings(ctx context.Context, settings map[string]j
 		}
 		if u.audit != nil {
 			payload, _ := json.Marshal(settings)
-			return u.audit.InsertAuditLog(ctx, actorID, "update", "settings", 0, payload)
+			return u.audit.InsertAuditLog(ctx, actorID, "update", "settings", 0, payload, ipAddress)
 		}
 		return nil
 	})

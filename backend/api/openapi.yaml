@@ -935,7 +935,10 @@ paths:
                 required: true
                 content:
                     application/json:
-                        schema: { $ref: "#/components/schemas/AddAttachmentRequest" }
+                        schema:
+                            {
+                                $ref: "#/components/schemas/AddAttachmentRequest",
+                            }
             responses:
                 "201":
                     description: Attachment metadata created
@@ -2076,7 +2079,8 @@ paths:
                 - name: limit
                   in: query
                   required: false
-                  schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+                  schema:
+                      { type: integer, minimum: 1, maximum: 100, default: 50 }
                 - name: offset
                   in: query
                   required: false
@@ -2088,12 +2092,17 @@ paths:
                         application/json:
                             schema:
                                 allOf:
-                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
                                     - type: object
                                       properties:
                                           data:
                                               type: array
-                                              items: { $ref: "#/components/schemas/DocumentSummary" }
+                                              items:
+                                                  {
+                                                      $ref: "#/components/schemas/DocumentSummary",
+                                                  }
                 "401":
                     $ref: "#/components/responses/Error"
                 "403":
@@ -2117,10 +2126,15 @@ paths:
                         application/json:
                             schema:
                                 allOf:
-                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
                                     - type: object
                                       properties:
-                                          data: { $ref: "#/components/schemas/DocumentDetail" }
+                                          data:
+                                              {
+                                                  $ref: "#/components/schemas/DocumentDetail",
+                                              }
                 "404":
                     $ref: "#/components/responses/Error"
                 "401":
@@ -2159,12 +2173,17 @@ paths:
                         application/json:
                             schema:
                                 allOf:
-                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
                                     - type: object
                                       properties:
                                           data:
                                               type: array
-                                              items: { $ref: "#/components/schemas/StockBalance" }
+                                              items:
+                                                  {
+                                                      $ref: "#/components/schemas/StockBalance",
+                                                  }
                 "401":
                     $ref: "#/components/responses/Error"
 
@@ -2187,12 +2206,17 @@ paths:
                         application/json:
                             schema:
                                 allOf:
-                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
                                     - type: object
                                       properties:
                                           data:
                                               type: array
-                                              items: { $ref: "#/components/schemas/BatchTrace" }
+                                              items:
+                                                  {
+                                                      $ref: "#/components/schemas/BatchTrace",
+                                                  }
                 "401":
                     $ref: "#/components/responses/Error"
 
@@ -2223,7 +2247,8 @@ paths:
                 - name: limit
                   in: query
                   required: false
-                  schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+                  schema:
+                      { type: integer, minimum: 1, maximum: 100, default: 50 }
                 - name: offset
                   in: query
                   required: false
@@ -2235,12 +2260,17 @@ paths:
                         application/json:
                             schema:
                                 allOf:
-                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
                                     - type: object
                                       properties:
                                           data:
                                               type: array
-                                              items: { $ref: "#/components/schemas/StockLedger" }
+                                              items:
+                                                  {
+                                                      $ref: "#/components/schemas/StockLedger",
+                                                  }
                 "401":
                     $ref: "#/components/responses/Error"
 
@@ -2256,12 +2286,17 @@ paths:
                         application/json:
                             schema:
                                 allOf:
-                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
                                     - type: object
                                       properties:
                                           data:
                                               type: array
-                                              items: { $ref: "#/components/schemas/Warehouse" }
+                                              items:
+                                                  {
+                                                      $ref: "#/components/schemas/Warehouse",
+                                                  }
                 "401":
                     $ref: "#/components/responses/Error"
 
@@ -2277,12 +2312,17 @@ paths:
                         application/json:
                             schema:
                                 allOf:
-                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
                                     - type: object
                                       properties:
                                           data:
                                               type: array
-                                              items: { $ref: "#/components/schemas/UserSummary" }
+                                              items:
+                                                  {
+                                                      $ref: "#/components/schemas/UserSummary",
+                                                  }
                 "401":
                     $ref: "#/components/responses/Error"
                 "403":
@@ -2295,7 +2335,8 @@ paths:
                 required: true
                 content:
                     application/json:
-                        schema: { $ref: "#/components/schemas/CreateUserRequest" }
+                        schema:
+                            { $ref: "#/components/schemas/CreateUserRequest" }
             responses:
                 "201":
                     description: Created
@@ -2303,13 +2344,19 @@ paths:
                         application/json:
                             schema:
                                 allOf:
-                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
                                     - type: object
                                       properties:
                                           data:
                                               type: object
                                               properties:
-                                                  id: { type: integer, format: int64 }
+                                                  id:
+                                                      {
+                                                          type: integer,
+                                                          format: int64,
+                                                      }
                 "401":
                     $ref: "#/components/responses/Error"
                 "403":
@@ -2331,7 +2378,8 @@ paths:
                 required: true
                 content:
                     application/json:
-                        schema: { $ref: "#/components/schemas/UpdateUserRequest" }
+                        schema:
+                            { $ref: "#/components/schemas/UpdateUserRequest" }
             responses:
                 "200":
                     description: Updated
@@ -2339,13 +2387,19 @@ paths:
                         application/json:
                             schema:
                                 allOf:
-                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
                                     - type: object
                                       properties:
                                           data:
                                               type: object
                                               properties:
-                                                  id: { type: integer, format: int64 }
+                                                  id:
+                                                      {
+                                                          type: integer,
+                                                          format: int64,
+                                                      }
                 "401":
                     $ref: "#/components/responses/Error"
                 "403":
@@ -2365,12 +2419,17 @@ paths:
                         application/json:
                             schema:
                                 allOf:
-                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
                                     - type: object
                                       properties:
                                           data:
                                               type: array
-                                              items: { $ref: "#/components/schemas/RoleSummary" }
+                                              items:
+                                                  {
+                                                      $ref: "#/components/schemas/RoleSummary",
+                                                  }
                 "401":
                     $ref: "#/components/responses/Error"
                 "403":
@@ -2383,7 +2442,8 @@ paths:
                 required: true
                 content:
                     application/json:
-                        schema: { $ref: "#/components/schemas/CreateRoleRequest" }
+                        schema:
+                            { $ref: "#/components/schemas/CreateRoleRequest" }
             responses:
                 "201":
                     description: Created
@@ -2391,13 +2451,19 @@ paths:
                         application/json:
                             schema:
                                 allOf:
-                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
                                     - type: object
                                       properties:
                                           data:
                                               type: object
                                               properties:
-                                                  id: { type: integer, format: int64 }
+                                                  id:
+                                                      {
+                                                          type: integer,
+                                                          format: int64,
+                                                      }
                 "401":
                     $ref: "#/components/responses/Error"
                 "403":
@@ -2419,7 +2485,8 @@ paths:
                 required: true
                 content:
                     application/json:
-                        schema: { $ref: "#/components/schemas/UpdateRoleRequest" }
+                        schema:
+                            { $ref: "#/components/schemas/UpdateRoleRequest" }
             responses:
                 "200":
                     description: Updated
@@ -2427,13 +2494,19 @@ paths:
                         application/json:
                             schema:
                                 allOf:
-                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
                                     - type: object
                                       properties:
                                           data:
                                               type: object
                                               properties:
-                                                  id: { type: integer, format: int64 }
+                                                  id:
+                                                      {
+                                                          type: integer,
+                                                          format: int64,
+                                                      }
                 "401":
                     $ref: "#/components/responses/Error"
                 "403":
@@ -2453,12 +2526,17 @@ paths:
                         application/json:
                             schema:
                                 allOf:
-                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
                                     - type: object
                                       properties:
                                           data:
                                               type: array
-                                              items: { $ref: "#/components/schemas/PermissionSummary" }
+                                              items:
+                                                  {
+                                                      $ref: "#/components/schemas/PermissionSummary",
+                                                  }
                 "401":
                     $ref: "#/components/responses/Error"
 
@@ -2474,10 +2552,15 @@ paths:
                         application/json:
                             schema:
                                 allOf:
-                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
                                     - type: object
                                       properties:
-                                          data: { $ref: "#/components/schemas/Settings" }
+                                          data:
+                                              {
+                                                  $ref: "#/components/schemas/Settings",
+                                              }
                 "401":
                     $ref: "#/components/responses/Error"
                 "403":
@@ -2498,13 +2581,19 @@ paths:
                         application/json:
                             schema:
                                 allOf:
-                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
                                     - type: object
                                       properties:
                                           data:
                                               type: object
                                               properties:
-                                                  updated: { type: boolean, example: true }
+                                                  updated:
+                                                      {
+                                                          type: boolean,
+                                                          example: true,
+                                                      }
                 "401":
                     $ref: "#/components/responses/Error"
                 "403":
@@ -2519,7 +2608,8 @@ paths:
                 - name: limit
                   in: query
                   required: false
-                  schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+                  schema:
+                      { type: integer, minimum: 1, maximum: 100, default: 50 }
                 - name: offset
                   in: query
                   required: false
@@ -2531,12 +2621,17 @@ paths:
                         application/json:
                             schema:
                                 allOf:
-                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
                                     - type: object
                                       properties:
                                           data:
                                               type: array
-                                              items: { $ref: "#/components/schemas/AuditLog" }
+                                              items:
+                                                  {
+                                                      $ref: "#/components/schemas/AuditLog",
+                                                  }
                 "401":
                     $ref: "#/components/responses/Error"
 
@@ -2552,12 +2647,17 @@ paths:
                         application/json:
                             schema:
                                 allOf:
-                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
                                     - type: object
                                       properties:
                                           data:
                                               type: array
-                                              items: { $ref: "#/components/schemas/FsnReportRow" }
+                                              items:
+                                                  {
+                                                      $ref: "#/components/schemas/FsnReportRow",
+                                                  }
                 "401":
                     $ref: "#/components/responses/Error"
 
@@ -2573,12 +2673,17 @@ paths:
                         application/json:
                             schema:
                                 allOf:
-                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
                                     - type: object
                                       properties:
                                           data:
                                               type: array
-                                              items: { $ref: "#/components/schemas/ValuationReportRow" }
+                                              items:
+                                                  {
+                                                      $ref: "#/components/schemas/ValuationReportRow",
+                                                  }
                 "401":
                     $ref: "#/components/responses/Error"
 
@@ -2594,12 +2699,17 @@ paths:
                         application/json:
                             schema:
                                 allOf:
-                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
                                     - type: object
                                       properties:
                                           data:
                                               type: array
-                                              items: { $ref: "#/components/schemas/SpaceUtilizationRow" }
+                                              items:
+                                                  {
+                                                      $ref: "#/components/schemas/SpaceUtilizationRow",
+                                                  }
                 "401":
                     $ref: "#/components/responses/Error"
 
@@ -2615,10 +2725,15 @@ paths:
                         application/json:
                             schema:
                                 allOf:
-                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
                                     - type: object
                                       properties:
-                                          data: { $ref: "#/components/schemas/DashboardSummary" }
+                                          data:
+                                              {
+                                                  $ref: "#/components/schemas/DashboardSummary",
+                                              }
                 "401":
                     $ref: "#/components/responses/Error"
 
@@ -2739,18 +2854,23 @@ components:
                 doc_date: { type: string, format: date }
                 status: { type: string, example: submitted }
                 warehouse_id: { type: integer, format: int64 }
-                dest_warehouse_id: { type: integer, format: int64, nullable: true }
+                dest_warehouse_id:
+                    { type: integer, format: int64, nullable: true }
                 partner_id: { type: integer, format: int64, nullable: true }
                 reason_code: { type: string }
                 notes: { type: string }
                 created_at: { type: string, format: date-time }
                 created_by: { type: integer, format: int64 }
-                submitted_at: { type: string, format: date-time, nullable: true }
+                submitted_at:
+                    { type: string, format: date-time, nullable: true }
                 approved_at: { type: string, format: date-time, nullable: true }
                 approved_by: { type: integer, format: int64, nullable: true }
-                completed_at: { type: string, format: date-time, nullable: true }
-                manager_approved_by: { type: integer, format: int64, nullable: true }
-                manager_approved_at: { type: string, format: date-time, nullable: true }
+                completed_at:
+                    { type: string, format: date-time, nullable: true }
+                manager_approved_by:
+                    { type: integer, format: int64, nullable: true }
+                manager_approved_at:
+                    { type: string, format: date-time, nullable: true }
                 warehouse_code: { type: string }
                 warehouse_name: { type: string }
                 dest_warehouse_code: { type: string }
@@ -2801,8 +2921,10 @@ components:
                 - { $ref: "#/components/schemas/DocumentSummary" }
                 - type: object
                   properties:
-                      source_warehouse: { $ref: "#/components/schemas/WarehouseRef" }
-                      dest_warehouse: { $ref: "#/components/schemas/WarehouseRef" }
+                      source_warehouse:
+                          { $ref: "#/components/schemas/WarehouseRef" }
+                      dest_warehouse:
+                          { $ref: "#/components/schemas/WarehouseRef" }
                       partner: { $ref: "#/components/schemas/PartnerRef" }
                       lines:
                           type: array
@@ -2889,7 +3011,8 @@ components:
                 full_name: { type: string }
                 phone: { type: string, nullable: true }
                 is_active: { type: boolean }
-                last_login_at: { type: string, format: date-time, nullable: true }
+                last_login_at:
+                    { type: string, format: date-time, nullable: true }
                 roles:
                     type: array
                     items: { type: string, example: sysadmin }
@@ -3768,7 +3891,8 @@ components:
                 category:
                     {
                         type: string,
-                        enum: [delivery_note, qc_inspection, truck_photo, other],
+                        enum:
+                            [delivery_note, qc_inspection, truck_photo, other],
                     }
                 file_name: { type: string }
                 file_size_bytes: { type: integer, format: int64 }
@@ -3791,7 +3915,8 @@ components:
                 category:
                     {
                         type: string,
-                        enum: [delivery_note, qc_inspection, truck_photo, other],
+                        enum:
+                            [delivery_note, qc_inspection, truck_photo, other],
                         description: "Wajib. Jenis lampiran",
                     }
                 file_name:
@@ -4514,8 +4639,7 @@ components:
                 variance: { type: number, format: double, nullable: true }
                 reason_code: { type: string }
                 counted_by: { type: integer, format: int64, nullable: true }
-                counted_at:
-                    { type: string, format: date-time, nullable: true }
+                counted_at: { type: string, format: date-time, nullable: true }
 
         CountDocumentDetail:
             type: object

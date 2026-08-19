@@ -517,8 +517,8 @@ ORDER BY moved_at DESC, id DESC
 LIMIT 1;
 
 -- name: InsertAuditLog :exec
-INSERT INTO aud.audit_logs (user_id, action, entity, entity_id, old_value, new_value)
-VALUES ($1, $2, $3, $4, $5, $6);
+INSERT INTO aud.audit_logs (user_id, action, entity, entity_id, old_value, new_value, ip_address)
+VALUES ($1, $2, $3, $4, $5, $6, $7);
 
 -- ============ READ / QUERY ENDPOINTS (Fase 10.4 GETs) ============
 -- List/detail GETs shared across document types (GRN/REQ/DO/TRF/CNT/ADJ).

@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
+	"net/netip"
 
 	"inventory/internal/delivery/http/dto"
 	"inventory/internal/delivery/http/response"
@@ -34,6 +35,8 @@ func (h *AdminHandler) CreateUser(c echo.Context) error {
 		isActive = *req.IsActive
 	}
 
+	ipAddr := netip.MustParseAddr(c.RealIP())
+
 	id, err := h.uc.CreateUser(c.Request().Context(), adminuc.CreateUserInput{
 		Username:     req.Username,
 		Email:        req.Email,
@@ -44,7 +47,7 @@ func (h *AdminHandler) CreateUser(c echo.Context) error {
 		Roles:        req.Roles,
 		WarehouseIDs: req.WarehouseIDs,
 		ActorID:      userIDFromCtx(c),
-	})
+	}, &ipAddr)
 	if err != nil {
 		return writeUsecaseError(c, err, "Failed to create user")
 	}
@@ -68,6 +71,8 @@ func (h *AdminHandler) UpdateUser(c echo.Context) error {
 		isActive = *req.IsActive
 	}
 
+	ipAddr := netip.MustParseAddr(c.RealIP())
+
 	err := h.uc.UpdateUser(c.Request().Context(), adminuc.UpdateUserInput{
 		ID:           id,
 		FullName:     req.FullName,
@@ -78,7 +83,7 @@ func (h *AdminHandler) UpdateUser(c echo.Context) error {
 		Roles:        req.Roles,
 		WarehouseIDs: req.WarehouseIDs,
 		ActorID:      userIDFromCtx(c),
-	})
+	}, &ipAddr)
 	if err != nil {
 		return writeUsecaseError(c, err, "Failed to update user")
 	}
@@ -92,13 +97,15 @@ func (h *AdminHandler) CreateRole(c echo.Context) error {
 		return nil
 	}
 
+	ipAddr := netip.MustParseAddr(c.RealIP())
+
 	id, err := h.uc.CreateRole(c.Request().Context(), adminuc.CreateRoleInput{
 		Code:        req.Code,
 		Name:        req.Name,
 		Description: req.Description,
 		Permissions: req.Permissions,
 		ActorID:     userIDFromCtx(c),
-	})
+	}, &ipAddr)
 	if err != nil {
 		return writeUsecaseError(c, err, "Failed to create role")
 	}
@@ -117,6 +124,8 @@ func (h *AdminHandler) UpdateRole(c echo.Context) error {
 		return nil
 	}
 
+	ipAddr := netip.MustParseAddr(c.RealIP())
+
 	err := h.uc.UpdateRole(c.Request().Context(), adminuc.UpdateRoleInput{
 		ID:          id,
 		Code:        req.Code,
@@ -124,7 +133,7 @@ func (h *AdminHandler) UpdateRole(c echo.Context) error {
 		Description: req.Description,
 		Permissions: req.Permissions,
 		ActorID:     userIDFromCtx(c),
-	})
+	}, &ipAddr)
 	if err != nil {
 		return writeUsecaseError(c, err, "Failed to update role")
 	}
@@ -152,7 +161,9 @@ func (h *AdminHandler) UpdateSettings(c echo.Context) error {
 		return queryValidationError(c, "body", "malformed JSON object")
 	}
 
-	err := h.uc.UpdateSettings(c.Request().Context(), payload, userIDFromCtx(c))
+	ipAddr := netip.MustParseAddr(c.RealIP())
+
+	err := h.uc.UpdateSettings(c.Request().Context(), payload, userIDFromCtx(c), &ipAddr)
 	if err != nil {
 		return writeUsecaseError(c, err, "Failed to update settings")
 	}

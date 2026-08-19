@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
 	"testing"
 	"time"
 
@@ -19,6 +20,8 @@ import (
 )
 
 // ─── Mocks ──────────────────────────────────────────────────────────────────
+
+var IP = netip.MustParseAddr("127.0.0.1")
 
 type mockDocs struct {
 	docs       map[int64]*document.Document
@@ -162,7 +165,7 @@ func (m *mockWh) GetWarehouseByID(ctx context.Context, id int64) (*WarehouseInfo
 
 // mockLocs serves LocationLookup.
 type mockLocs struct {
-	byID   map[int64]*LocationInfo
+	byID    map[int64]*LocationInfo
 	transit map[int64]*LocationInfo
 }
 
@@ -204,7 +207,7 @@ type mockAuditLog struct {
 	payload  []byte
 }
 
-func (m *mockAudit) InsertAuditLog(ctx context.Context, userID int64, action, entity string, entityID int64, newValue []byte) error {
+func (m *mockAudit) InsertAuditLog(ctx context.Context, userID int64, action, entity string, entityID int64, newValue []byte, ipAddr *netip.Addr) error {
 	m.logs = append(m.logs, mockAuditLog{userID: userID, action: action, entity: entity, entityID: entityID, payload: newValue})
 	return nil
 }
@@ -685,7 +688,7 @@ func TestReceiveTransfer_BatchManaged(t *testing.T) {
 		Lines: []ReceiveLineInput{
 			{LineID: lines[0].ID, QtyReceived: 30, LocationID: 901, BatchID: &batch},
 		},
-	})
+	}, &IP)
 	require.NoError(t, err)
 	assert.Equal(t, document.StatusCompleted, result.Status)
 	assert.False(t, result.HasDiscrepancy)
@@ -714,7 +717,7 @@ func TestReceiveTransfer_Success(t *testing.T) {
 		Lines: []ReceiveLineInput{
 			{LineID: 1, QtyReceived: 100, LocationID: 901}, // bin PK-20-01 di WH02
 		},
-	})
+	}, &IP)
 	require.NoError(t, err)
 	assert.Equal(t, document.StatusCompleted, result.Status)
 	assert.False(t, result.HasDiscrepancy)
@@ -755,7 +758,7 @@ func TestReceiveTransfer_ShortageDiscrepancy(t *testing.T) {
 		Lines: []ReceiveLineInput{
 			{LineID: 1, QtyReceived: 80, LocationID: 901, Notes: "kurang 20 pcs"},
 		},
-	})
+	}, &IP)
 	require.NoError(t, err)
 	assert.True(t, result.HasDiscrepancy)
 	require.Len(t, result.Receipts, 1)
@@ -784,22 +787,22 @@ func TestReceiveTransfer_Validation(t *testing.T) {
 
 	t.Run("wrong status", func(t *testing.T) {
 		h.seedTransfer(document.StatusApproved, 5, &dest)
-		_, err := h.uc.ReceiveTransfer(ctx, 1, ReceiveInput{UserID: 7, Lines: []ReceiveLineInput{{LineID: 1, QtyReceived: 10, LocationID: 901}}})
+		_, err := h.uc.ReceiveTransfer(ctx, 1, ReceiveInput{UserID: 7, Lines: []ReceiveLineInput{{LineID: 1, QtyReceived: 10, LocationID: 901}}}, &IP)
 		isAppErr(t, err, "ERR_INVALID_STATE")
 	})
 	t.Run("receiving more than sent", func(t *testing.T) {
 		h.seedTransfer(document.StatusInProgress, 5, &dest)
-		_, err := h.uc.ReceiveTransfer(ctx, 2, ReceiveInput{UserID: 7, Lines: []ReceiveLineInput{{LineID: 3, QtyReceived: 500, LocationID: 901}}})
+		_, err := h.uc.ReceiveTransfer(ctx, 2, ReceiveInput{UserID: 7, Lines: []ReceiveLineInput{{LineID: 3, QtyReceived: 500, LocationID: 901}}}, &IP)
 		isAppErr(t, err, "ERR_VALIDATION")
 	})
 	t.Run("line not in document", func(t *testing.T) {
 		h.seedTransfer(document.StatusInProgress, 5, &dest)
-		_, err := h.uc.ReceiveTransfer(ctx, 3, ReceiveInput{UserID: 7, Lines: []ReceiveLineInput{{LineID: 999, QtyReceived: 10, LocationID: 901}}})
+		_, err := h.uc.ReceiveTransfer(ctx, 3, ReceiveInput{UserID: 7, Lines: []ReceiveLineInput{{LineID: 999, QtyReceived: 10, LocationID: 901}}}, &IP)
 		isAppErr(t, err, "ERR_VALIDATION")
 	})
 	t.Run("location outside destination warehouse", func(t *testing.T) {
 		h.seedTransfer(document.StatusInProgress, 5, &dest)
-		_, err := h.uc.ReceiveTransfer(ctx, 4, ReceiveInput{UserID: 7, Lines: []ReceiveLineInput{{LineID: 5, QtyReceived: 10, LocationID: 902}}}) // PK-10-01 di WH01
+		_, err := h.uc.ReceiveTransfer(ctx, 4, ReceiveInput{UserID: 7, Lines: []ReceiveLineInput{{LineID: 5, QtyReceived: 10, LocationID: 902}}}, &IP) // PK-10-01 di WH01
 		isAppErr(t, err, "ERR_VALIDATION")
 	})
 	t.Run("duplicate line", func(t *testing.T) {
@@ -807,7 +810,7 @@ func TestReceiveTransfer_Validation(t *testing.T) {
 		_, err := h.uc.ReceiveTransfer(ctx, 5, ReceiveInput{UserID: 7, Lines: []ReceiveLineInput{
 			{LineID: 7, QtyReceived: 10, LocationID: 901},
 			{LineID: 7, QtyReceived: 10, LocationID: 901},
-		}})
+		}}, &IP)
 		isAppErr(t, err, "ERR_VALIDATION")
 	})
 	t.Run("batch item requires batch_id", func(t *testing.T) {
@@ -817,7 +820,7 @@ func TestReceiveTransfer_Validation(t *testing.T) {
 		}
 		lines := []*document.DocumentLine{{ItemID: 2, Uom: "PCS", ConvFactor: 1, QtyRequest: 10}} // item 2 is batch
 		h.docs.seed(doc, lines)
-		_, err := h.uc.ReceiveTransfer(ctx, doc.ID, ReceiveInput{UserID: 7, Lines: []ReceiveLineInput{{LineID: lines[0].ID, QtyReceived: 10, LocationID: 901}}})
+		_, err := h.uc.ReceiveTransfer(ctx, doc.ID, ReceiveInput{UserID: 7, Lines: []ReceiveLineInput{{LineID: lines[0].ID, QtyReceived: 10, LocationID: 901}}}, &IP)
 		isAppErr(t, err, "ERR_VALIDATION")
 	})
 }
@@ -831,7 +834,7 @@ func TestReceiveTransfer_InsufficientInTransit(t *testing.T) {
 	_, err := h.uc.ReceiveTransfer(context.Background(), 1, ReceiveInput{
 		UserID: 7,
 		Lines:  []ReceiveLineInput{{LineID: 1, QtyReceived: 10, LocationID: 901}},
-	})
+	}, &IP)
 	isAppErr(t, err, "ERR_STOCK_INSUFFICIENT")
 
 	// rollback: no receipts, no status change
@@ -880,39 +883,39 @@ func TestReceiveTransfer_EdgeValidation(t *testing.T) {
 	t.Run("wrong doc type", func(t *testing.T) {
 		do := &document.Document{DocType: document.DocTypeDO, Status: document.StatusInProgress, WarehouseID: 10, CreatedBy: 5}
 		h.docs.seed(do, nil)
-		_, err := h.uc.ReceiveTransfer(ctx, do.ID, ReceiveInput{UserID: 7, Lines: []ReceiveLineInput{{LineID: 1, QtyReceived: 10, LocationID: 901}}})
+		_, err := h.uc.ReceiveTransfer(ctx, do.ID, ReceiveInput{UserID: 7, Lines: []ReceiveLineInput{{LineID: 1, QtyReceived: 10, LocationID: 901}}}, &IP)
 		isAppErr(t, err, "ERR_NOT_FOUND")
 	})
 	t.Run("no destination warehouse", func(t *testing.T) {
 		doc, lines := h.seedTransfer(document.StatusInProgress, 5, nil)
-		_, err := h.uc.ReceiveTransfer(ctx, doc.ID, ReceiveInput{UserID: 7, Lines: []ReceiveLineInput{{LineID: lines[0].ID, QtyReceived: 10, LocationID: 901}}})
+		_, err := h.uc.ReceiveTransfer(ctx, doc.ID, ReceiveInput{UserID: 7, Lines: []ReceiveLineInput{{LineID: lines[0].ID, QtyReceived: 10, LocationID: 901}}}, &IP)
 		isAppErr(t, err, "ERR_INVALID_STATE")
 	})
 	t.Run("empty lines", func(t *testing.T) {
 		doc, _ := h.seedTransfer(document.StatusInProgress, 5, &dest)
-		_, err := h.uc.ReceiveTransfer(ctx, doc.ID, ReceiveInput{UserID: 7})
+		_, err := h.uc.ReceiveTransfer(ctx, doc.ID, ReceiveInput{UserID: 7}, &IP)
 		isAppErr(t, err, "ERR_VALIDATION")
 	})
 	t.Run("zero qty received", func(t *testing.T) {
 		doc, lines := h.seedTransfer(document.StatusInProgress, 5, &dest)
-		_, err := h.uc.ReceiveTransfer(ctx, doc.ID, ReceiveInput{UserID: 7, Lines: []ReceiveLineInput{{LineID: lines[0].ID, QtyReceived: 0, LocationID: 901}}})
+		_, err := h.uc.ReceiveTransfer(ctx, doc.ID, ReceiveInput{UserID: 7, Lines: []ReceiveLineInput{{LineID: lines[0].ID, QtyReceived: 0, LocationID: 901}}}, &IP)
 		isAppErr(t, err, "ERR_VALIDATION")
 	})
 	t.Run("unknown location", func(t *testing.T) {
 		doc, lines := h.seedTransfer(document.StatusInProgress, 5, &dest)
-		_, err := h.uc.ReceiveTransfer(ctx, doc.ID, ReceiveInput{UserID: 7, Lines: []ReceiveLineInput{{LineID: lines[0].ID, QtyReceived: 10, LocationID: 999}}})
+		_, err := h.uc.ReceiveTransfer(ctx, doc.ID, ReceiveInput{UserID: 7, Lines: []ReceiveLineInput{{LineID: lines[0].ID, QtyReceived: 10, LocationID: 999}}}, &IP)
 		isAppErr(t, err, "ERR_VALIDATION")
 	})
 	t.Run("inactive location", func(t *testing.T) {
 		doc, lines := h.seedTransfer(document.StatusInProgress, 5, &dest)
 		h.locs.byID[903] = &LocationInfo{ID: 903, WarehouseID: 20, Code: "BLK-20-01", LocType: "bulk", IsActive: false}
-		_, err := h.uc.ReceiveTransfer(ctx, doc.ID, ReceiveInput{UserID: 7, Lines: []ReceiveLineInput{{LineID: lines[0].ID, QtyReceived: 10, LocationID: 903}}})
+		_, err := h.uc.ReceiveTransfer(ctx, doc.ID, ReceiveInput{UserID: 7, Lines: []ReceiveLineInput{{LineID: lines[0].ID, QtyReceived: 10, LocationID: 903}}}, &IP)
 		isAppErr(t, err, "ERR_VALIDATION")
 	})
 	t.Run("invalid location type", func(t *testing.T) {
 		doc, lines := h.seedTransfer(document.StatusInProgress, 5, &dest)
 		h.locs.byID[904] = &LocationInfo{ID: 904, WarehouseID: 20, Code: "DAM-20-01", LocType: "damaged", IsActive: true}
-		_, err := h.uc.ReceiveTransfer(ctx, doc.ID, ReceiveInput{UserID: 7, Lines: []ReceiveLineInput{{LineID: lines[0].ID, QtyReceived: 10, LocationID: 904}}})
+		_, err := h.uc.ReceiveTransfer(ctx, doc.ID, ReceiveInput{UserID: 7, Lines: []ReceiveLineInput{{LineID: lines[0].ID, QtyReceived: 10, LocationID: 904}}}, &IP)
 		isAppErr(t, err, "ERR_VALIDATION")
 	})
 	t.Run("not all lines received", func(t *testing.T) {
@@ -922,13 +925,13 @@ func TestReceiveTransfer_EdgeValidation(t *testing.T) {
 			{LineNo: 2, ItemID: 1, Uom: "PCS", ConvFactor: 1, QtyRequest: 10},
 		}
 		h.docs.seed(doc, lines)
-		_, err := h.uc.ReceiveTransfer(ctx, doc.ID, ReceiveInput{UserID: 7, Lines: []ReceiveLineInput{{LineID: lines[0].ID, QtyReceived: 10, LocationID: 901}}})
+		_, err := h.uc.ReceiveTransfer(ctx, doc.ID, ReceiveInput{UserID: 7, Lines: []ReceiveLineInput{{LineID: lines[0].ID, QtyReceived: 10, LocationID: 901}}}, &IP)
 		isAppErr(t, err, "ERR_VALIDATION")
 	})
 	t.Run("no transit location", func(t *testing.T) {
 		doc, lines := h.seedTransfer(document.StatusInProgress, 5, &dest)
 		delete(h.locs.transit, 20)
-		_, err := h.uc.ReceiveTransfer(ctx, doc.ID, ReceiveInput{UserID: 7, Lines: []ReceiveLineInput{{LineID: lines[0].ID, QtyReceived: 10, LocationID: 901}}})
+		_, err := h.uc.ReceiveTransfer(ctx, doc.ID, ReceiveInput{UserID: 7, Lines: []ReceiveLineInput{{LineID: lines[0].ID, QtyReceived: 10, LocationID: 901}}}, &IP)
 		isAppErr(t, err, "ERR_VALIDATION")
 	})
 }
@@ -950,7 +953,7 @@ func TestReceiveTransfer_DiscrepancyWithoutAuditSink(t *testing.T) {
 	result, err := h.uc.ReceiveTransfer(context.Background(), 1, ReceiveInput{
 		UserID: 7,
 		Lines:  []ReceiveLineInput{{LineID: 1, QtyReceived: 80, LocationID: 901}},
-	})
+	}, &IP)
 	require.NoError(t, err)
 	assert.True(t, result.HasDiscrepancy)
 	assert.Equal(t, document.StatusCompleted, result.Status)

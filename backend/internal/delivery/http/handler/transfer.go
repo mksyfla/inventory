@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"net/netip"
 
 	"inventory/internal/delivery/http/dto"
 	"inventory/internal/delivery/http/response"
@@ -133,7 +134,10 @@ func (h *TransferHandler) ReceiveTransfer(c echo.Context) error {
 			Notes:       ln.Notes,
 		})
 	}
-	result, err := h.uc.ReceiveTransfer(c.Request().Context(), id, in)
+
+	ipAddr := netip.MustParseAddr(c.RealIP())
+
+	result, err := h.uc.ReceiveTransfer(c.Request().Context(), id, in, &ipAddr)
 	if err != nil {
 		return writeUsecaseError(c, err, "Failed to receive transfer")
 	}

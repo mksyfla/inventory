@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strings"
 	"testing"
 	"time"
@@ -74,7 +75,9 @@ func (m *tDocs) GetByIDempotencyKey(ctx context.Context, key string) (*document.
 	return m.docs[id], nil
 }
 
-func (m *tDocs) NextSequence(ctx context.Context, docType, period string) (int64, error) { return 1, nil }
+func (m *tDocs) NextSequence(ctx context.Context, docType, period string) (int64, error) {
+	return 1, nil
+}
 func (m *tDocs) CreateTransferReceipt(ctx context.Context, rec *document.TransferReceipt) error {
 	rec.ID = 1
 	rec.Variance = rec.QtyReceived - rec.QtySent
@@ -116,7 +119,7 @@ func (tCands) LockCandidates(ctx context.Context, itemID, warehouseID int64) ([]
 
 type tAudit struct{}
 
-func (tAudit) InsertAuditLog(ctx context.Context, userID int64, action, entity string, entityID int64, newValue []byte) error {
+func (tAudit) InsertAuditLog(ctx context.Context, userID int64, action, entity string, entityID int64, newValue []byte, ipAddr *netip.Addr) error {
 	return nil
 }
 
@@ -161,7 +164,9 @@ func (m *tStock) InsertMovement(ctx context.Context, mv *stock.StockMovement) er
 func (m *tStock) GetMovements(ctx context.Context, filter stock.MovementFilter) ([]*stock.StockMovement, error) {
 	return nil, nil
 }
-func (m *tStock) UpdateBalanceReserved(ctx context.Context, id int64, delta float64) error { return nil }
+func (m *tStock) UpdateBalanceReserved(ctx context.Context, id int64, delta float64) error {
+	return nil
+}
 
 type noTx struct{}
 
@@ -359,7 +364,9 @@ func (cBalances) ListSnapshotBalances(ctx context.Context, warehouseID int64, zo
 
 type cValues struct{}
 
-func (cValues) LastUnitCost(ctx context.Context, itemID int64) (float64, error) { return 0, pgx.ErrNoRows }
+func (cValues) LastUnitCost(ctx context.Context, itemID int64) (float64, error) {
+	return 0, pgx.ErrNoRows
+}
 
 func newCountingHandler() (*CountingHandler, *tStock) {
 	docs := newCDocs()

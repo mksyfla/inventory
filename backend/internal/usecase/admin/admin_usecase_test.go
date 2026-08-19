@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/netip"
 	"testing"
 
 	"inventory/internal/domain/admin"
@@ -16,14 +17,16 @@ import (
 
 // ─── Fakes ──────────────────────────────────────────────────────────────────
 
+var IP = netip.MustParseAddr("127.0.0.1")
+
 type fakeRepo struct {
-	users      map[int64]admin.User
-	roles      map[string]admin.Role
-	perms      map[string]admin.Permission
+	users       map[int64]admin.User
+	roles       map[string]admin.Role
+	perms       map[string]admin.Permission
 	assignments map[int64][]int64 // userID -> roleIDs
-	settings   map[string]admin.Setting
-	nextUserID int64
-	nextRoleID int64
+	settings    map[string]admin.Setting
+	nextUserID  int64
+	nextRoleID  int64
 }
 
 func newFakeRepo() *fakeRepo {
@@ -55,7 +58,9 @@ func (r *fakeRepo) UpdateUser(ctx context.Context, id int64, fullName, email, ph
 	return nil
 }
 
-func (r *fakeRepo) UpdateUserPassword(ctx context.Context, id int64, passwordHash string) error { return nil }
+func (r *fakeRepo) UpdateUserPassword(ctx context.Context, id int64, passwordHash string) error {
+	return nil
+}
 
 func (r *fakeRepo) DeleteUserRoles(ctx context.Context, userID int64) error {
 	delete(r.assignments, userID)
@@ -181,7 +186,7 @@ func newUseCase(repo *fakeRepo) (*adminuc.AdminUsecase, *fakeAudit) {
 
 type fakeAudit struct{ calls int }
 
-func (a *fakeAudit) InsertAuditLog(ctx context.Context, userID int64, action, entity string, entityID int64, newValue []byte) error {
+func (a *fakeAudit) InsertAuditLog(ctx context.Context, userID int64, action, entity string, entityID int64, newValue []byte, ipAddr *netip.Addr) error {
 	a.calls++
 	return nil
 }
@@ -203,7 +208,7 @@ func TestAdminUsecase_CreateUser(t *testing.T) {
 		Roles:        []string{"INBOUND_STAFF"},
 		WarehouseIDs: []int64{1},
 		ActorID:      9,
-	})
+	}, &IP)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), id)
 	assert.Equal(t, []int64{1}, repo.assignments[id])
@@ -214,7 +219,7 @@ func TestAdminUsecase_CreateUser(t *testing.T) {
 	_, err = uc.CreateUser(context.Background(), adminuc.CreateUserInput{
 		Username: "x", FullName: "X", Password: "secret123",
 		Roles: []string{"NO_SUCH_ROLE"}, WarehouseIDs: []int64{1}, ActorID: 9,
-	})
+	}, &IP)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown role")
 }
@@ -222,14 +227,14 @@ func TestAdminUsecase_CreateUser(t *testing.T) {
 func TestAdminUsecase_CreateUser_Validation(t *testing.T) {
 	uc, _ := newUseCase(newFakeRepo())
 
-	_, err := uc.CreateUser(context.Background(), adminuc.CreateUserInput{Username: "u", FullName: "No Password"})
+	_, err := uc.CreateUser(context.Background(), adminuc.CreateUserInput{Username: "u", FullName: "No Password"}, &IP)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "password is required")
 
 	_, err = uc.CreateUser(context.Background(), adminuc.CreateUserInput{
 		Username: "u", FullName: "U", Password: "secret123",
 		Roles: []string{"ADMIN"}, // no warehouse IDs
-	})
+	}, &IP)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "warehouse")
 }
@@ -247,7 +252,7 @@ func TestAdminUsecase_UpdateUser(t *testing.T) {
 		Roles:        []string{"WH_MANAGER"},
 		WarehouseIDs: []int64{2},
 		ActorID:      9,
-	})
+	}, &IP)
 	require.NoError(t, err)
 	assert.Equal(t, "Budi Baru", repo.users[7].FullName)
 	assert.False(t, repo.users[7].IsActive)
@@ -255,7 +260,7 @@ func TestAdminUsecase_UpdateUser(t *testing.T) {
 	assert.Equal(t, 1, audit.calls)
 
 	// Unknown id → not found
-	err = uc.UpdateUser(context.Background(), adminuc.UpdateUserInput{ID: 999, FullName: "X", ActorID: 9})
+	err = uc.UpdateUser(context.Background(), adminuc.UpdateUserInput{ID: 999, FullName: "X", ActorID: 9}, &IP)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, pgx.ErrNoRows))
 }
@@ -269,7 +274,7 @@ func TestAdminUsecase_Roles(t *testing.T) {
 	// Create role with permissions.
 	id, err := uc.CreateRole(context.Background(), adminuc.CreateRoleInput{
 		Code: "INBOUND_STAFF", Name: "Inbound Staff", Permissions: []string{"item.read", "grn.create"}, ActorID: 9,
-	})
+	}, &IP)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), id)
 	assert.Equal(t, "Inbound Staff", repo.roles["INBOUND_STAFF"].Name)
@@ -278,7 +283,7 @@ func TestAdminUsecase_Roles(t *testing.T) {
 	// Unknown permission → ERR_VALIDATION, transaction aborted.
 	_, err = uc.CreateRole(context.Background(), adminuc.CreateRoleInput{
 		Code: "X_STAFF", Name: "X Staff", Permissions: []string{"nope.read"}, ActorID: 9,
-	})
+	}, &IP)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown permission")
 	_, exists := repo.roles["X_STAFF"]
@@ -287,7 +292,7 @@ func TestAdminUsecase_Roles(t *testing.T) {
 	// Update role.
 	err = uc.UpdateRole(context.Background(), adminuc.UpdateRoleInput{
 		ID: 1, Code: "INBOUND_STAFF", Name: "Inbound (updated)", Permissions: []string{"item.read"}, ActorID: 9,
-	})
+	}, &IP)
 	require.NoError(t, err)
 	assert.Equal(t, "Inbound (updated)", repo.roles["INBOUND_STAFF"].Name)
 	assert.Equal(t, 2, audit.calls)
@@ -298,9 +303,9 @@ func TestAdminUsecase_Settings(t *testing.T) {
 	uc, audit := newUseCase(repo)
 
 	err := uc.UpdateSettings(context.Background(), map[string]json.RawMessage{
-		"companyName":         json.RawMessage(`"PT Peruri"`),
+		"companyName":          json.RawMessage(`"PT Peruri"`),
 		"minStockThresholdPct": json.RawMessage(`15`),
-	}, 9)
+	}, 9, &IP)
 	require.NoError(t, err)
 	assert.Equal(t, 1, audit.calls)
 
@@ -310,7 +315,7 @@ func TestAdminUsecase_Settings(t *testing.T) {
 	assert.JSONEq(t, `15`, string(settings["minStockThresholdPct"]))
 
 	// Empty update → ERR_VALIDATION.
-	err = uc.UpdateSettings(context.Background(), map[string]json.RawMessage{}, 9)
+	err = uc.UpdateSettings(context.Background(), map[string]json.RawMessage{}, 9, &IP)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no settings")
 }
