@@ -10,12 +10,14 @@ import (
 	"inventory/internal/pkg/metrics"
 	redisclient "inventory/internal/pkg/redis"
 	"inventory/internal/pkg/validation"
+	adminuc "inventory/internal/usecase/admin"
 	inbounduc "inventory/internal/usecase/inbound"
 	itemuc "inventory/internal/usecase/item"
 	outbounduc "inventory/internal/usecase/outbound"
 	stockuc "inventory/internal/usecase/stock"
 	countinguc "inventory/internal/usecase/counting"
 	transferuc "inventory/internal/usecase/transfer"
+	queryuc "inventory/internal/usecase/query"
 
 	"github.com/casbin/casbin/v2"
 	"github.com/hibiken/asynq"
@@ -37,6 +39,8 @@ type RouterConfig struct {
 	OutboundUsecase *outbounduc.OutboundUsecase
 	TransferUsecase *transferuc.TransferUsecase
 	CountingUsecase *countinguc.CountingUsecase
+	QueryUsecase    *queryuc.ReadUsecase
+	AdminUsecase    *adminuc.AdminUsecase
 	AsynqClient     *asynq.Client
 	CreateUser      handler.CreateUserFunc
 
@@ -142,6 +146,7 @@ func NewRouter(cfg ...RouterConfig) *echo.Echo {
 			protected.GET("/partners", itemHandler.ListPartners, rbacMW(c, "partner", "read")...)
 			protected.POST("/partners", itemHandler.CreatePartner, append(rbacMW(c, "partner", "write"), echoMiddleware.BodyLimit("1M"))...)
 			protected.GET("/partners/:id", itemHandler.GetPartner, rbacMW(c, "partner", "read")...)
+			protected.PATCH("/partners/:id", itemHandler.UpdatePartner, append(rbacMW(c, "partner", "write"), echoMiddleware.BodyLimit("1M"))...)
 
 			// Categories (guarded by item.read — no category.* permission exists in the RBAC seed)
 			protected.GET("/categories", itemHandler.ListCategories, rbacMW(c, "item", "read")...)
@@ -163,6 +168,12 @@ func NewRouter(cfg ...RouterConfig) *echo.Echo {
 			protected.GET("/receipts/:id/putaway-suggestion", receiptHandler.PutawaySuggestion, rbacMW(c, "grn", "putaway")...)
 			protected.POST("/receipts/:id/putaway", receiptHandler.Putaway,
 				append(rbacMW(c, "grn", "putaway"), echoMiddleware.BodyLimit("1M"))...)
+
+			// GRN lampiran (attachments) — metadata rows persisted per document.
+			protected.GET("/receipts/:id/attachments", receiptHandler.ListAttachments, rbacMW(c, "grn", "read")...)
+			protected.POST("/receipts/:id/attachments", receiptHandler.AddAttachment,
+				append(rbacMW(c, "grn", "create"), echoMiddleware.BodyLimit("10M"))...)
+			protected.DELETE("/receipts/:id/attachments/:attachment_id", receiptHandler.DeleteAttachment, rbacMW(c, "grn", "create")...)
 		}
 
 		// ─── Outbound endpoints (Fase 7) ────────────────────────────────
@@ -212,6 +223,49 @@ func NewRouter(cfg ...RouterConfig) *echo.Echo {
 			protected.POST("/counts/:id/post", countingHandler.PostCount, rbacMW(c, "count", "approve")...)
 			protected.POST("/adjustments", countingHandler.CreateAdjustment,
 				append(rbacMW(c, "adj", "create"), echoMiddleware.BodyLimit("1M"))...)
+		}
+
+		// ─── Shared read / query endpoints (Fase 10.4) ─────────────────
+		// Document list/detail, stock balances & batch trace, warehouse
+		// master, admin lists, reports and dashboard KPIs. Guards reuse the
+		// existing seeded permissions (stock.read / report.read /
+		// dashboard.read / audit.read / location.read) so no RBAC migration
+		// is needed — the sysadmin role still holds every permission.
+		if c.QueryUsecase != nil {
+			queryHandler := handler.NewQueryHandler(c.QueryUsecase)
+			protected.GET("/documents", queryHandler.ListDocuments, rbacMW(c, "stock", "read")...)
+			protected.GET("/documents/:id", queryHandler.GetDocumentDetail, rbacMW(c, "stock", "read")...)
+			protected.GET("/counts/:id", queryHandler.GetCountDocumentDetail, rbacMW(c, "stock", "read")...)
+			protected.GET("/stock/balances", queryHandler.ListStockBalances, rbacMW(c, "stock", "read")...)
+			protected.GET("/stock/batches", queryHandler.ListBatchTrace, rbacMW(c, "stock", "read")...)
+			protected.GET("/stock/ledger", queryHandler.ListStockLedger, rbacMW(c, "stock", "read")...)
+			protected.GET("/warehouses", queryHandler.ListWarehouses, rbacMW(c, "location", "read")...)
+			protected.GET("/users", queryHandler.ListUsers, rbacMW(c, "audit", "read")...)
+			protected.GET("/roles", queryHandler.ListRoles, rbacMW(c, "audit", "read")...)
+			protected.GET("/permissions", queryHandler.ListPermissions, rbacMW(c, "audit", "read")...)
+			protected.GET("/audit-logs", queryHandler.ListAuditLogs, rbacMW(c, "audit", "read")...)
+			protected.GET("/reports/fsn", queryHandler.GetFsnReport, rbacMW(c, "report", "read")...)
+			protected.GET("/reports/valuation", queryHandler.GetValuationReport, rbacMW(c, "report", "read")...)
+			protected.GET("/reports/space-utilization", queryHandler.GetSpaceUtilizationReport, rbacMW(c, "report", "read")...)
+			protected.GET("/dashboard/summary", queryHandler.GetDashboardSummary, rbacMW(c, "dashboard", "read")...)
+		}
+
+		// ─── Admin write endpoints (Fase 10.x) ─────────────────────────────
+		// RBAC CRUD + system settings. GETs for users/roles/permissions are
+		// served by QueryHandler above; the writes live here.
+		if c.AdminUsecase != nil {
+			adminHandler := handler.NewAdminHandler(c.AdminUsecase)
+			protected.POST("/users", adminHandler.CreateUser,
+				append(rbacMW(c, "user", "write"), echoMiddleware.BodyLimit("1M"))...)
+			protected.PATCH("/users/:id", adminHandler.UpdateUser,
+				append(rbacMW(c, "user", "write"), echoMiddleware.BodyLimit("1M"))...)
+			protected.POST("/roles", adminHandler.CreateRole,
+				append(rbacMW(c, "role", "write"), echoMiddleware.BodyLimit("1M"))...)
+			protected.PATCH("/roles/:id", adminHandler.UpdateRole,
+				append(rbacMW(c, "role", "write"), echoMiddleware.BodyLimit("1M"))...)
+			protected.GET("/settings", adminHandler.GetSettings, rbacMW(c, "settings", "read")...)
+			protected.PUT("/settings", adminHandler.UpdateSettings,
+				append(rbacMW(c, "settings", "write"), echoMiddleware.BodyLimit("1M"))...)
 		}
 	}
 

@@ -23,7 +23,12 @@ export type MovementType =
   | 'transfer_out'
   | 'transfer_in'
   | 'adjustment_plus'
-  | 'adjustment_minus';
+  | 'adjustment_minus'
+  | 'putaway'
+  | 'internal_move'
+  | 'return_in'
+  | 'return_out'
+  | 'opening';
 
 export interface StockMovement {
   id: number;

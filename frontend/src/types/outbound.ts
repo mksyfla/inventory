@@ -34,6 +34,7 @@ export interface ItemRequest {
   rejectionReason?: string;
   createdByName: string;
   createdAt: string;
+  lineCount?: number;
   items: ItemRequestLine[];
 }
 

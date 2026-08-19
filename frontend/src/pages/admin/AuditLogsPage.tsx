@@ -18,7 +18,10 @@ import {
   EyeOutlined,
   CodeOutlined,
 } from '@ant-design/icons';
-import { AuditLog, AuditAction, MOCK_AUDIT_LOGS } from '../../types/stock';
+import { AuditLog, AuditAction } from '../../types/stock';
+import { useQuery } from '@tanstack/react-query';
+import { adminService } from '../../api/services/admin';
+import { mapAuditLogDTO } from '../../api/mappers';
 
 const { Title, Paragraph, Text } = Typography;
 
@@ -28,7 +31,16 @@ export const AuditLogsPage: React.FC = () => {
   const [selectedLog, setSelectedLog] = useState<AuditLog | null>(null);
   const [modalOpen, setModalOpen] = useState<boolean>(false);
 
-  const filteredLogs = MOCK_AUDIT_LOGS.filter((log) => {
+  // Real audit trail from the backend.
+  const { data: logs = [], isLoading } = useQuery({
+    queryKey: ['audit-logs'],
+    queryFn: async () => {
+      const dtos = await adminService.listAuditLogs();
+      return dtos.map(mapAuditLogDTO);
+    },
+  });
+
+  const filteredLogs = logs.filter((log) => {
     const matchesSearch =
       log.userName.toLowerCase().includes(searchQuery.toLowerCase()) ||
       log.entityName.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -182,6 +194,7 @@ export const AuditLogsPage: React.FC = () => {
             rowKey="id"
             columns={columns}
             dataSource={filteredLogs}
+            loading={isLoading}
             pagination={{ pageSize: 10 }}
             data-testid="table-audit-logs"
           />

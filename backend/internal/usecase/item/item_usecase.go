@@ -305,6 +305,54 @@ func (u *Usecase) CreatePartner(ctx context.Context, in CreatePartnerInput) (pos
 	return partner, nil
 }
 
+type UpdatePartnerInput struct {
+	ID           int64  `json:"id"`
+	Code         string `json:"code"`
+	PartnerType  string `json:"partner_type"`
+	Name         string `json:"name"`
+	Address      string `json:"address"`
+	ContactName  string `json:"contact_name"`  // sensitive
+	ContactPhone string `json:"contact_phone"` // sensitive
+	IsActive     bool   `json:"is_active"`
+}
+
+// UpdatePartner overwrites a partner record (PATCH /partners/:id). Contact
+// fields are encrypted at rest and decrypted before being returned, matching
+// CreatePartner.
+func (u *Usecase) UpdatePartner(ctx context.Context, in UpdatePartnerInput) (postgres.MasterPartners, error) {
+	encName, err := crypto.Encrypt(in.ContactName, AESKey)
+	if err != nil {
+		return postgres.MasterPartners{}, fmt.Errorf("failed to encrypt contact name: %w", err)
+	}
+
+	encPhone, err := crypto.Encrypt(in.ContactPhone, AESKey)
+	if err != nil {
+		return postgres.MasterPartners{}, fmt.Errorf("failed to encrypt contact phone: %w", err)
+	}
+
+	arg := postgres.UpdatePartnerParams{
+		ID:           in.ID,
+		Code:         in.Code,
+		PartnerType:  in.PartnerType,
+		Name:         in.Name,
+		Address:      pgtype.Text{String: in.Address, Valid: true},
+		ContactName:  pgtype.Text{String: encName, Valid: true},
+		ContactPhone: pgtype.Text{String: encPhone, Valid: true},
+		IsActive:     in.IsActive,
+	}
+
+	partner, err := u.repo.UpdatePartner(ctx, arg)
+	if err != nil {
+		return postgres.MasterPartners{}, err
+	}
+
+	// Decrypt fields back for response payload
+	partner.ContactName.String = in.ContactName
+	partner.ContactPhone.String = in.ContactPhone
+
+	return partner, nil
+}
+
 func (u *Usecase) GetPartner(ctx context.Context, id int64) (postgres.MasterPartners, error) {
 	partner, err := u.repo.GetPartnerByID(ctx, id)
 	if err != nil {

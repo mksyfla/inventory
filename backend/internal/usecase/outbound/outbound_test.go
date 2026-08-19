@@ -226,6 +226,23 @@ func (m *mockDocs) UpsertDelivery(ctx context.Context, d *document.Delivery) err
 	return nil
 }
 
+// ── attachment stubs (lampiran GRN) ───────────────────────────────────────
+func (m *mockDocs) ListAttachments(ctx context.Context, documentID int64) ([]*document.Attachment, error) {
+	return nil, nil
+}
+
+func (m *mockDocs) CreateAttachment(ctx context.Context, a *document.Attachment) error {
+	return nil
+}
+
+func (m *mockDocs) GetAttachmentByID(ctx context.Context, id int64) (*document.Attachment, error) {
+	return nil, nil
+}
+
+func (m *mockDocs) DeleteAttachment(ctx context.Context, id int64) error {
+	return nil
+}
+
 func (m *mockDocs) NextSequence(ctx context.Context, docType, period string) (int64, error) {
 	seq := m.nextAlloc // irrelevant for formatting; only the count matters
 	return int64(seq), nil

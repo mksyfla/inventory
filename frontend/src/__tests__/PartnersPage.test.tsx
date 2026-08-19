@@ -12,6 +12,7 @@ vi.mock('../api/services/partners', () => ({
     listPartners: vi.fn(),
     getPartner: vi.fn(),
     createPartner: vi.fn(),
+    updatePartner: vi.fn(),
   },
 }));
 
@@ -44,6 +45,16 @@ describe('PartnersPage Master Data Component', () => {
       code: 'SUP-NEW-01',
       partner_type: 'supplier',
       name: 'PT Vendor Baru Indonesia',
+      is_active: true,
+    });
+    (partnerService.updatePartner as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: 1,
+      code: 'SUP-INK-01',
+      partner_type: 'supplier',
+      name: 'PT SICPA Perdana Printing Inks',
+      address: 'Kawasan Industri Pulogadung, Jakarta Timur',
+      contact_name: 'Bpk. Hendra Wahyudi',
+      contact_phone: '021-4601234',
       is_active: true,
     });
   });
@@ -92,6 +103,48 @@ describe('PartnersPage Master Data Component', () => {
     await waitFor(
       () => {
         expect(partnerService.createPartner).toHaveBeenCalled();
+      },
+      { timeout: 3000 }
+    );
+  }, 10000);
+
+  it('opens edit modal and submits updated partner data via PATCH', async () => {
+    await act(async () => {
+      renderWithProviders(<PartnersPage />);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('PT SICPA Perdana Printing Inks')).toBeInTheDocument();
+    });
+
+    const editBtn = screen.getByTestId('btn-edit-partner-1');
+    await act(async () => {
+      fireEvent.click(editBtn);
+    });
+
+    expect(screen.getByTestId('modal-partner-form')).toBeInTheDocument();
+
+    const nameInput = screen.getByTestId('input-partner-name');
+    await act(async () => {
+      fireEvent.change(nameInput, { target: { value: 'PT SICPA Perdana Updated' } });
+    });
+
+    const submitBtn = screen.getByTestId('btn-submit-partner');
+    await act(async () => {
+      fireEvent.click(submitBtn);
+    });
+
+    await waitFor(
+      () => {
+        expect(partnerService.updatePartner).toHaveBeenCalledWith(1, {
+          code: 'SUP-INK-01',
+          partner_type: 'supplier',
+          name: 'PT SICPA Perdana Updated',
+          address: 'Kawasan Industri Pulogadung, Jakarta Timur',
+          contact_name: 'Bpk. Hendra Wahyudi',
+          contact_phone: '021-4601234',
+          is_active: true,
+        });
       },
       { timeout: 3000 }
     );

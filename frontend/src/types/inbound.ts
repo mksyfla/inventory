@@ -23,19 +23,6 @@ export interface ReceiptItemLine {
   targetLocationCode?: string;
 }
 
-export type AttachmentType = 'delivery_note' | 'qc_inspection' | 'truck_photo' | 'other';
-
-export interface ReceiptAttachment {
-  id: number;
-  receiptId: number;
-  fileName: string;
-  fileType: AttachmentType;
-  fileSizeKb: number;
-  fileUrl: string;
-  uploadedByName: string;
-  uploadedAt: string;
-}
-
 export interface GoodsReceiptNote {
   id: number;
   documentNo: string;
@@ -49,6 +36,8 @@ export interface GoodsReceiptNote {
   notes?: string;
   createdByName: string;
   createdAt: string;
+  /** Line count from the list endpoint (items array is empty on list rows). */
+  lineCount?: number;
   items: ReceiptItemLine[];
 }
 
@@ -220,28 +209,5 @@ export const MOCK_GRN_LIST: GoodsReceiptNote[] = [
         qtyRejected: 0,
       },
     ],
-  },
-];
-
-export const MOCK_ATTACHMENTS: ReceiptAttachment[] = [
-  {
-    id: 1,
-    receiptId: 1,
-    fileName: 'Surat_Jalan_SJ-2026-9912.pdf',
-    fileType: 'delivery_note',
-    fileSizeKb: 1420,
-    fileUrl: '#',
-    uploadedByName: 'Budi Santoso',
-    uploadedAt: '2026-08-10T09:15:00Z',
-  },
-  {
-    id: 2,
-    receiptId: 1,
-    fileName: 'BAP_Inspeksi_QC_Lab_Tinta.pdf',
-    fileType: 'qc_inspection',
-    fileSizeKb: 850,
-    fileUrl: '#',
-    uploadedByName: 'Anisa (QC Inspector)',
-    uploadedAt: '2026-08-10T09:30:00Z',
   },
 ];

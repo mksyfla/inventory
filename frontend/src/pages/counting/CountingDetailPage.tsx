@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Card,
   Table,
@@ -11,6 +11,8 @@ import {
   Col,
   Alert,
   Steps,
+  Spin,
+  Empty,
   notification,
 } from 'antd';
 import {
@@ -19,41 +21,61 @@ import {
   SaveOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useParams } from 'react-router-dom';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  CountSession,
   CountSessionLine,
   CountSessionStatus,
   AdjustmentReasonCode,
   getCountStatusTagColor,
-  MOCK_COUNT_SESSIONS,
 } from '../../types/counting';
+import { countService } from '../../api/services';
+import { mapCountDetailToSession, normalizeCountStatus } from '../../api/mappers';
 
 const { Title, Paragraph, Text } = Typography;
 
 export const CountingDetailPage: React.FC = () => {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { id } = useParams<{ id: string }>();
 
-  const existingSession =
-    MOCK_COUNT_SESSIONS.find((s) => s.id === Number(id) || String(s.id) === String(id)) ||
-    MOCK_COUNT_SESSIONS[0];
+  const { data: detail, isLoading } = useQuery({
+    queryKey: ['count-detail', id],
+    queryFn: async () => {
+      const dto = await countService.getCountDetail(Number(id));
+      return mapCountDetailToSession(dto);
+    },
+    enabled: !!id,
+  });
 
-  const [session, setSession] = useState<CountSession>(existingSession);
+  // The reconciliation edits (reason codes) are local overrides applied on top
+  // of the server data; posting pushes them to the backend.
+  const [lines, setLines] = useState<CountSessionLine[]>([]);
+  const [status, setStatus] = useState<CountSessionStatus>('open');
+  const [posting, setPosting] = useState(false);
+
+  useEffect(() => {
+    if (detail) {
+      setLines(detail.items);
+      setStatus(detail.status);
+    }
+  }, [detail]);
 
   const handleReasonChange = (index: number, reason: AdjustmentReasonCode) => {
-    setSession((prev) => {
-      const updated = [...prev.items];
+    setLines((prev) => {
+      const updated = [...prev];
       updated[index] = { ...updated[index], reasonCode: reason };
-      return { ...prev, items: updated };
+      return updated;
     });
   };
 
-  const hasVariance = session.items.some(
-    (item) => (item.qtyVariance !== undefined && item.qtyVariance !== 0)
+  const hasVariance = lines.some(
+    (item) => item.qtyVariance !== undefined && item.qtyVariance !== 0
   );
 
-  const handlePostAdjustments = () => {
-    const unreasonedLines = session.items.filter(
+  const handlePostAdjustments = async () => {
+    if (!detail) return;
+
+    const unreasonedLines = lines.filter(
       (item) => item.qtyVariance !== undefined && item.qtyVariance !== 0 && !item.reasonCode
     );
 
@@ -65,19 +87,28 @@ export const CountingDetailPage: React.FC = () => {
       return;
     }
 
-    setSession((prev) => ({
-      ...prev,
-      status: 'posted',
-    }));
+    try {
+      setPosting(true);
+      const result = await countService.postCount(detail.id);
+      setStatus(normalizeCountStatus(result.status));
+      await queryClient.invalidateQueries({ queryKey: ['count-sessions'] });
 
-    notification.success({
-      message: 'Penyesuaian Stok (ADJ) Berhasil Diposting',
-      description: `Jurnal pergerakan stok penyesuaian untuk sesi ${session.countNo} telah resmi dicatat ke ledger.`,
-    });
+      notification.success({
+        message: 'Penyesuaian Stok (ADJ) Berhasil Diposting',
+        description: `Jurnal pergerakan stok penyesuaian untuk sesi ${detail.countNo} telah resmi dicatat ke ledger (${result.posted_adjustment_lines} baris ADJ).`,
+      });
+    } catch {
+      notification.error({
+        message: 'Gagal Posting Penyesuaian',
+        description: 'Pastikan seluruh selisih telah diberi alasan dan backend tersedia.',
+      });
+    } finally {
+      setPosting(false);
+    }
   };
 
-  const getStepCurrentIndex = (status: CountSessionStatus) => {
-    switch (status) {
+  const getStepCurrentIndex = (s: CountSessionStatus) => {
+    switch (s) {
       case 'open':
         return 0;
       case 'in_progress':
@@ -92,6 +123,22 @@ export const CountingDetailPage: React.FC = () => {
         return 0;
     }
   };
+
+  if (isLoading) {
+    return (
+      <div data-testid="counting-detail-page" style={{ textAlign: 'center', padding: 48 }}>
+        <Spin />
+      </div>
+    );
+  }
+
+  if (!detail) {
+    return (
+      <div data-testid="counting-detail-page">
+        <Empty description="Sesi opname tidak ditemukan" />
+      </div>
+    );
+  }
 
   const columns = [
     {
@@ -164,7 +211,7 @@ export const CountingDetailPage: React.FC = () => {
             placeholder="Pilih Alasan..."
             value={record.reasonCode}
             onChange={(val) => handleReasonChange(idx, val)}
-            disabled={session.status === 'posted'}
+            disabled={status === 'posted'}
             data-testid={`select-reason-${idx}`}
             options={[
               { value: 'DAMAGED_ITEM', label: 'Barang Rusak (Damaged)' },
@@ -179,7 +226,7 @@ export const CountingDetailPage: React.FC = () => {
     },
   ];
 
-  const statusTag = getCountStatusTagColor(session.status);
+  const statusTag = getCountStatusTagColor(status);
 
   return (
     <div data-testid="counting-detail-page">
@@ -192,24 +239,25 @@ export const CountingDetailPage: React.FC = () => {
               <div>
                 <Space align="center">
                   <Title level={3} style={{ margin: 0 }}>
-                    Sesi Opname: {session.countNo}
+                    Sesi Opname: {detail.countNo}
                   </Title>
                   <Tag color={statusTag.color}>{statusTag.label}</Tag>
                 </Space>
                 <Paragraph type="secondary" style={{ margin: 0 }}>
-                  {session.title} | Gudang: {session.warehouseName}
+                  {detail.title} | Gudang: {detail.warehouseName}
                 </Paragraph>
               </div>
             </Space>
           </Col>
 
-          {session.status !== 'posted' && (
+          {status !== 'posted' && (
             <Col>
               <Button
                 type="primary"
                 size="large"
                 style={{ background: '#52c41a', borderColor: '#52c41a' }}
                 icon={<SaveOutlined />}
+                loading={posting}
                 onClick={handlePostAdjustments}
                 data-testid="btn-post-adjustments"
               >
@@ -222,8 +270,8 @@ export const CountingDetailPage: React.FC = () => {
         {/* Progress Steps */}
         <Card variant="borderless">
           <Steps
-            current={getStepCurrentIndex(session.status)}
-            status={session.status === 'cancelled' ? 'error' : 'process'}
+            current={getStepCurrentIndex(status)}
+            status={status === 'cancelled' ? 'error' : 'process'}
             items={[
               { title: 'Sesi Dibuka', description: 'Snapshot Stok' },
               { title: 'Hitung Fisik', description: 'Blind Count Lapangan' },
@@ -249,7 +297,7 @@ export const CountingDetailPage: React.FC = () => {
           <Table
             rowKey="id"
             columns={columns}
-            dataSource={session.items}
+            dataSource={lines}
             pagination={false}
             data-testid="table-counting-reconciliation"
           />

@@ -20,14 +20,15 @@ import {
   HistoryOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import {
   StockBalance,
   StockStatus,
   getStockStatusTagColor,
-  MOCK_STOCK_BALANCES,
 } from '../../types/stock';
-import { MOCK_WAREHOUSES } from '../../types/location';
-import { MOCK_CATEGORIES } from '../../types/item';
+import { stockQueryService } from '../../api/services/stock';
+import { warehouseService } from '../../api/services/warehouses';
+import { mapStockBalanceDTO, mapWarehouseDTO } from '../../api/mappers';
 
 const { Title, Paragraph, Text } = Typography;
 
@@ -38,8 +39,36 @@ export const StockBalancesPage: React.FC = () => {
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [selectedStatus, setSelectedStatus] = useState<string>('all');
 
+  // Real balances (scoped to the active warehouse via X-Warehouse-Id) and the
+  // warehouse master used by the filter dropdown.
+  const { data: balances = [], isLoading } = useQuery({
+    queryKey: ['stock-balances'],
+    queryFn: async () => {
+      const dtos = await stockQueryService.listBalances();
+      return dtos.map(mapStockBalanceDTO);
+    },
+  });
+
+  const { data: warehouses = [] } = useQuery({
+    queryKey: ['warehouses'],
+    queryFn: async () => {
+      const dtos = await warehouseService.list();
+      return dtos.map(mapWarehouseDTO);
+    },
+  });
+
+  // Category options are derived from the returned balances so the filter stays
+  // consistent with the data actually visible.
+  const categories = useMemo(
+    () =>
+      Array.from(
+        new Set(balances.map((b) => b.categoryName).filter((c): c is string => !!c)),
+      ).sort(),
+    [balances],
+  );
+
   const filteredBalances = useMemo(() => {
-    return MOCK_STOCK_BALANCES.filter((item) => {
+    return balances.filter((item) => {
       const matchesSearch =
         item.sku.toLowerCase().includes(searchQuery.toLowerCase()) ||
         item.itemName.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -56,11 +85,11 @@ export const StockBalancesPage: React.FC = () => {
 
       return matchesSearch && matchesWarehouse && matchesCategory && matchesStatus;
     });
-  }, [searchQuery, selectedWarehouse, selectedCategory, selectedStatus]);
+  }, [balances, searchQuery, selectedWarehouse, selectedCategory, selectedStatus]);
 
-  const totalOnHand = MOCK_STOCK_BALANCES.reduce((acc, b) => acc + b.qtyOnHand, 0);
-  const totalAvailable = MOCK_STOCK_BALANCES.reduce((acc, b) => acc + b.qtyAvailable, 0);
-  const totalReserved = MOCK_STOCK_BALANCES.reduce((acc, b) => acc + b.qtyReserved, 0);
+  const totalOnHand = balances.reduce((acc, b) => acc + b.qtyOnHand, 0);
+  const totalAvailable = balances.reduce((acc, b) => acc + b.qtyAvailable, 0);
+  const totalReserved = balances.reduce((acc, b) => acc + b.qtyReserved, 0);
 
   const columns = [
     {
@@ -249,7 +278,7 @@ export const StockBalancesPage: React.FC = () => {
                 data-testid="select-warehouse-filter"
                 options={[
                   { value: 'all', label: 'Semua Gudang' },
-                  ...MOCK_WAREHOUSES.map((w) => ({ value: String(w.id), label: w.name })),
+                  ...warehouses.map((w) => ({ value: String(w.id), label: w.name })),
                 ]}
               />
             </Col>
@@ -262,7 +291,7 @@ export const StockBalancesPage: React.FC = () => {
                 data-testid="select-category-filter"
                 options={[
                   { value: 'all', label: 'Semua Kategori' },
-                  ...MOCK_CATEGORIES.map((c) => ({ value: c.name, label: c.name })),
+                  ...categories.map((c) => ({ value: c, label: c })),
                 ]}
               />
             </Col>
@@ -288,6 +317,7 @@ export const StockBalancesPage: React.FC = () => {
             rowKey="id"
             columns={columns}
             dataSource={filteredBalances}
+            loading={isLoading}
             pagination={{ pageSize: 10 }}
             data-testid="table-stock-balances"
           />

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import {
   Card,
   Input,
@@ -14,20 +14,69 @@ import {
 } from 'antd';
 import { SettingOutlined, SaveOutlined, SafetyCertificateOutlined } from '@ant-design/icons';
 import { useForm, Controller } from 'react-hook-form';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { SystemSettings, DEFAULT_SYSTEM_SETTINGS } from '../../types/admin';
+import { adminService } from '../../api/services/admin';
+import { SettingsPayload } from '../../api/dto';
 
 const { Title, Paragraph, Text } = Typography;
 
+// Coerce the flat GET /settings JSON object back into typed SystemSettings,
+// falling back to defaults for any key the store does not carry yet.
+const parseSettings = (raw: SettingsPayload): SystemSettings => {
+  const num = (v: unknown, fallback: number) => (typeof v === 'number' ? v : fallback);
+  const str = (v: unknown, fallback: string) => (typeof v === 'string' ? v : fallback);
+  const bool = (v: unknown, fallback: boolean) => (typeof v === 'boolean' ? v : fallback);
+  const valuation = str(raw.valuationMethod, DEFAULT_SYSTEM_SETTINGS.valuationMethod);
+  return {
+    companyName: str(raw.companyName, DEFAULT_SYSTEM_SETTINGS.companyName),
+    minStockThresholdPct: num(raw.minStockThresholdPct, DEFAULT_SYSTEM_SETTINGS.minStockThresholdPct),
+    expiryWarningDays: num(raw.expiryWarningDays, DEFAULT_SYSTEM_SETTINGS.expiryWarningDays),
+    sessionTimeoutMinutes: num(raw.sessionTimeoutMinutes, DEFAULT_SYSTEM_SETTINGS.sessionTimeoutMinutes),
+    valuationMethod:
+      valuation === 'LIFO' || valuation === 'AVERAGE' ? valuation : 'FIFO',
+    makerCheckerEnabled: bool(raw.makerCheckerEnabled, DEFAULT_SYSTEM_SETTINGS.makerCheckerEnabled),
+  };
+};
+
 export const SettingsPage: React.FC = () => {
-  const { control, handleSubmit } = useForm<SystemSettings>({
+  const queryClient = useQueryClient();
+
+  // Load persisted settings from the backend and seed the form.
+  const { data: loadedSettings } = useQuery({
+    queryKey: ['settings'],
+    queryFn: () => adminService.getSettings(),
+  });
+
+  const { control, handleSubmit, reset } = useForm<SystemSettings>({
     defaultValues: DEFAULT_SYSTEM_SETTINGS,
   });
 
-  const handleSaveSettings = (_values: SystemSettings) => {
-    notification.success({
-      message: 'Pengaturan Sistem Berhasil Disimpan (FE-803)',
-      description: 'Seluruh parameter operasional dan ambang batas peringatan telah ter-update.',
-    });
+  useEffect(() => {
+    if (loadedSettings) {
+      reset(parseSettings(loadedSettings));
+    }
+  }, [loadedSettings, reset]);
+
+  const saveSettings = useMutation({
+    mutationFn: (values: SystemSettings) => adminService.updateSettings({ ...values }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['settings'] });
+      notification.success({
+        message: 'Pengaturan Sistem Berhasil Disimpan',
+        description: 'Seluruh parameter operasional dan ambang batas peringatan telah tersimpan ke database.',
+      });
+    },
+    onError: () => {
+      notification.error({
+        message: 'Gagal Menyimpan Pengaturan',
+        description: 'Periksa koneksi dan data, lalu coba lagi.',
+      });
+    },
+  });
+
+  const handleSaveSettings = (values: SystemSettings) => {
+    saveSettings.mutate(values);
   };
 
   return (
@@ -197,6 +246,7 @@ export const SettingsPage: React.FC = () => {
                 size="large"
                 htmlType="submit"
                 icon={<SaveOutlined />}
+                loading={saveSettings.isPending}
                 data-testid="btn-save-settings"
               >
                 Simpan Pengaturan Sistem

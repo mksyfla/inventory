@@ -24,14 +24,15 @@ import {
 import { useForm, useFieldArray, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useNavigate, useParams } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import dayjs from 'dayjs';
-import {
-  requestFormSchema,
-  RequestFormValues,
-  MOCK_REQUEST_LIST,
-} from '../../types/outbound';
-import { MOCK_ITEMS } from '../../types/item';
-import { MOCK_WAREHOUSES } from '../../types/location';
+import { requestFormSchema, RequestFormValues } from '../../types/outbound';
+import { itemService } from '../../api/services/items';
+import { warehouseService } from '../../api/services/warehouses';
+import { partnerService } from '../../api/services/partners';
+import { documentService } from '../../api/services/documents';
+import { outboundService } from '../../api/services/outbound';
+import { mapItemDTO, mapWarehouseDTO, mapDocumentToItemRequest } from '../../api/mappers';
 
 const { Title, Paragraph, Text } = Typography;
 
@@ -40,7 +41,26 @@ export const RequestFormPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const isEditMode = Boolean(id && id !== 'new');
 
-  const existingRequest = isEditMode ? MOCK_REQUEST_LIST.find((r) => r.id === Number(id)) : null;
+  // Live item master + warehouse master for the SKU/warehouse selectors.
+  const { data: items = [] } = useQuery({
+    queryKey: ['items'],
+    queryFn: async () => (await itemService.listItems()).map(mapItemDTO),
+  });
+
+  const { data: warehouses = [] } = useQuery({
+    queryKey: ['warehouses'],
+    queryFn: async () => (await warehouseService.list()).map(mapWarehouseDTO),
+  });
+
+  // Edit mode loads the existing draft from the backend document store.
+  const { data: existingRequest } = useQuery({
+    queryKey: ['request-detail', id],
+    queryFn: async () => {
+      const dto = await documentService.getDetail(Number(id));
+      return mapDocumentToItemRequest(dto, dto.lines);
+    },
+    enabled: isEditMode,
+  });
 
   const {
     control,
@@ -98,7 +118,7 @@ export const RequestFormPage: React.FC = () => {
   }, [existingRequest, reset]);
 
   const handleItemSelect = (index: number, selectedItemId: number) => {
-    const foundItem = MOCK_ITEMS.find((i) => i.id === selectedItemId);
+    const foundItem = items.find((i) => i.id === selectedItemId);
     if (foundItem) {
       setValue(`items.${index}.itemId`, foundItem.id);
       setValue(`items.${index}.sku`, foundItem.sku);
@@ -108,22 +128,54 @@ export const RequestFormPage: React.FC = () => {
   };
 
   const handleAddRow = () => {
+    const first = items[0];
     append({
-      itemId: MOCK_ITEMS[0].id,
-      sku: MOCK_ITEMS[0].sku,
-      itemName: MOCK_ITEMS[0].name,
-      uom: MOCK_ITEMS[0].baseUom,
+      itemId: first?.id ?? 0,
+      sku: first?.sku ?? '',
+      itemName: first?.name ?? '',
+      uom: first?.baseUom ?? 'PCS',
       qtyRequested: 1,
       notes: '',
     });
   };
 
-  const onSubmit = (values: RequestFormValues, submitStatus: 'draft' | 'submitted') => {
-    notification.success({
-      message: submitStatus === 'submitted' ? 'Permintaan Barang Berhasil Diajukan' : 'Draft Permintaan Berhasil Disimpan',
-      description: `Permintaan barang dari ${values.requestingUnit} berstatus '${submitStatus}'.`,
-    });
-    navigate('/outbound/requests');
+  const onSubmit = async (values: RequestFormValues, submitStatus: 'draft' | 'submitted') => {
+    try {
+      // The backend REQ document references the requesting unit as a master
+      // partner, so resolve the free-text unit name to its partner id.
+      const partners = await partnerService.listPartners();
+      const partner = partners.find((p) =>
+        p.name.toLowerCase().includes(values.requestingUnit.toLowerCase())
+      );
+      if (!partner) {
+        notification.error({
+          message: 'Unit Peminta Tidak Ditemukan',
+          description: `Tidak ada partner "${values.requestingUnit}" di master partner. Gunakan nama unit yang terdaftar.`,
+        });
+        return;
+      }
+      await outboundService.createRequest({
+        warehouse_id: values.warehouseId,
+        partner_id: partner.id,
+        notes: values.notes || null,
+        lines: values.items.map((i) => ({
+          item_id: i.itemId,
+          qty: i.qtyRequested,
+          uom: i.uom,
+          notes: i.notes || null,
+        })),
+      });
+      notification.success({
+        message: submitStatus === 'submitted' ? 'Permintaan Barang Berhasil Diajukan' : 'Draft Permintaan Berhasil Disimpan',
+        description: `Permintaan barang dari ${values.requestingUnit} berstatus '${submitStatus}'.`,
+      });
+      navigate('/outbound/requests');
+    } catch {
+      notification.error({
+        message: 'Gagal Menyimpan Permintaan',
+        description: 'Terjadi kesalahan saat mengirim permintaan ke server.',
+      });
+    }
   };
 
   const tableColumns = [
@@ -139,7 +191,7 @@ export const RequestFormPage: React.FC = () => {
             <Select
               {...field}
               style={{ width: '100%' }}
-              options={MOCK_ITEMS.map((item) => ({
+              options={items.map((item) => ({
                 value: item.id,
                 label: `${item.sku} - ${item.name}`,
               }))}
@@ -271,7 +323,7 @@ export const RequestFormPage: React.FC = () => {
                     <Select
                       {...field}
                       style={{ width: '100%' }}
-                      options={MOCK_WAREHOUSES.map((w) => ({ value: w.id, label: w.name }))}
+                      options={warehouses.map((w) => ({ value: w.id, label: w.name }))}
                       placeholder="Pilih Gudang Asal"
                       data-testid="select-request-warehouse"
                     />

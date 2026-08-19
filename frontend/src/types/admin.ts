@@ -22,6 +22,7 @@ export const userFormSchema = z.object({
   fullName: z.string().min(2, 'Nama lengkap minimal 2 karakter'),
   email: z.string().email('Format email tidak valid'),
   phone: z.string().optional(),
+  password: z.string().optional(),
   roles: z.array(z.string()).min(1, 'Minimal satu peran (role) wajib dipilih'),
   assignedWarehouseIds: z.array(z.number()).min(1, 'Minimal satu gudang wajib ditugaskan'),
   isActive: z.boolean(),

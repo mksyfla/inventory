@@ -14,3 +14,5 @@ sql:
       schema:
           - "db/migrations/000001_init.up.sql"
           - "db/migrations/000006_transfer_counting.up.sql"
+          - "db/migrations/000008_rbac_admin.up.sql"
+          - "db/migrations/000009_grn_attachments.up.sql"

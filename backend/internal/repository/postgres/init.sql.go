@@ -11,6 +11,25 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const assignRolePermission = `-- name: AssignRolePermission :one
+INSERT INTO sec.role_permissions (role_id, permission_id)
+VALUES ($1, $2)
+ON CONFLICT (role_id, permission_id) DO NOTHING
+RETURNING role_id, permission_id
+`
+
+type AssignRolePermissionParams struct {
+	RoleID       int64 `json:"role_id"`
+	PermissionID int64 `json:"permission_id"`
+}
+
+func (q *Queries) AssignRolePermission(ctx context.Context, arg AssignRolePermissionParams) (SecRolePermissions, error) {
+	row := q.db.QueryRow(ctx, assignRolePermission, arg.RoleID, arg.PermissionID)
+	var i SecRolePermissions
+	err := row.Scan(&i.RoleID, &i.PermissionID)
+	return i, err
+}
+
 const assignUserRole = `-- name: AssignUserRole :one
 INSERT INTO sec.user_roles (user_id, role_id, warehouse_id)
 VALUES ($1, $2, $3)
@@ -52,6 +71,44 @@ func (q *Queries) CreateAllocation(ctx context.Context, arg CreateAllocationPara
 		&i.BalanceID,
 		&i.QtyAllocated,
 		&i.QtyPicked,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const createAttachment = `-- name: CreateAttachment :one
+INSERT INTO doc.attachments (document_id, category, file_name, file_size_bytes, file_url, uploaded_by)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id, document_id, category, file_name, file_size_bytes, file_url, uploaded_by, created_at
+`
+
+type CreateAttachmentParams struct {
+	DocumentID    int64  `json:"document_id"`
+	Category      string `json:"category"`
+	FileName      string `json:"file_name"`
+	FileSizeBytes int64  `json:"file_size_bytes"`
+	FileUrl       string `json:"file_url"`
+	UploadedBy    int64  `json:"uploaded_by"`
+}
+
+func (q *Queries) CreateAttachment(ctx context.Context, arg CreateAttachmentParams) (DocAttachments, error) {
+	row := q.db.QueryRow(ctx, createAttachment,
+		arg.DocumentID,
+		arg.Category,
+		arg.FileName,
+		arg.FileSizeBytes,
+		arg.FileUrl,
+		arg.UploadedBy,
+	)
+	var i DocAttachments
+	err := row.Scan(
+		&i.ID,
+		&i.DocumentID,
+		&i.Category,
+		&i.FileName,
+		&i.FileSizeBytes,
+		&i.FileUrl,
+		&i.UploadedBy,
 		&i.CreatedAt,
 	)
 	return i, err
@@ -489,6 +546,30 @@ func (q *Queries) CreatePartner(ctx context.Context, arg CreatePartnerParams) (M
 	return i, err
 }
 
+const createRole = `-- name: CreateRole :one
+INSERT INTO sec.roles (code, name, description)
+VALUES ($1, $2, $3)
+RETURNING id, code, name, description
+`
+
+type CreateRoleParams struct {
+	Code        pgtype.Text `json:"code"`
+	Name        pgtype.Text `json:"name"`
+	Description pgtype.Text `json:"description"`
+}
+
+func (q *Queries) CreateRole(ctx context.Context, arg CreateRoleParams) (SecRoles, error) {
+	row := q.db.QueryRow(ctx, createRole, arg.Code, arg.Name, arg.Description)
+	var i SecRoles
+	err := row.Scan(
+		&i.ID,
+		&i.Code,
+		&i.Name,
+		&i.Description,
+	)
+	return i, err
+}
+
 const createStockMovement = `-- name: CreateStockMovement :one
 INSERT INTO inv.stock_movements (item_id, location_id, batch_id, status, movement_type, qty, qty_after, doc_line_id, doc_no, created_by, moved_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
@@ -612,6 +693,53 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (CreateU
 	return i, err
 }
 
+const createUserFull = `-- name: CreateUserFull :one
+
+INSERT INTO sec.users (username, email, full_name, password_hash, phone, is_active)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id, username, email, full_name, phone, is_active
+`
+
+type CreateUserFullParams struct {
+	Username     string      `json:"username"`
+	Email        pgtype.Text `json:"email"`
+	FullName     string      `json:"full_name"`
+	PasswordHash string      `json:"password_hash"`
+	Phone        pgtype.Text `json:"phone"`
+	IsActive     bool        `json:"is_active"`
+}
+
+type CreateUserFullRow struct {
+	ID       int64       `json:"id"`
+	Username string      `json:"username"`
+	Email    pgtype.Text `json:"email"`
+	FullName string      `json:"full_name"`
+	Phone    pgtype.Text `json:"phone"`
+	IsActive bool        `json:"is_active"`
+}
+
+// ============ ADMIN WRITE (users / roles / settings) ============
+func (q *Queries) CreateUserFull(ctx context.Context, arg CreateUserFullParams) (CreateUserFullRow, error) {
+	row := q.db.QueryRow(ctx, createUserFull,
+		arg.Username,
+		arg.Email,
+		arg.FullName,
+		arg.PasswordHash,
+		arg.Phone,
+		arg.IsActive,
+	)
+	var i CreateUserFullRow
+	err := row.Scan(
+		&i.ID,
+		&i.Username,
+		&i.Email,
+		&i.FullName,
+		&i.Phone,
+		&i.IsActive,
+	)
+	return i, err
+}
+
 const createWarehouse = `-- name: CreateWarehouse :one
 INSERT INTO master.warehouses (code, name, address, is_active)
 VALUES ($1, $2, $3, $4)
@@ -643,6 +771,16 @@ func (q *Queries) CreateWarehouse(ctx context.Context, arg CreateWarehouseParams
 	return i, err
 }
 
+const deleteAttachmentByID = `-- name: DeleteAttachmentByID :exec
+DELETE FROM doc.attachments
+WHERE id = $1
+`
+
+func (q *Queries) DeleteAttachmentByID(ctx context.Context, id int64) error {
+	_, err := q.db.Exec(ctx, deleteAttachmentByID, id)
+	return err
+}
+
 const deleteItemUoMs = `-- name: DeleteItemUoMs :exec
 DELETE FROM master.item_uoms
 WHERE item_id = $1
@@ -670,6 +808,24 @@ WHERE id = $1
 
 func (q *Queries) DeletePartner(ctx context.Context, id int64) error {
 	_, err := q.db.Exec(ctx, deletePartner, id)
+	return err
+}
+
+const deleteRolePermissions = `-- name: DeleteRolePermissions :exec
+DELETE FROM sec.role_permissions WHERE role_id = $1
+`
+
+func (q *Queries) DeleteRolePermissions(ctx context.Context, roleID int64) error {
+	_, err := q.db.Exec(ctx, deleteRolePermissions, roleID)
+	return err
+}
+
+const deleteUserRoles = `-- name: DeleteUserRoles :exec
+DELETE FROM sec.user_roles WHERE user_id = $1
+`
+
+func (q *Queries) DeleteUserRoles(ctx context.Context, userID int64) error {
+	_, err := q.db.Exec(ctx, deleteUserRoles, userID)
 	return err
 }
 
@@ -752,6 +908,28 @@ func (q *Queries) GetAllocationCandidateByBalanceID(ctx context.Context, arg Get
 	return i, err
 }
 
+const getAttachmentByID = `-- name: GetAttachmentByID :one
+SELECT id, document_id, category, file_name, file_size_bytes, file_url, uploaded_by, created_at
+FROM doc.attachments
+WHERE id = $1
+`
+
+func (q *Queries) GetAttachmentByID(ctx context.Context, id int64) (DocAttachments, error) {
+	row := q.db.QueryRow(ctx, getAttachmentByID, id)
+	var i DocAttachments
+	err := row.Scan(
+		&i.ID,
+		&i.DocumentID,
+		&i.Category,
+		&i.FileName,
+		&i.FileSizeBytes,
+		&i.FileUrl,
+		&i.UploadedBy,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getBatchByItemAndNo = `-- name: GetBatchByItemAndNo :one
 SELECT id, item_id, batch_no, mfg_date, expiry_date
 FROM master.batches
@@ -773,6 +951,141 @@ func (q *Queries) GetBatchByItemAndNo(ctx context.Context, arg GetBatchByItemAnd
 		&i.BatchNo,
 		&i.MfgDate,
 		&i.ExpiryDate,
+	)
+	return i, err
+}
+
+const getCountLinesWithItem = `-- name: GetCountLinesWithItem :many
+SELECT cl.id, cl.item_id, i.sku, i.name::text AS item_name,
+       i.base_uom, cl.location_id, l.code AS location_code,
+       cl.batch_id, bt.batch_no, bt.expiry_date,
+       cl.qty_system, cl.qty_counted, cl.variance, cl.reason_code,
+       cl.counted_by, cl.counted_at
+FROM doc.count_lines cl
+JOIN master.items i ON i.id = cl.item_id
+LEFT JOIN master.locations l ON l.id = cl.location_id
+LEFT JOIN master.batches bt ON bt.id = cl.batch_id
+WHERE cl.document_id = $1
+ORDER BY cl.id
+`
+
+type GetCountLinesWithItemRow struct {
+	ID           int64              `json:"id"`
+	ItemID       int64              `json:"item_id"`
+	Sku          string             `json:"sku"`
+	ItemName     string             `json:"item_name"`
+	BaseUom      string             `json:"base_uom"`
+	LocationID   int64              `json:"location_id"`
+	LocationCode pgtype.Text        `json:"location_code"`
+	BatchID      pgtype.Int8        `json:"batch_id"`
+	BatchNo      pgtype.Text        `json:"batch_no"`
+	ExpiryDate   pgtype.Date        `json:"expiry_date"`
+	QtySystem    pgtype.Numeric     `json:"qty_system"`
+	QtyCounted   pgtype.Numeric     `json:"qty_counted"`
+	Variance     pgtype.Numeric     `json:"variance"`
+	ReasonCode   pgtype.Text        `json:"reason_code"`
+	CountedBy    pgtype.Int8        `json:"counted_by"`
+	CountedAt    pgtype.Timestamptz `json:"counted_at"`
+}
+
+// Snapshot/result lines of a count session joined with item/location/batch so
+// the supervisor reconciliation screen (GET /counts/{id}) renders without N+1.
+// qty_system is intentionally included here: this view is for the supervisor,
+// not the blind-count field screen.
+func (q *Queries) GetCountLinesWithItem(ctx context.Context, documentID int64) ([]GetCountLinesWithItemRow, error) {
+	rows, err := q.db.Query(ctx, getCountLinesWithItem, documentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetCountLinesWithItemRow
+	for rows.Next() {
+		var i GetCountLinesWithItemRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ItemID,
+			&i.Sku,
+			&i.ItemName,
+			&i.BaseUom,
+			&i.LocationID,
+			&i.LocationCode,
+			&i.BatchID,
+			&i.BatchNo,
+			&i.ExpiryDate,
+			&i.QtySystem,
+			&i.QtyCounted,
+			&i.Variance,
+			&i.ReasonCode,
+			&i.CountedBy,
+			&i.CountedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getDashboardSummary = `-- name: GetDashboardSummary :one
+WITH doc_counts AS (
+    SELECT
+        COUNT(*) FILTER (WHERE doc_type = 'GRN' AND doc_date = CURRENT_DATE) AS grn_today,
+        COUNT(*) FILTER (WHERE doc_type = 'DO' AND doc_date = CURRENT_DATE) AS do_today,
+        COUNT(*) FILTER (WHERE doc_type = 'REQ' AND status IN ('draft','submitted')) AS req_open,
+        COUNT(*) FILTER (WHERE doc_type = 'DO' AND status IN ('draft','submitted','approved','in_progress')) AS do_open
+    FROM doc.documents
+),
+below_min AS (
+    SELECT COUNT(*) AS cnt
+    FROM master.items i
+    WHERE i.is_active = TRUE
+      AND i.safety_stock > 0
+      AND COALESCE((SELECT SUM(b.qty_onhand) FROM inv.stock_balances b WHERE b.item_id = i.id AND b.status = 'available'), 0) < i.safety_stock
+),
+valuation AS (
+    SELECT COALESCE(SUM(iq.qty_onhand * ic.unit_cost), 0) AS total
+    FROM (
+        SELECT b.item_id, SUM(b.qty_onhand) AS qty_onhand
+        FROM inv.stock_balances b
+        WHERE b.status = 'available'
+        GROUP BY b.item_id
+    ) iq
+    JOIN (
+        SELECT DISTINCT ON (m.item_id) m.item_id, m.unit_cost
+        FROM inv.stock_movements m
+        WHERE m.unit_cost IS NOT NULL
+        ORDER BY m.item_id, m.moved_at DESC, m.id DESC
+    ) ic ON ic.item_id = iq.item_id
+)
+SELECT d.grn_today, d.do_today, d.req_open, d.do_open,
+       b.cnt AS below_min_items,
+       ROUND(v.total, 2)::float8 AS total_valuation
+FROM doc_counts d, below_min b, valuation v
+`
+
+type GetDashboardSummaryRow struct {
+	GrnToday       int64   `json:"grn_today"`
+	DoToday        int64   `json:"do_today"`
+	ReqOpen        int64   `json:"req_open"`
+	DoOpen         int64   `json:"do_open"`
+	BelowMinItems  int64   `json:"below_min_items"`
+	TotalValuation float64 `json:"total_valuation"`
+}
+
+// Ringkasan KPI dashboard operasional (Fase 10.x).
+func (q *Queries) GetDashboardSummary(ctx context.Context) (GetDashboardSummaryRow, error) {
+	row := q.db.QueryRow(ctx, getDashboardSummary)
+	var i GetDashboardSummaryRow
+	err := row.Scan(
+		&i.GrnToday,
+		&i.DoToday,
+		&i.ReqOpen,
+		&i.DoOpen,
+		&i.BelowMinItems,
+		&i.TotalValuation,
 	)
 	return i, err
 }
@@ -867,6 +1180,212 @@ func (q *Queries) GetDocumentByIDempotencyKey(ctx context.Context, idempotencyKe
 		&i.ManagerApprovedAt,
 	)
 	return i, err
+}
+
+const getDocumentLinesWithItem = `-- name: GetDocumentLinesWithItem :many
+SELECT dl.id, dl.document_id, dl.line_no, dl.item_id, i.sku, i.name::text AS item_name,
+       dl.uom, dl.conv_factor, dl.qty_request, dl.qty_processed,
+       dl.batch_id, dl.location_id, dl.status::text, dl.notes
+FROM doc.document_lines dl
+JOIN master.items i ON i.id = dl.item_id
+WHERE dl.document_id = $1
+ORDER BY dl.line_no
+`
+
+type GetDocumentLinesWithItemRow struct {
+	ID           int64          `json:"id"`
+	DocumentID   int64          `json:"document_id"`
+	LineNo       int16          `json:"line_no"`
+	ItemID       int64          `json:"item_id"`
+	Sku          string         `json:"sku"`
+	ItemName     string         `json:"item_name"`
+	Uom          string         `json:"uom"`
+	ConvFactor   pgtype.Numeric `json:"conv_factor"`
+	QtyRequest   pgtype.Numeric `json:"qty_request"`
+	QtyProcessed pgtype.Numeric `json:"qty_processed"`
+	BatchID      pgtype.Int8    `json:"batch_id"`
+	LocationID   pgtype.Int8    `json:"location_id"`
+	DlStatus     string         `json:"dl_status"`
+	Notes        pgtype.Text    `json:"notes"`
+}
+
+func (q *Queries) GetDocumentLinesWithItem(ctx context.Context, documentID int64) ([]GetDocumentLinesWithItemRow, error) {
+	rows, err := q.db.Query(ctx, getDocumentLinesWithItem, documentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetDocumentLinesWithItemRow
+	for rows.Next() {
+		var i GetDocumentLinesWithItemRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.DocumentID,
+			&i.LineNo,
+			&i.ItemID,
+			&i.Sku,
+			&i.ItemName,
+			&i.Uom,
+			&i.ConvFactor,
+			&i.QtyRequest,
+			&i.QtyProcessed,
+			&i.BatchID,
+			&i.LocationID,
+			&i.DlStatus,
+			&i.Notes,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getDocumentPartner = `-- name: GetDocumentPartner :one
+SELECT p.id, p.code, p.partner_type::text, p.name, p.is_active
+FROM master.partners p
+WHERE p.id = $1
+`
+
+type GetDocumentPartnerRow struct {
+	ID           int64  `json:"id"`
+	Code         string `json:"code"`
+	PPartnerType string `json:"p_partner_type"`
+	Name         string `json:"name"`
+	IsActive     bool   `json:"is_active"`
+}
+
+func (q *Queries) GetDocumentPartner(ctx context.Context, id int64) (GetDocumentPartnerRow, error) {
+	row := q.db.QueryRow(ctx, getDocumentPartner, id)
+	var i GetDocumentPartnerRow
+	err := row.Scan(
+		&i.ID,
+		&i.Code,
+		&i.PPartnerType,
+		&i.Name,
+		&i.IsActive,
+	)
+	return i, err
+}
+
+const getDocumentWarehouse = `-- name: GetDocumentWarehouse :one
+SELECT w.id, w.code, w.name, w.is_active
+FROM master.warehouses w
+WHERE w.id = $1
+`
+
+type GetDocumentWarehouseRow struct {
+	ID       int64  `json:"id"`
+	Code     string `json:"code"`
+	Name     string `json:"name"`
+	IsActive bool   `json:"is_active"`
+}
+
+func (q *Queries) GetDocumentWarehouse(ctx context.Context, id int64) (GetDocumentWarehouseRow, error) {
+	row := q.db.QueryRow(ctx, getDocumentWarehouse, id)
+	var i GetDocumentWarehouseRow
+	err := row.Scan(
+		&i.ID,
+		&i.Code,
+		&i.Name,
+		&i.IsActive,
+	)
+	return i, err
+}
+
+const getFsnReport = `-- name: GetFsnReport :many
+
+WITH item_mov AS (
+    SELECT m.item_id,
+           MAX(m.moved_at) AS last_moved,
+           COUNT(*) FILTER (WHERE m.moved_at >= CURRENT_DATE - INTERVAL '180 days') AS mov_180d
+    FROM inv.stock_movements m
+    GROUP BY m.item_id
+),
+item_qty AS (
+    SELECT b.item_id, SUM(b.qty_onhand) AS qty_onhand
+    FROM inv.stock_balances b
+    WHERE b.status = 'available'
+    GROUP BY b.item_id
+),
+item_cost AS (
+    SELECT DISTINCT ON (m.item_id) m.item_id, m.unit_cost
+    FROM inv.stock_movements m
+    WHERE m.unit_cost IS NOT NULL
+    ORDER BY m.item_id, m.moved_at DESC, m.id DESC
+)
+SELECT i.id, i.sku, i.name::text AS item_name, c.name::text AS category_name,
+       i.base_uom,
+       COALESCE(im.last_moved, TIMESTAMPTZ 'epoch')::timestamptz AS last_movement_date,
+       CASE
+           WHEN im.last_moved IS NULL THEN 'dead_stock'
+           WHEN im.last_moved >= CURRENT_DATE - INTERVAL '30 days' THEN 'fast_moving'
+           WHEN im.last_moved >= CURRENT_DATE - INTERVAL '180 days' THEN 'slow_moving'
+           ELSE 'dead_stock'
+       END AS fsn_category,
+       COALESCE(im.mov_180d, 0)::int AS turnover_ratio,
+       COALESCE(iq.qty_onhand, 0)::float8 AS current_qty,
+       COALESCE(ROUND(COALESCE(iq.qty_onhand, 0) * COALESCE(ic.unit_cost, 0), 2), 0)::float8 AS total_valuation
+FROM master.items i
+LEFT JOIN master.categories c ON c.id = i.category_id
+LEFT JOIN item_mov im ON im.item_id = i.id
+LEFT JOIN item_qty iq ON iq.item_id = i.id
+LEFT JOIN item_cost ic ON ic.item_id = i.id
+WHERE i.is_active = TRUE
+ORDER BY i.sku
+`
+
+type GetFsnReportRow struct {
+	ID               int64              `json:"id"`
+	Sku              string             `json:"sku"`
+	ItemName         string             `json:"item_name"`
+	CategoryName     string             `json:"category_name"`
+	BaseUom          string             `json:"base_uom"`
+	LastMovementDate pgtype.Timestamptz `json:"last_movement_date"`
+	FsnCategory      string             `json:"fsn_category"`
+	TurnoverRatio    int32              `json:"turnover_ratio"`
+	CurrentQty       float64            `json:"current_qty"`
+	TotalValuation   float64            `json:"total_valuation"`
+}
+
+// ============ REPORTS ============
+// Classifies items by velocity from the movement ledger (Fase 10.x):
+//
+//	fast_moving  : last movement within the last 30 days
+//	slow_moving  : last movement 30-180 days ago
+//	dead_stock   : no movement in the last 180 days (or never)
+func (q *Queries) GetFsnReport(ctx context.Context) ([]GetFsnReportRow, error) {
+	rows, err := q.db.Query(ctx, getFsnReport)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetFsnReportRow
+	for rows.Next() {
+		var i GetFsnReportRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Sku,
+			&i.ItemName,
+			&i.CategoryName,
+			&i.BaseUom,
+			&i.LastMovementDate,
+			&i.FsnCategory,
+			&i.TurnoverRatio,
+			&i.CurrentQty,
+			&i.TotalValuation,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const getItemByBarcode = `-- name: GetItemByBarcode :one
@@ -1074,15 +1593,93 @@ func (q *Queries) GetPartnerByID(ctx context.Context, id int64) (MasterPartners,
 	return i, err
 }
 
+const getPermissionByCode = `-- name: GetPermissionByCode :one
+SELECT id, code FROM sec.permissions WHERE code = $1 LIMIT 1
+`
+
+func (q *Queries) GetPermissionByCode(ctx context.Context, code pgtype.Text) (SecPermissions, error) {
+	row := q.db.QueryRow(ctx, getPermissionByCode, code)
+	var i SecPermissions
+	err := row.Scan(&i.ID, &i.Code)
+	return i, err
+}
+
 const getRoleByCode = `-- name: GetRoleByCode :one
 SELECT id, code, name FROM sec.roles WHERE code = $1 LIMIT 1
 `
 
-func (q *Queries) GetRoleByCode(ctx context.Context, code pgtype.Text) (SecRoles, error) {
+type GetRoleByCodeRow struct {
+	ID   int64       `json:"id"`
+	Code pgtype.Text `json:"code"`
+	Name pgtype.Text `json:"name"`
+}
+
+func (q *Queries) GetRoleByCode(ctx context.Context, code pgtype.Text) (GetRoleByCodeRow, error) {
 	row := q.db.QueryRow(ctx, getRoleByCode, code)
-	var i SecRoles
+	var i GetRoleByCodeRow
 	err := row.Scan(&i.ID, &i.Code, &i.Name)
 	return i, err
+}
+
+const getSpaceUtilizationReport = `-- name: GetSpaceUtilizationReport :many
+SELECT w.id AS warehouse_id, w.code AS warehouse_code, w.name AS warehouse_name,
+       l.id AS location_id, l.code AS location_code,
+       COALESCE(l.zone, '-') AS zone_name, l.loc_type::text AS loc_type,
+       COALESCE(l.capacity, 0)::float8 AS capacity_volume_m3,
+       (CASE WHEN COALESCE(sb.qty_onhand, 0) > 0 THEN COALESCE(l.capacity, 0) ELSE 0 END)::float8 AS used_volume_m3
+FROM master.warehouses w
+JOIN master.locations l ON l.warehouse_id = w.id
+LEFT JOIN LATERAL (
+    SELECT SUM(b.qty_onhand) AS qty_onhand
+    FROM inv.stock_balances b
+    WHERE b.location_id = l.id
+) sb ON TRUE
+WHERE w.is_active = TRUE
+ORDER BY w.code, l.zone NULLS FIRST, l.code
+`
+
+type GetSpaceUtilizationReportRow struct {
+	WarehouseID      int64   `json:"warehouse_id"`
+	WarehouseCode    string  `json:"warehouse_code"`
+	WarehouseName    string  `json:"warehouse_name"`
+	LocationID       int64   `json:"location_id"`
+	LocationCode     string  `json:"location_code"`
+	ZoneName         string  `json:"zone_name"`
+	LocType          string  `json:"loc_type"`
+	CapacityVolumeM3 float64 `json:"capacity_volume_m3"`
+	UsedVolumeM3     float64 `json:"used_volume_m3"`
+}
+
+// Memakai kapasitas volume (capacity) per lokasi sebagai pembilang dan
+// memperkirakan pemakaian dari keberadaan saldo stok aktif di lokasi tsb.
+func (q *Queries) GetSpaceUtilizationReport(ctx context.Context) ([]GetSpaceUtilizationReportRow, error) {
+	rows, err := q.db.Query(ctx, getSpaceUtilizationReport)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetSpaceUtilizationReportRow
+	for rows.Next() {
+		var i GetSpaceUtilizationReportRow
+		if err := rows.Scan(
+			&i.WarehouseID,
+			&i.WarehouseCode,
+			&i.WarehouseName,
+			&i.LocationID,
+			&i.LocationCode,
+			&i.ZoneName,
+			&i.LocType,
+			&i.CapacityVolumeM3,
+			&i.UsedVolumeM3,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const getStagingLocation = `-- name: GetStagingLocation :one
@@ -1213,9 +1810,20 @@ FROM sec.users
 WHERE id = $1 LIMIT 1
 `
 
-func (q *Queries) GetUserByID(ctx context.Context, id int64) (SecUsers, error) {
+type GetUserByIDRow struct {
+	ID           int64              `json:"id"`
+	Username     string             `json:"username"`
+	Email        pgtype.Text        `json:"email"`
+	FullName     string             `json:"full_name"`
+	PasswordHash string             `json:"password_hash"`
+	IsActive     bool               `json:"is_active"`
+	MfaSecret    pgtype.Text        `json:"mfa_secret"`
+	LastLoginAt  pgtype.Timestamptz `json:"last_login_at"`
+}
+
+func (q *Queries) GetUserByID(ctx context.Context, id int64) (GetUserByIDRow, error) {
 	row := q.db.QueryRow(ctx, getUserByID, id)
-	var i SecUsers
+	var i GetUserByIDRow
 	err := row.Scan(
 		&i.ID,
 		&i.Username,
@@ -1235,9 +1843,20 @@ FROM sec.users
 WHERE username = $1 LIMIT 1
 `
 
-func (q *Queries) GetUserByUsername(ctx context.Context, username string) (SecUsers, error) {
+type GetUserByUsernameRow struct {
+	ID           int64              `json:"id"`
+	Username     string             `json:"username"`
+	Email        pgtype.Text        `json:"email"`
+	FullName     string             `json:"full_name"`
+	PasswordHash string             `json:"password_hash"`
+	IsActive     bool               `json:"is_active"`
+	MfaSecret    pgtype.Text        `json:"mfa_secret"`
+	LastLoginAt  pgtype.Timestamptz `json:"last_login_at"`
+}
+
+func (q *Queries) GetUserByUsername(ctx context.Context, username string) (GetUserByUsernameRow, error) {
 	row := q.db.QueryRow(ctx, getUserByUsername, username)
-	var i SecUsers
+	var i GetUserByUsernameRow
 	err := row.Scan(
 		&i.ID,
 		&i.Username,
@@ -1249,6 +1868,100 @@ func (q *Queries) GetUserByUsername(ctx context.Context, username string) (SecUs
 		&i.LastLoginAt,
 	)
 	return i, err
+}
+
+const getValuationReport = `-- name: GetValuationReport :many
+WITH item_qty AS (
+    SELECT b.item_id,
+           SUM(b.qty_onhand) FILTER (WHERE b.status = 'available') AS qty_onhand
+    FROM inv.stock_balances b
+    GROUP BY b.item_id
+),
+item_cost AS (
+    SELECT DISTINCT ON (m.item_id) m.item_id, m.unit_cost
+    FROM inv.stock_movements m
+    WHERE m.unit_cost IS NOT NULL
+    ORDER BY m.item_id, m.moved_at DESC, m.id DESC
+),
+mov_in AS (
+    SELECT m.item_id, SUM(m.qty) AS qty, SUM(m.qty * COALESCE(m.unit_cost, 0)) AS value
+    FROM inv.stock_movements m
+    WHERE m.qty > 0
+    GROUP BY m.item_id
+),
+mov_out AS (
+    SELECT m.item_id, SUM(-m.qty) AS qty, SUM(-m.qty * COALESCE(m.unit_cost, 0)) AS value
+    FROM inv.stock_movements m
+    WHERE m.qty < 0
+    GROUP BY m.item_id
+)
+SELECT i.id, i.sku, i.name::text AS item_name, c.name::text AS category_name,
+       i.base_uom AS uom,
+       COALESCE(ic.unit_cost, 0)::float8 AS unit_price,
+       COALESCE(iq.qty_onhand, 0)::float8 AS ending_qty,
+       COALESCE(ROUND(COALESCE(iq.qty_onhand, 0) * COALESCE(ic.unit_cost, 0), 2), 0)::float8 AS ending_value,
+       COALESCE(mi.qty, 0)::float8 AS inbound_qty,
+       COALESCE(ROUND(mi.value, 2), 0)::float8 AS inbound_value,
+       COALESCE(mo.qty, 0)::float8 AS outbound_qty,
+       COALESCE(ROUND(mo.value, 2), 0)::float8 AS outbound_value
+FROM master.items i
+LEFT JOIN master.categories c ON c.id = i.category_id
+LEFT JOIN item_qty iq ON iq.item_id = i.id
+LEFT JOIN item_cost ic ON ic.item_id = i.id
+LEFT JOIN mov_in mi ON mi.item_id = i.id
+LEFT JOIN mov_out mo ON mo.item_id = i.id
+WHERE i.is_active = TRUE
+ORDER BY i.sku
+`
+
+type GetValuationReportRow struct {
+	ID            int64   `json:"id"`
+	Sku           string  `json:"sku"`
+	ItemName      string  `json:"item_name"`
+	CategoryName  string  `json:"category_name"`
+	Uom           string  `json:"uom"`
+	UnitPrice     float64 `json:"unit_price"`
+	EndingQty     float64 `json:"ending_qty"`
+	EndingValue   float64 `json:"ending_value"`
+	InboundQty    float64 `json:"inbound_qty"`
+	InboundValue  float64 `json:"inbound_value"`
+	OutboundQty   float64 `json:"outbound_qty"`
+	OutboundValue float64 `json:"outbound_value"`
+}
+
+// Periode valuasi: saldo akhir x harga pokok terakhir, plus total pergerakan
+// masuk/keluar (fallback ke seluruh riwayat bila tanpa filter periode).
+func (q *Queries) GetValuationReport(ctx context.Context) ([]GetValuationReportRow, error) {
+	rows, err := q.db.Query(ctx, getValuationReport)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetValuationReportRow
+	for rows.Next() {
+		var i GetValuationReportRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Sku,
+			&i.ItemName,
+			&i.CategoryName,
+			&i.Uom,
+			&i.UnitPrice,
+			&i.EndingQty,
+			&i.EndingValue,
+			&i.InboundQty,
+			&i.InboundValue,
+			&i.OutboundQty,
+			&i.OutboundValue,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const getWarehouseByCode = `-- name: GetWarehouseByCode :one
@@ -1494,6 +2207,186 @@ func (q *Queries) ListAllocationsByDocument(ctx context.Context, documentID int6
 	return items, nil
 }
 
+const listAttachmentsByDocument = `-- name: ListAttachmentsByDocument :many
+
+SELECT id, document_id, category, file_name, file_size_bytes, file_url, uploaded_by, created_at
+FROM doc.attachments
+WHERE document_id = $1
+ORDER BY created_at DESC, id DESC
+`
+
+// ============ Lampiran Dokumen / GRN attachments (Fase 6 lampiran GRN) ============
+func (q *Queries) ListAttachmentsByDocument(ctx context.Context, documentID int64) ([]DocAttachments, error) {
+	rows, err := q.db.Query(ctx, listAttachmentsByDocument, documentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []DocAttachments
+	for rows.Next() {
+		var i DocAttachments
+		if err := rows.Scan(
+			&i.ID,
+			&i.DocumentID,
+			&i.Category,
+			&i.FileName,
+			&i.FileSizeBytes,
+			&i.FileUrl,
+			&i.UploadedBy,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAuditLogs = `-- name: ListAuditLogs :many
+SELECT al.id, al.occurred_at, al.user_id, u.username AS actor_username,
+       al.action, al.entity, al.entity_id, al.old_value, al.new_value,
+       al.ip_address::text, al.request_id
+FROM aud.audit_logs al
+LEFT JOIN sec.users u ON u.id = al.user_id
+ORDER BY al.occurred_at DESC
+LIMIT $1 OFFSET $2
+`
+
+type ListAuditLogsParams struct {
+	Limit  int32 `json:"limit"`
+	Offset int32 `json:"offset"`
+}
+
+type ListAuditLogsRow struct {
+	ID            int64              `json:"id"`
+	OccurredAt    pgtype.Timestamptz `json:"occurred_at"`
+	UserID        pgtype.Int8        `json:"user_id"`
+	ActorUsername pgtype.Text        `json:"actor_username"`
+	Action        string             `json:"action"`
+	Entity        string             `json:"entity"`
+	EntityID      pgtype.Int8        `json:"entity_id"`
+	OldValue      []byte             `json:"old_value"`
+	NewValue      []byte             `json:"new_value"`
+	AlIpAddress   string             `json:"al_ip_address"`
+	RequestID     pgtype.UUID        `json:"request_id"`
+}
+
+func (q *Queries) ListAuditLogs(ctx context.Context, arg ListAuditLogsParams) ([]ListAuditLogsRow, error) {
+	rows, err := q.db.Query(ctx, listAuditLogs, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListAuditLogsRow
+	for rows.Next() {
+		var i ListAuditLogsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.OccurredAt,
+			&i.UserID,
+			&i.ActorUsername,
+			&i.Action,
+			&i.Entity,
+			&i.EntityID,
+			&i.OldValue,
+			&i.NewValue,
+			&i.AlIpAddress,
+			&i.RequestID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listBatchTrace = `-- name: ListBatchTrace :many
+SELECT b.id AS batch_id, b.batch_no, b.item_id, i.sku, i.name::text AS item_name,
+       i.base_uom, b.mfg_date, b.expiry_date,
+       sb.id AS balance_id, sb.location_id, l.code AS location_code,
+       sb.status::text, sb.qty_onhand, sb.qty_reserved,
+       grn.grn_no, grn.grn_date, grn.supplier_name
+FROM master.batches b
+JOIN master.items i ON i.id = b.item_id
+LEFT JOIN inv.stock_balances sb ON sb.batch_id = b.id
+LEFT JOIN master.locations l ON l.id = sb.location_id
+LEFT JOIN LATERAL (
+    SELECT g.doc_no AS grn_no, g.doc_date::date AS grn_date, p.name AS supplier_name
+    FROM doc.documents g
+    JOIN doc.document_lines gl ON gl.document_id = g.id AND gl.batch_id = b.id
+    LEFT JOIN master.partners p ON p.id = g.partner_id
+    WHERE g.doc_type = 'GRN'
+    ORDER BY g.created_at
+    LIMIT 1
+) grn ON TRUE
+WHERE ($1 = '' OR b.batch_no ILIKE '%' || $1 || '%' OR i.sku ILIKE '%' || $1 || '%' OR i.name ILIKE '%' || $1 || '%')
+ORDER BY b.expiry_date NULLS LAST, b.id
+`
+
+type ListBatchTraceRow struct {
+	BatchID      int64          `json:"batch_id"`
+	BatchNo      string         `json:"batch_no"`
+	ItemID       int64          `json:"item_id"`
+	Sku          string         `json:"sku"`
+	ItemName     string         `json:"item_name"`
+	BaseUom      string         `json:"base_uom"`
+	MfgDate      pgtype.Date    `json:"mfg_date"`
+	ExpiryDate   pgtype.Date    `json:"expiry_date"`
+	BalanceID    pgtype.Int8    `json:"balance_id"`
+	LocationID   pgtype.Int8    `json:"location_id"`
+	LocationCode pgtype.Text    `json:"location_code"`
+	SbStatus     string         `json:"sb_status"`
+	QtyOnhand    pgtype.Numeric `json:"qty_onhand"`
+	QtyReserved  pgtype.Numeric `json:"qty_reserved"`
+	GrnNo        string         `json:"grn_no"`
+	GrnDate      pgtype.Date    `json:"grn_date"`
+	SupplierName pgtype.Text    `json:"supplier_name"`
+}
+
+func (q *Queries) ListBatchTrace(ctx context.Context, dollar_1 interface{}) ([]ListBatchTraceRow, error) {
+	rows, err := q.db.Query(ctx, listBatchTrace, dollar_1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListBatchTraceRow
+	for rows.Next() {
+		var i ListBatchTraceRow
+		if err := rows.Scan(
+			&i.BatchID,
+			&i.BatchNo,
+			&i.ItemID,
+			&i.Sku,
+			&i.ItemName,
+			&i.BaseUom,
+			&i.MfgDate,
+			&i.ExpiryDate,
+			&i.BalanceID,
+			&i.LocationID,
+			&i.LocationCode,
+			&i.SbStatus,
+			&i.QtyOnhand,
+			&i.QtyReserved,
+			&i.GrnNo,
+			&i.GrnDate,
+			&i.SupplierName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listCategories = `-- name: ListCategories :many
 SELECT id, code, name, is_active
 FROM master.categories
@@ -1647,6 +2540,128 @@ func (q *Queries) ListDocumentLines(ctx context.Context, documentID int64) ([]Do
 			&i.LocationID,
 			&i.Status,
 			&i.Notes,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDocuments = `-- name: ListDocuments :many
+
+SELECT d.id, d.public_id, d.doc_no, d.doc_type::text, d.doc_date, d.status::text,
+       d.warehouse_id, d.dest_warehouse_id, d.partner_id, d.ref_doc_id,
+       d.reason_code, d.notes, d.created_at, d.created_by,
+       d.submitted_at, d.approved_at, d.approved_by, d.completed_at,
+       d.manager_approved_by, d.manager_approved_at,
+       w.code AS warehouse_code, w.name AS warehouse_name,
+       dw.code AS dest_warehouse_code, dw.name AS dest_warehouse_name,
+       p.code AS partner_code, p.name AS partner_name,
+       rd.doc_no AS ref_doc_no,
+       (SELECT COUNT(*)::bigint FROM doc.document_lines dl WHERE dl.document_id = d.id) AS line_count
+FROM doc.documents d
+LEFT JOIN master.warehouses w ON w.id = d.warehouse_id
+LEFT JOIN master.warehouses dw ON dw.id = d.dest_warehouse_id
+LEFT JOIN master.partners p ON p.id = d.partner_id
+LEFT JOIN doc.documents rd ON rd.id = d.ref_doc_id
+WHERE ($1 = '' OR d.doc_type::text = $1)
+  AND ($2 = '' OR d.status::text = $2)
+  AND ($3 = 0 OR d.warehouse_id = $3)
+ORDER BY d.doc_date DESC, d.id DESC
+LIMIT $4 OFFSET $5
+`
+
+type ListDocumentsParams struct {
+	Column1 interface{} `json:"column_1"`
+	Column2 interface{} `json:"column_2"`
+	Column3 interface{} `json:"column_3"`
+	Limit   int32       `json:"limit"`
+	Offset  int32       `json:"offset"`
+}
+
+type ListDocumentsRow struct {
+	ID                int64              `json:"id"`
+	PublicID          pgtype.UUID        `json:"public_id"`
+	DocNo             string             `json:"doc_no"`
+	DDocType          string             `json:"d_doc_type"`
+	DocDate           pgtype.Date        `json:"doc_date"`
+	DStatus           string             `json:"d_status"`
+	WarehouseID       int64              `json:"warehouse_id"`
+	DestWarehouseID   pgtype.Int8        `json:"dest_warehouse_id"`
+	PartnerID         pgtype.Int8        `json:"partner_id"`
+	RefDocID          pgtype.Int8        `json:"ref_doc_id"`
+	ReasonCode        pgtype.Text        `json:"reason_code"`
+	Notes             pgtype.Text        `json:"notes"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	CreatedBy         int64              `json:"created_by"`
+	SubmittedAt       pgtype.Timestamptz `json:"submitted_at"`
+	ApprovedAt        pgtype.Timestamptz `json:"approved_at"`
+	ApprovedBy        pgtype.Int8        `json:"approved_by"`
+	CompletedAt       pgtype.Timestamptz `json:"completed_at"`
+	ManagerApprovedBy pgtype.Int8        `json:"manager_approved_by"`
+	ManagerApprovedAt pgtype.Timestamptz `json:"manager_approved_at"`
+	WarehouseCode     pgtype.Text        `json:"warehouse_code"`
+	WarehouseName     pgtype.Text        `json:"warehouse_name"`
+	DestWarehouseCode pgtype.Text        `json:"dest_warehouse_code"`
+	DestWarehouseName pgtype.Text        `json:"dest_warehouse_name"`
+	PartnerCode       pgtype.Text        `json:"partner_code"`
+	PartnerName       pgtype.Text        `json:"partner_name"`
+	RefDocNo          pgtype.Text        `json:"ref_doc_no"`
+	LineCount         int64              `json:"line_count"`
+}
+
+// ============ READ / QUERY ENDPOINTS (Fase 10.4 GETs) ============
+// List/detail GETs shared across document types (GRN/REQ/DO/TRF/CNT/ADJ).
+// Filter params use the ” = no-filter convention to keep sqlc params as
+// plain text; warehouse_id uses 0 = no filter.
+func (q *Queries) ListDocuments(ctx context.Context, arg ListDocumentsParams) ([]ListDocumentsRow, error) {
+	rows, err := q.db.Query(ctx, listDocuments,
+		arg.Column1,
+		arg.Column2,
+		arg.Column3,
+		arg.Limit,
+		arg.Offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListDocumentsRow
+	for rows.Next() {
+		var i ListDocumentsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.PublicID,
+			&i.DocNo,
+			&i.DDocType,
+			&i.DocDate,
+			&i.DStatus,
+			&i.WarehouseID,
+			&i.DestWarehouseID,
+			&i.PartnerID,
+			&i.RefDocID,
+			&i.ReasonCode,
+			&i.Notes,
+			&i.CreatedAt,
+			&i.CreatedBy,
+			&i.SubmittedAt,
+			&i.ApprovedAt,
+			&i.ApprovedBy,
+			&i.CompletedAt,
+			&i.ManagerApprovedBy,
+			&i.ManagerApprovedAt,
+			&i.WarehouseCode,
+			&i.WarehouseName,
+			&i.DestWarehouseCode,
+			&i.DestWarehouseName,
+			&i.PartnerCode,
+			&i.PartnerName,
+			&i.RefDocNo,
+			&i.LineCount,
 		); err != nil {
 			return nil, err
 		}
@@ -1824,6 +2839,30 @@ func (q *Queries) ListPartners(ctx context.Context) ([]MasterPartners, error) {
 	return items, nil
 }
 
+const listPermissions = `-- name: ListPermissions :many
+SELECT id, code FROM sec.permissions ORDER BY code
+`
+
+func (q *Queries) ListPermissions(ctx context.Context) ([]SecPermissions, error) {
+	rows, err := q.db.Query(ctx, listPermissions)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SecPermissions
+	for rows.Next() {
+		var i SecPermissions
+		if err := rows.Scan(&i.ID, &i.Code); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listPutawayCandidates = `-- name: ListPutawayCandidates :many
 SELECT l.id, l.warehouse_id, l.code, l.zone, l.rack, l.level, l.loc_type, l.pick_seq, l.capacity,
        COALESCE(SUM(b.qty_onhand), 0)::numeric(18,4) AS used_qty
@@ -1903,6 +2942,269 @@ func (q *Queries) ListRolePermissions(ctx context.Context) ([]ListRolePermission
 	for rows.Next() {
 		var i ListRolePermissionsRow
 		if err := rows.Scan(&i.RoleCode, &i.PermissionCode); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRoles = `-- name: ListRoles :many
+SELECT r.id, r.code, r.name, r.description,
+       COALESCE(array_agg(DISTINCT p.code) FILTER (WHERE p.code IS NOT NULL), '{}')::text[] AS permissions
+FROM sec.roles r
+LEFT JOIN sec.role_permissions rp ON rp.role_id = r.id
+LEFT JOIN sec.permissions p ON p.id = rp.permission_id
+GROUP BY r.id
+ORDER BY r.code
+`
+
+type ListRolesRow struct {
+	ID          int64       `json:"id"`
+	Code        pgtype.Text `json:"code"`
+	Name        pgtype.Text `json:"name"`
+	Description pgtype.Text `json:"description"`
+	Permissions []string    `json:"permissions"`
+}
+
+func (q *Queries) ListRoles(ctx context.Context) ([]ListRolesRow, error) {
+	rows, err := q.db.Query(ctx, listRoles)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListRolesRow
+	for rows.Next() {
+		var i ListRolesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Code,
+			&i.Name,
+			&i.Description,
+			&i.Permissions,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSettings = `-- name: ListSettings :many
+SELECT key, value, updated_by, updated_at FROM sec.settings ORDER BY key
+`
+
+func (q *Queries) ListSettings(ctx context.Context) ([]SecSettings, error) {
+	rows, err := q.db.Query(ctx, listSettings)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SecSettings
+	for rows.Next() {
+		var i SecSettings
+		if err := rows.Scan(
+			&i.Key,
+			&i.Value,
+			&i.UpdatedBy,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listStockBalances = `-- name: ListStockBalances :many
+
+SELECT b.id AS balance_id, b.item_id, i.sku, i.name::text AS item_name,
+       i.base_uom, c.name::text AS category_name,
+       w.id AS warehouse_id, w.name::text AS warehouse_name,
+       b.location_id, l.code AS location_code, l.zone, l.rack, l.level,
+       b.batch_id, bt.batch_no, bt.expiry_date,
+       b.status::text, b.qty_onhand, b.qty_reserved, b.updated_at
+FROM inv.stock_balances b
+JOIN master.items i ON i.id = b.item_id
+JOIN master.locations l ON l.id = b.location_id
+JOIN master.warehouses w ON w.id = l.warehouse_id
+LEFT JOIN master.categories c ON c.id = i.category_id
+LEFT JOIN master.batches bt ON bt.id = b.batch_id
+WHERE ($1 = '' OR w.code = $1)
+  AND ($2 = '' OR b.status::text = $2)
+  AND ($3 = '' OR i.sku ILIKE '%' || $3 || '%' OR i.name ILIKE '%' || $3 || '%')
+  AND ($4 = 0 OR i.category_id = $4)
+ORDER BY i.sku, b.id
+`
+
+type ListStockBalancesParams struct {
+	Column1 interface{} `json:"column_1"`
+	Column2 interface{} `json:"column_2"`
+	Column3 interface{} `json:"column_3"`
+	Column4 interface{} `json:"column_4"`
+}
+
+type ListStockBalancesRow struct {
+	BalanceID     int64              `json:"balance_id"`
+	ItemID        int64              `json:"item_id"`
+	Sku           string             `json:"sku"`
+	ItemName      string             `json:"item_name"`
+	BaseUom       string             `json:"base_uom"`
+	CategoryName  string             `json:"category_name"`
+	WarehouseID   int64              `json:"warehouse_id"`
+	WarehouseName string             `json:"warehouse_name"`
+	LocationID    int64              `json:"location_id"`
+	LocationCode  string             `json:"location_code"`
+	Zone          pgtype.Text        `json:"zone"`
+	Rack          pgtype.Text        `json:"rack"`
+	Level         pgtype.Text        `json:"level"`
+	BatchID       pgtype.Int8        `json:"batch_id"`
+	BatchNo       pgtype.Text        `json:"batch_no"`
+	ExpiryDate    pgtype.Date        `json:"expiry_date"`
+	BStatus       string             `json:"b_status"`
+	QtyOnhand     pgtype.Numeric     `json:"qty_onhand"`
+	QtyReserved   pgtype.Numeric     `json:"qty_reserved"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+}
+
+// ============ STOCK (balances / batch trace) ============
+func (q *Queries) ListStockBalances(ctx context.Context, arg ListStockBalancesParams) ([]ListStockBalancesRow, error) {
+	rows, err := q.db.Query(ctx, listStockBalances,
+		arg.Column1,
+		arg.Column2,
+		arg.Column3,
+		arg.Column4,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListStockBalancesRow
+	for rows.Next() {
+		var i ListStockBalancesRow
+		if err := rows.Scan(
+			&i.BalanceID,
+			&i.ItemID,
+			&i.Sku,
+			&i.ItemName,
+			&i.BaseUom,
+			&i.CategoryName,
+			&i.WarehouseID,
+			&i.WarehouseName,
+			&i.LocationID,
+			&i.LocationCode,
+			&i.Zone,
+			&i.Rack,
+			&i.Level,
+			&i.BatchID,
+			&i.BatchNo,
+			&i.ExpiryDate,
+			&i.BStatus,
+			&i.QtyOnhand,
+			&i.QtyReserved,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listStockLedger = `-- name: ListStockLedger :many
+SELECT m.id, m.moved_at, m.item_id, i.sku, i.name::text AS item_name, i.base_uom,
+       m.location_id, l.code AS location_code,
+       m.batch_id, bt.batch_no,
+       m.status::text, m.movement_type::text, m.qty, m.qty_after, m.doc_no,
+       m.created_by, COALESCE(u.username, '')::text AS operator_name
+FROM inv.stock_movements m
+JOIN master.items i ON i.id = m.item_id
+LEFT JOIN master.locations l ON l.id = m.location_id
+LEFT JOIN master.batches bt ON bt.id = m.batch_id
+LEFT JOIN sec.users u ON u.id = m.created_by
+WHERE ($1::bigint = 0 OR m.item_id = $1)
+  AND m.moved_at >= $2::timestamptz AND m.moved_at <= $3::timestamptz
+ORDER BY m.moved_at DESC, m.id DESC
+LIMIT $4 OFFSET $5
+`
+
+type ListStockLedgerParams struct {
+	Column1 int64              `json:"column_1"`
+	Column2 pgtype.Timestamptz `json:"column_2"`
+	Column3 pgtype.Timestamptz `json:"column_3"`
+	Limit   int32              `json:"limit"`
+	Offset  int32              `json:"offset"`
+}
+
+type ListStockLedgerRow struct {
+	ID            int64              `json:"id"`
+	MovedAt       pgtype.Timestamptz `json:"moved_at"`
+	ItemID        int64              `json:"item_id"`
+	Sku           string             `json:"sku"`
+	ItemName      string             `json:"item_name"`
+	BaseUom       string             `json:"base_uom"`
+	LocationID    int64              `json:"location_id"`
+	LocationCode  pgtype.Text        `json:"location_code"`
+	BatchID       pgtype.Int8        `json:"batch_id"`
+	BatchNo       pgtype.Text        `json:"batch_no"`
+	MStatus       string             `json:"m_status"`
+	MMovementType string             `json:"m_movement_type"`
+	Qty           pgtype.Numeric     `json:"qty"`
+	QtyAfter      pgtype.Numeric     `json:"qty_after"`
+	DocNo         string             `json:"doc_no"`
+	CreatedBy     int64              `json:"created_by"`
+	OperatorName  string             `json:"operator_name"`
+}
+
+// Immutable movement ledger rows joined with item/location/batch/user so the
+// stock card page can render without extra lookups. item_id uses 0 = no filter;
+// moved_at is constrained to [from, to].
+func (q *Queries) ListStockLedger(ctx context.Context, arg ListStockLedgerParams) ([]ListStockLedgerRow, error) {
+	rows, err := q.db.Query(ctx, listStockLedger,
+		arg.Column1,
+		arg.Column2,
+		arg.Column3,
+		arg.Limit,
+		arg.Offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListStockLedgerRow
+	for rows.Next() {
+		var i ListStockLedgerRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.MovedAt,
+			&i.ItemID,
+			&i.Sku,
+			&i.ItemName,
+			&i.BaseUom,
+			&i.LocationID,
+			&i.LocationCode,
+			&i.BatchID,
+			&i.BatchNo,
+			&i.MStatus,
+			&i.MMovementType,
+			&i.Qty,
+			&i.QtyAfter,
+			&i.DocNo,
+			&i.CreatedBy,
+			&i.OperatorName,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -2057,6 +3359,30 @@ func (q *Queries) ListUserRoleCodes(ctx context.Context, userID int64) ([]string
 	return items, nil
 }
 
+const listUserRoleIDs = `-- name: ListUserRoleIDs :many
+SELECT DISTINCT ur.role_id FROM sec.user_roles ur WHERE ur.user_id = $1 AND ur.role_id IS NOT NULL
+`
+
+func (q *Queries) ListUserRoleIDs(ctx context.Context, userID int64) ([]int64, error) {
+	rows, err := q.db.Query(ctx, listUserRoleIDs, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var role_id int64
+		if err := rows.Scan(&role_id); err != nil {
+			return nil, err
+		}
+		items = append(items, role_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUserWarehouseCodes = `-- name: ListUserWarehouseCodes :many
 SELECT DISTINCT w.code
 FROM master.warehouses w
@@ -2078,6 +3404,89 @@ func (q *Queries) ListUserWarehouseCodes(ctx context.Context, userID int64) ([]s
 			return nil, err
 		}
 		items = append(items, code)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUserWarehouseIDs = `-- name: ListUserWarehouseIDs :many
+SELECT DISTINCT ur.warehouse_id FROM sec.user_roles ur WHERE ur.user_id = $1 AND ur.warehouse_id IS NOT NULL
+`
+
+func (q *Queries) ListUserWarehouseIDs(ctx context.Context, userID int64) ([]int64, error) {
+	rows, err := q.db.Query(ctx, listUserWarehouseIDs, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var warehouse_id int64
+		if err := rows.Scan(&warehouse_id); err != nil {
+			return nil, err
+		}
+		items = append(items, warehouse_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUsers = `-- name: ListUsers :many
+
+SELECT u.id, u.username, u.email, u.full_name, u.phone, u.is_active, u.last_login_at,
+       COALESCE(array_agg(DISTINCT r.code) FILTER (WHERE r.code IS NOT NULL), '{}')::text[] AS roles,
+       COALESCE(array_agg(DISTINCT w.code) FILTER (WHERE w.code IS NOT NULL), '{}')::text[] AS warehouses,
+       COALESCE(array_agg(DISTINCT ur.warehouse_id) FILTER (WHERE ur.warehouse_id IS NOT NULL), '{}')::bigint[] AS warehouse_ids
+FROM sec.users u
+LEFT JOIN sec.user_roles ur ON ur.user_id = u.id
+LEFT JOIN sec.roles r ON r.id = ur.role_id
+LEFT JOIN master.warehouses w ON w.id = ur.warehouse_id
+GROUP BY u.id
+ORDER BY u.id
+`
+
+type ListUsersRow struct {
+	ID           int64              `json:"id"`
+	Username     string             `json:"username"`
+	Email        pgtype.Text        `json:"email"`
+	FullName     string             `json:"full_name"`
+	Phone        pgtype.Text        `json:"phone"`
+	IsActive     bool               `json:"is_active"`
+	LastLoginAt  pgtype.Timestamptz `json:"last_login_at"`
+	Roles        []string           `json:"roles"`
+	Warehouses   []string           `json:"warehouses"`
+	WarehouseIds []int64            `json:"warehouse_ids"`
+}
+
+// ============ ADMIN (users / roles / audit logs) ============
+func (q *Queries) ListUsers(ctx context.Context) ([]ListUsersRow, error) {
+	rows, err := q.db.Query(ctx, listUsers)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListUsersRow
+	for rows.Next() {
+		var i ListUsersRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Username,
+			&i.Email,
+			&i.FullName,
+			&i.Phone,
+			&i.IsActive,
+			&i.LastLoginAt,
+			&i.Roles,
+			&i.Warehouses,
+			&i.WarehouseIds,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -2481,6 +3890,35 @@ func (q *Queries) UpdatePartner(ctx context.Context, arg UpdatePartnerParams) (M
 	return i, err
 }
 
+const updateRole = `-- name: UpdateRole :one
+UPDATE sec.roles SET code = $2, name = $3, description = $4 WHERE id = $1
+RETURNING id, code, name, description
+`
+
+type UpdateRoleParams struct {
+	ID          int64       `json:"id"`
+	Code        pgtype.Text `json:"code"`
+	Name        pgtype.Text `json:"name"`
+	Description pgtype.Text `json:"description"`
+}
+
+func (q *Queries) UpdateRole(ctx context.Context, arg UpdateRoleParams) (SecRoles, error) {
+	row := q.db.QueryRow(ctx, updateRole,
+		arg.ID,
+		arg.Code,
+		arg.Name,
+		arg.Description,
+	)
+	var i SecRoles
+	err := row.Scan(
+		&i.ID,
+		&i.Code,
+		&i.Name,
+		&i.Description,
+	)
+	return i, err
+}
+
 const updateStockBalanceQty = `-- name: UpdateStockBalanceQty :one
 UPDATE inv.stock_balances
 SET qty_onhand = $2, qty_reserved = $3, updated_at = NOW()
@@ -2505,6 +3943,66 @@ func (q *Queries) UpdateStockBalanceQty(ctx context.Context, arg UpdateStockBala
 	var i UpdateStockBalanceQtyRow
 	err := row.Scan(&i.ID, &i.QtyOnhand, &i.QtyReserved)
 	return i, err
+}
+
+const updateUser = `-- name: UpdateUser :one
+UPDATE sec.users
+SET full_name = $2, email = $3, phone = $4, is_active = $5
+WHERE id = $1
+RETURNING id, username, email, full_name, phone, is_active
+`
+
+type UpdateUserParams struct {
+	ID       int64       `json:"id"`
+	FullName string      `json:"full_name"`
+	Email    pgtype.Text `json:"email"`
+	Phone    pgtype.Text `json:"phone"`
+	IsActive bool        `json:"is_active"`
+}
+
+type UpdateUserRow struct {
+	ID       int64       `json:"id"`
+	Username string      `json:"username"`
+	Email    pgtype.Text `json:"email"`
+	FullName string      `json:"full_name"`
+	Phone    pgtype.Text `json:"phone"`
+	IsActive bool        `json:"is_active"`
+}
+
+func (q *Queries) UpdateUser(ctx context.Context, arg UpdateUserParams) (UpdateUserRow, error) {
+	row := q.db.QueryRow(ctx, updateUser,
+		arg.ID,
+		arg.FullName,
+		arg.Email,
+		arg.Phone,
+		arg.IsActive,
+	)
+	var i UpdateUserRow
+	err := row.Scan(
+		&i.ID,
+		&i.Username,
+		&i.Email,
+		&i.FullName,
+		&i.Phone,
+		&i.IsActive,
+	)
+	return i, err
+}
+
+const updateUserPassword = `-- name: UpdateUserPassword :one
+UPDATE sec.users SET password_hash = $2 WHERE id = $1 RETURNING id
+`
+
+type UpdateUserPasswordParams struct {
+	ID           int64  `json:"id"`
+	PasswordHash string `json:"password_hash"`
+}
+
+func (q *Queries) UpdateUserPassword(ctx context.Context, arg UpdateUserPasswordParams) (int64, error) {
+	row := q.db.QueryRow(ctx, updateUserPassword, arg.ID, arg.PasswordHash)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
 }
 
 const upsertDelivery = `-- name: UpsertDelivery :exec
@@ -2569,6 +4067,31 @@ func (q *Queries) UpsertDocumentNumber(ctx context.Context, arg UpsertDocumentNu
 	var last_seq int32
 	err := row.Scan(&last_seq)
 	return last_seq, err
+}
+
+const upsertSetting = `-- name: UpsertSetting :one
+INSERT INTO sec.settings (key, value, updated_by, updated_at)
+VALUES ($1, $2, $3, now())
+ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_by = EXCLUDED.updated_by, updated_at = now()
+RETURNING key, value, updated_by, updated_at
+`
+
+type UpsertSettingParams struct {
+	Key       string      `json:"key"`
+	Value     []byte      `json:"value"`
+	UpdatedBy pgtype.Int8 `json:"updated_by"`
+}
+
+func (q *Queries) UpsertSetting(ctx context.Context, arg UpsertSettingParams) (SecSettings, error) {
+	row := q.db.QueryRow(ctx, upsertSetting, arg.Key, arg.Value, arg.UpdatedBy)
+	var i SecSettings
+	err := row.Scan(
+		&i.Key,
+		&i.Value,
+		&i.UpdatedBy,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const upsertStockBalance = `-- name: UpsertStockBalance :one

@@ -61,6 +61,22 @@ export const PartnersPage: React.FC = () => {
     invalidateKeys: [['partners']],
   });
 
+  const updateMutation = useMutationWithToast({
+    mutationFn: (values: any) =>
+      partnerService.updatePartner(editingPartner!.id, {
+        code: values.code,
+        partner_type: values.type,
+        name: values.name,
+        address: values.address || undefined,
+        contact_name: values.contactPerson || undefined,
+        contact_phone: values.phone || undefined,
+        is_active: values.isActive,
+      }),
+    successTitle: 'Perubahan Mitra Berhasil Disimpan',
+    successMessage: 'Data mitra bisnis telah diperbarui di database master.',
+    invalidateKeys: [['partners']],
+  });
+
   const filteredPartners = useMemo(() => {
     return partners.filter((p) => {
       if (debouncedTerm) {
@@ -94,9 +110,15 @@ export const PartnersPage: React.FC = () => {
   };
 
   const handleSavePartner = (values: any) => {
-    createMutation.mutate(values, {
-      onSuccess: () => setModalOpen(false),
-    });
+    if (editingPartner) {
+      updateMutation.mutate(values, {
+        onSuccess: () => setModalOpen(false),
+      });
+    } else {
+      createMutation.mutate(values, {
+        onSuccess: () => setModalOpen(false),
+      });
+    }
   };
 
   const handleResetFilters = () => {

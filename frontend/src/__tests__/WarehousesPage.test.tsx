@@ -1,22 +1,46 @@
-import { render, screen, act } from '@testing-library/react';
-import { describe, it, expect } from 'vitest';
+import { render, screen, act, waitFor } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
+import { QueryClientProvider } from '@tanstack/react-query';
 import { WarehousesPage } from '../pages/master/WarehousesPage';
+import { warehouseService } from '../api/services/warehouses';
+import { queryClient } from '../api/queryClient';
+
+vi.mock('../api/services/warehouses', () => ({
+  warehouseService: { list: vi.fn() },
+}));
+
+const mockWarehouses = [
+  { id: 1, code: 'WH01', name: 'Gudang Utama Jakarta', address: 'Jl. Peruri No.1', is_active: true },
+  { id: 2, code: 'WH02', name: 'Gudang Karawang', address: '', is_active: false },
+];
 
 describe('WarehousesPage Component', () => {
-  it('renders the warehouse list from session context with a not-available notice', async () => {
+  beforeEach(() => {
+    queryClient.clear();
+    (warehouseService.list as ReturnType<typeof vi.fn>).mockResolvedValue(mockWarehouses);
+  });
+
+  it('renders warehouse rows loaded from GET /warehouses', async () => {
     await act(async () => {
       render(
-        <MemoryRouter>
-          <WarehousesPage />
-        </MemoryRouter>
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter>
+            <WarehousesPage />
+          </MemoryRouter>
+        </QueryClientProvider>
       );
     });
 
     expect(screen.getByTestId('warehouses-page')).toBeInTheDocument();
     expect(screen.getByTestId('table-warehouses')).toBeInTheDocument();
-    expect(screen.getByText(/Endpoint Gudang Tidak Tersedia/i)).toBeInTheDocument();
-    // Mock warehouses are seeded in the store (JKT01 is first)
-    expect(screen.getByText('JKT01')).toBeInTheDocument();
+
+    await waitFor(() => {
+      expect(screen.getByText('Gudang Utama Jakarta')).toBeInTheDocument();
+    });
+    expect(screen.getByText('Gudang Karawang')).toBeInTheDocument();
+    expect(screen.getByText('Aktif')).toBeInTheDocument();
+    expect(screen.getByText('Nonaktif')).toBeInTheDocument();
+    expect(warehouseService.list).toHaveBeenCalled();
   }, 10000);
 });

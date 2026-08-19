@@ -103,4 +103,14 @@ type DocumentRepository interface {
 	GetDelivery(ctx context.Context, documentID int64) (*Delivery, error)
 	// UpsertDelivery creates or merges the doc.deliveries row (Fase 7.6/7.7).
 	UpsertDelivery(ctx context.Context, d *Delivery) error
+
+	// ListAttachments returns the lampiran metadata rows of a document,
+	// newest first (Fase 6 lampiran GRN).
+	ListAttachments(ctx context.Context, documentID int64) ([]*Attachment, error)
+	// CreateAttachment inserts one attachment metadata row.
+	CreateAttachment(ctx context.Context, a *Attachment) error
+	// GetAttachmentByID returns a single attachment or pgx.ErrNoRows.
+	GetAttachmentByID(ctx context.Context, id int64) (*Attachment, error)
+	// DeleteAttachment removes an attachment row by id (no-op when missing).
+	DeleteAttachment(ctx context.Context, id int64) error
 }

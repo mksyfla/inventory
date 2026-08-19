@@ -18,8 +18,11 @@ import {
   StopOutlined,
   FieldTimeOutlined,
 } from '@ant-design/icons';
-import { FsnItem, FsnCategory, getFsnCategoryTagColor, MOCK_FSN_REPORTS } from '../../types/report';
+import { FsnItem, FsnCategory, getFsnCategoryTagColor } from '../../types/report';
 import { MOCK_CATEGORIES } from '../../types/item';
+import { useQuery } from '@tanstack/react-query';
+import { reportService } from '../../api/services/reports';
+import { mapFsnReportDTO } from '../../api/mappers';
 
 const { Title, Paragraph, Text } = Typography;
 
@@ -28,7 +31,16 @@ export const FsnAnalysisPage: React.FC = () => {
   const [selectedFsnCategory, setSelectedFsnCategory] = useState<string>('all');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
 
-  const filteredFsn = MOCK_FSN_REPORTS.filter((item) => {
+  // Real FSN report from the backend.
+  const { data: fsnReports = [], isLoading } = useQuery({
+    queryKey: ['fsn-reports'],
+    queryFn: async () => {
+      const dtos = await reportService.fsn();
+      return dtos.map(mapFsnReportDTO);
+    },
+  });
+
+  const filteredFsn = fsnReports.filter((item) => {
     const matchesSearch =
       item.sku.toLowerCase().includes(searchQuery.toLowerCase()) ||
       item.itemName.toLowerCase().includes(searchQuery.toLowerCase());
@@ -39,9 +51,9 @@ export const FsnAnalysisPage: React.FC = () => {
     return matchesSearch && matchesFsn && matchesCategory;
   });
 
-  const fastCount = MOCK_FSN_REPORTS.filter((r) => r.fsnCategory === 'fast_moving').length;
-  const slowCount = MOCK_FSN_REPORTS.filter((r) => r.fsnCategory === 'slow_moving').length;
-  const deadCount = MOCK_FSN_REPORTS.filter((r) => r.fsnCategory === 'dead_stock').length;
+  const fastCount = fsnReports.filter((r) => r.fsnCategory === 'fast_moving').length;
+  const slowCount = fsnReports.filter((r) => r.fsnCategory === 'slow_moving').length;
+  const deadCount = fsnReports.filter((r) => r.fsnCategory === 'dead_stock').length;
 
   const formatRupiah = (val: number) => {
     return new Intl.NumberFormat('id-ID', {
@@ -228,6 +240,7 @@ export const FsnAnalysisPage: React.FC = () => {
             rowKey="id"
             columns={columns}
             dataSource={filteredFsn}
+            loading={isLoading}
             pagination={{ pageSize: 10 }}
             data-testid="table-fsn-analysis"
           />

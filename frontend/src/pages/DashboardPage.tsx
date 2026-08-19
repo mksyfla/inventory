@@ -12,13 +12,21 @@ import {
   DashboardOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import { useWarehouseStore } from '../store/useWarehouseStore';
+import { reportService } from '../api/services/reports';
 
 const { Title, Paragraph, Text } = Typography;
 
 export const DashboardPage: React.FC = () => {
   const navigate = useNavigate();
   const { activeWarehouse } = useWarehouseStore();
+  // Real operational summary from the backend (GRN/DO today, below-min SKUs,
+  // total valuation). The IRA accuracy metric has no backend field yet.
+  const { data: summary } = useQuery({
+    queryKey: ['dashboard-summary'],
+    queryFn: () => reportService.dashboardSummary(),
+  });
 
   return (
     <div data-testid="dashboard-page">
@@ -75,7 +83,7 @@ export const DashboardPage: React.FC = () => {
             <Card variant="borderless">
               <Statistic
                 title="Penerimaan Hari Ini (GRN)"
-                value={12}
+                value={summary?.grn_today ?? 0}
                 suffix="dokumen"
                 valueStyle={{ color: '#0052cc' }}
                 prefix={<InboxOutlined />}
@@ -86,7 +94,7 @@ export const DashboardPage: React.FC = () => {
             <Card variant="borderless">
               <Statistic
                 title="Pengeluaran Hari Ini (DO)"
-                value={28}
+                value={summary?.do_today ?? 0}
                 suffix="dokumen"
                 valueStyle={{ color: '#36b37e' }}
                 prefix={<SendOutlined />}
@@ -97,7 +105,7 @@ export const DashboardPage: React.FC = () => {
             <Card variant="borderless">
               <Statistic
                 title="SKU di Bawah Min Stock"
-                value={5}
+                value={summary?.below_min_items ?? 0}
                 suffix="item"
                 valueStyle={{ color: '#ffab00' }}
                 prefix={<WarningOutlined />}
@@ -135,7 +143,11 @@ export const DashboardPage: React.FC = () => {
                 <Paragraph type="secondary" style={{ margin: 0, fontSize: 12 }}>
                   Metode FIFO, mutasi saldo awal/akhir, dan nilai total persediaan barang.
                 </Paragraph>
-                <Tag color="blue">Valuasi: Rp 7.450.000.000</Tag>
+                <Tag color="blue">
+                  {summary
+                    ? `Valuasi: Rp ${summary.total_valuation.toLocaleString('id-ID')}`
+                    : 'Valuasi: Rp 7.450.000.000'}
+                </Tag>
               </Space>
             </Card>
           </Col>

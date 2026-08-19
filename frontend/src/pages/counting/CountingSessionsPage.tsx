@@ -27,24 +27,25 @@ import {
 import { useNavigate } from 'react-router-dom';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   CountSession,
   CountSessionStatus,
   countSessionSchema,
   CountSessionFormValues,
   getCountStatusTagColor,
-  MOCK_COUNT_SESSIONS,
 } from '../../types/counting';
-import { MOCK_WAREHOUSES } from '../../types/location';
+import { documentService, countService, warehouseService } from '../../api/services';
+import { mapCountSummaryToSession } from '../../api/mappers';
 
 const { Title, Paragraph, Text } = Typography;
 
 export const CountingSessionsPage: React.FC = () => {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedStatus, setSelectedStatus] = useState<string>('all');
   const [createModalOpen, setCreateModalOpen] = useState<boolean>(false);
-  const [sessions, setSessions] = useState<CountSession[]>(MOCK_COUNT_SESSIONS);
 
   const {
     control,
@@ -61,6 +62,19 @@ export const CountingSessionsPage: React.FC = () => {
     },
   });
 
+  const { data: sessions = [], isLoading } = useQuery({
+    queryKey: ['count-sessions'],
+    queryFn: async () => {
+      const docs = await documentService.list({ doc_type: 'CNT', limit: 100 });
+      return docs.map(mapCountSummaryToSession);
+    },
+  });
+
+  const { data: warehouses = [] } = useQuery({
+    queryKey: ['warehouses'],
+    queryFn: warehouseService.list,
+  });
+
   const filteredSessions = sessions.filter((s) => {
     const matchesSearch =
       s.countNo.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -72,31 +86,35 @@ export const CountingSessionsPage: React.FC = () => {
     return matchesSearch && matchesStatus;
   });
 
-  const handleCreateSubmit = (values: CountSessionFormValues) => {
-    const newSession: CountSession = {
-      id: Date.now(),
-      countNo: `SO-2026-08-${String(sessions.length + 1).padStart(3, '0')}`,
-      title: values.title,
-      warehouseId: values.warehouseId,
-      warehouseName:
-        MOCK_WAREHOUSES.find((w) => w.id === values.warehouseId)?.name || 'Gudang Utama',
-      scope: values.scope,
-      targetScopeDetail: values.targetScopeDetail || 'Penuh (Full Warehouse)',
-      status: 'open',
-      iraScore: 100.0,
-      createdBy: 'Dipo Supervisor',
-      createdAt: new Date().toISOString().replace('T', ' ').substring(0, 19),
-      items: [],
-    };
+  const handleCreateSubmit = async (values: CountSessionFormValues) => {
+    const scopeNote =
+      values.scope === 'full' ? values.title : `${values.title} — ${values.targetScopeDetail || ''}`;
+    try {
+      const created = await countService.createCount({
+        warehouse_id: values.warehouseId,
+        // Backend narrows the snapshot by zone only; scope detail (Zona/Kelas)
+        // is forwarded best-effort within the backend's 20-char limit.
+        zone:
+          values.scope === 'full'
+            ? undefined
+            : (values.targetScopeDetail || '').slice(0, 20),
+        notes: scopeNote,
+      });
 
-    setSessions([newSession, ...sessions]);
-    setCreateModalOpen(false);
-    reset();
+      await queryClient.invalidateQueries({ queryKey: ['count-sessions'] });
+      setCreateModalOpen(false);
+      reset();
 
-    notification.success({
-      message: 'Sesi Stock Opname Berhasil Dibuka (FE-601)',
-      description: `Dokumen ${newSession.countNo} telah dibuat dengan snapshot stok awal.`,
-    });
+      notification.success({
+        message: 'Sesi Stock Opname Berhasil Dibuka (FE-601)',
+        description: `Dokumen ${created.doc_no} telah dibuat dengan snapshot stok awal.`,
+      });
+    } catch {
+      notification.error({
+        message: 'Gagal Membuka Sesi Opname',
+        description: 'Pastikan backend tersedia dan coba lagi.',
+      });
+    }
   };
 
   const columns = [
@@ -287,6 +305,7 @@ export const CountingSessionsPage: React.FC = () => {
             rowKey="id"
             columns={columns}
             dataSource={filteredSessions}
+            loading={isLoading}
             pagination={{ pageSize: 10 }}
             data-testid="table-count-sessions"
           />
@@ -334,7 +353,7 @@ export const CountingSessionsPage: React.FC = () => {
                     {...field}
                     style={{ width: '100%' }}
                     data-testid="select-session-warehouse"
-                    options={MOCK_WAREHOUSES.map((w) => ({ value: w.id, label: w.name }))}
+                    options={warehouses.map((w) => ({ value: w.id, label: w.name }))}
                   />
                 )}
               />

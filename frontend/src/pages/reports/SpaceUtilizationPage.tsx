@@ -9,11 +9,24 @@ import {
   Col,
 } from 'antd';
 import { HomeOutlined, DashboardOutlined } from '@ant-design/icons';
-import { WarehouseSpaceReport, MOCK_SPACE_REPORTS } from '../../types/report';
+import { WarehouseSpaceReport } from '../../types/report';
+import { useQuery } from '@tanstack/react-query';
+import { reportService } from '../../api/services/reports';
+import { mapSpaceUtilizationDTO } from '../../api/mappers';
 
 const { Title, Paragraph, Text } = Typography;
 
 export const SpaceUtilizationPage: React.FC = () => {
+  // Real space-utilization report from the backend. The mapper consumes the
+  // whole DTO array and returns the grouped per-warehouse reports.
+  const { data: spaceReports = [], isLoading } = useQuery({
+    queryKey: ['space-utilization'],
+    queryFn: async () => {
+      const dtos = await reportService.spaceUtilization();
+      return mapSpaceUtilizationDTO(dtos);
+    },
+  });
+
   const zoneColumns = [
     {
       title: 'Nama Zona / Area Gudang',
@@ -70,7 +83,7 @@ export const SpaceUtilizationPage: React.FC = () => {
         </Row>
 
         {/* Warehouse Cards Grid */}
-        {MOCK_SPACE_REPORTS.map((wh: WarehouseSpaceReport) => (
+        {spaceReports.map((wh: WarehouseSpaceReport) => (
           <Card
             key={wh.warehouseId}
             variant="borderless"
@@ -120,6 +133,7 @@ export const SpaceUtilizationPage: React.FC = () => {
               rowKey="zoneName"
               columns={zoneColumns}
               dataSource={wh.zones}
+              loading={isLoading}
               pagination={false}
               data-testid={`table-zones-space-${wh.warehouseId}`}
             />

@@ -16,29 +16,40 @@ import { ArrowLeftOutlined, SaveOutlined } from '@ant-design/icons';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import { adjustmentFormSchema, AdjustmentFormValues } from '../../types/counting';
-import { MOCK_ITEMS } from '../../types/item';
-import { MOCK_WAREHOUSES, MOCK_LOCATIONS } from '../../types/location';
+import { warehouseService, itemService, locationService, countService } from '../../api/services';
 
 const { Title, Paragraph, Text } = Typography;
 
 export const AdjustmentFormPage: React.FC = () => {
   const navigate = useNavigate();
 
+  const { data: warehouses = [] } = useQuery({
+    queryKey: ['warehouses'],
+    queryFn: warehouseService.list,
+  });
+
+  const { data: items = [] } = useQuery({
+    queryKey: ['items'],
+    queryFn: itemService.listItems,
+  });
+
   const {
     control,
     handleSubmit,
     setValue,
+    watch,
     formState: { errors, isSubmitting },
   } = useForm<AdjustmentFormValues>({
     resolver: zodResolver(adjustmentFormSchema),
     defaultValues: {
       warehouseId: 1,
-      locationCode: MOCK_LOCATIONS[0].code,
-      itemId: MOCK_ITEMS[0].id,
-      sku: MOCK_ITEMS[0].sku,
-      itemName: MOCK_ITEMS[0].name,
-      uom: MOCK_ITEMS[0].baseUom,
+      locationCode: 'JKT01-Z1-R01-B01',
+      itemId: 1,
+      sku: 'SKU-PITA-001',
+      itemName: 'Pita Cukai Hasil Tembakau 2026',
+      uom: 'RIM',
       batchNo: 'LOT-SIC-202608-01',
       adjustmentType: 'plus',
       qty: 10,
@@ -47,23 +58,54 @@ export const AdjustmentFormPage: React.FC = () => {
     },
   });
 
+  const watchWarehouseId = watch('warehouseId');
+
+  const { data: locations = [] } = useQuery({
+    queryKey: ['locations', watchWarehouseId],
+    queryFn: () => locationService.listLocations(watchWarehouseId),
+    enabled: !!watchWarehouseId,
+  });
+
   const handleSelectItem = (itemId: number) => {
-    const selected = MOCK_ITEMS.find((i) => i.id === itemId);
+    const selected = items.find((i) => i.id === itemId);
     if (selected) {
       setValue('itemId', selected.id);
       setValue('sku', selected.sku);
       setValue('itemName', selected.name);
-      setValue('uom', selected.baseUom);
+      setValue('uom', selected.base_uom);
     }
   };
 
-  const handleFormSubmit = (_values: AdjustmentFormValues) => {
-    notification.success({
-      message: 'Penyesuaian Stok Manual (ADJ) Berhasil Diposting (FE-604)',
-      description: 'Jurnal pergerakan stok penyesuaian telah resmi dicatat ke kartu stok.',
-    });
+  const handleFormSubmit = async (values: AdjustmentFormValues) => {
+    const locationId = locations.find((l) => l.code === values.locationCode)?.id ?? 0;
 
-    navigate('/counting');
+    try {
+      const created = await countService.createAdjustment({
+        warehouse_id: values.warehouseId,
+        reason_code: values.reasonCode,
+        notes: values.notes,
+        lines: [
+          {
+            item_id: values.itemId,
+            location_id: locationId,
+            qty: values.adjustmentType === 'plus' ? values.qty : -values.qty,
+            status: 'available',
+          },
+        ],
+      });
+
+      notification.success({
+        message: 'Penyesuaian Stok Manual (ADJ) Berhasil Diposting (FE-604)',
+        description: `Dokumen ${created.doc_no} telah dicatat ke kartu stok / ledger.`,
+      });
+
+      navigate('/counting');
+    } catch {
+      notification.error({
+        message: 'Gagal Posting Penyesuaian Stok',
+        description: 'Pastikan backend tersedia dan coba lagi.',
+      });
+    }
   };
 
   return (
@@ -101,7 +143,7 @@ export const AdjustmentFormPage: React.FC = () => {
                         {...field}
                         style={{ width: '100%' }}
                         data-testid="select-adj-warehouse"
-                        options={MOCK_WAREHOUSES.map((w) => ({ value: w.id, label: w.name }))}
+                        options={warehouses.map((w) => ({ value: w.id, label: `${w.code} - ${w.name}` }))}
                       />
                     )}
                   />
@@ -119,9 +161,9 @@ export const AdjustmentFormPage: React.FC = () => {
                         {...field}
                         style={{ width: '100%' }}
                         data-testid="select-adj-bin"
-                        options={MOCK_LOCATIONS.map((loc) => ({
+                        options={locations.map((loc) => ({
                           value: loc.code,
-                          label: `${loc.code} - ${loc.name}`,
+                          label: `${loc.code} - ${loc.loc_type}`,
                         }))}
                       />
                     )}
@@ -141,7 +183,7 @@ export const AdjustmentFormPage: React.FC = () => {
                         style={{ width: '100%' }}
                         onChange={(val) => handleSelectItem(val)}
                         data-testid="select-adj-sku"
-                        options={MOCK_ITEMS.map((item) => ({
+                        options={items.map((item) => ({
                           value: item.id,
                           label: `[${item.sku}] ${item.name}`,
                         }))}

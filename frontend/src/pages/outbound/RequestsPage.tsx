@@ -21,20 +21,30 @@ import {
   AlertOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import {
   ItemRequest,
   RequestStatus,
   RequestPriority,
   getRequestStatusTagColor,
-  MOCK_REQUEST_LIST,
 } from '../../types/outbound';
+import { documentService } from '../../api/services/documents';
+import { mapDocumentToItemRequest } from '../../api/mappers';
 import { useDebouncedSearch } from '../../hooks/useDebouncedSearch';
 
 const { Title, Paragraph, Text } = Typography;
 
 export const RequestsPage: React.FC = () => {
   const navigate = useNavigate();
-  const [requests] = useState<ItemRequest[]>(MOCK_REQUEST_LIST);
+
+  // Live item requests from the backend document store (doc_type = REQ).
+  const { data: requests = [], isLoading } = useQuery({
+    queryKey: ['requests'],
+    queryFn: async () => {
+      const dtos = await documentService.list({ doc_type: 'REQ' });
+      return dtos.map((dto) => mapDocumentToItemRequest(dto));
+    },
+  });
 
   const { searchTerm, setSearchTerm, debouncedTerm } = useDebouncedSearch('', 300);
   const [selectedStatus, setSelectedStatus] = useState<RequestStatus | null>(null);
@@ -107,9 +117,10 @@ export const RequestsPage: React.FC = () => {
       title: 'Total SKU Line',
       key: 'itemsCount',
       width: 120,
-      render: (_: any, record: ItemRequest) => (
-        <Tag color="blue">{record.items.length} Barang</Tag>
-      ),
+      render: (_: any, record: ItemRequest) => {
+        const count = record.items.length > 0 ? record.items.length : (record.lineCount ?? 0);
+        return <Tag color="blue">{count} Barang</Tag>;
+      },
     },
     {
       title: 'Status',
@@ -232,6 +243,7 @@ export const RequestsPage: React.FC = () => {
             rowKey="id"
             columns={columns}
             dataSource={filteredRequests}
+            loading={isLoading}
             pagination={{ pageSize: 10, showTotal: (total) => `Total ${total} Permintaan` }}
             data-testid="table-requests"
           />

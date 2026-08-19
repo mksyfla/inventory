@@ -18,20 +18,41 @@ import {
   FileTextOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { StockMovement, MovementType, MOCK_STOCK_MOVEMENTS } from '../../types/stock';
-import { MOCK_ITEMS } from '../../types/item';
+import { useQuery } from '@tanstack/react-query';
+import { StockMovement, MovementType } from '../../types/stock';
+import { itemService } from '../../api/services/items';
+import { stockQueryService } from '../../api/services/stock';
+import { mapItemDTO, mapStockMovementDTO } from '../../api/mappers';
 
 const { Title, Paragraph, Text } = Typography;
 
 export const StockCardPage: React.FC = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const initialSku = searchParams.get('sku') || MOCK_ITEMS[0].sku;
+  const initialSku = searchParams.get('sku') || '';
+
+  // Real item master (selector + summary bar).
+  const { data: items = [] } = useQuery({
+    queryKey: ['items'],
+    queryFn: async () => {
+      const dtos = await itemService.listItems();
+      return dtos.map(mapItemDTO);
+    },
+  });
 
   const [selectedSku, setSelectedSku] = useState<string>(initialSku);
-  const [movements] = useState<StockMovement[]>(MOCK_STOCK_MOVEMENTS);
+  const selectedItem =
+    items.find((i) => i.sku === selectedSku) ?? items[0] ?? null;
 
-  const selectedItem = MOCK_ITEMS.find((i) => i.sku === selectedSku) || MOCK_ITEMS[0];
+  // Immutable movement ledger filtered to the selected item.
+  const { data: movements = [], isLoading } = useQuery({
+    queryKey: ['stock-ledger', selectedItem?.id],
+    queryFn: async () => {
+      const dtos = await stockQueryService.listLedger({ item_id: selectedItem?.id });
+      return dtos.map(mapStockMovementDTO);
+    },
+    enabled: !!selectedItem,
+  });
 
   const getMovementTag = (type: MovementType) => {
     switch (type) {
@@ -47,6 +68,16 @@ export const StockCardPage: React.FC = () => {
         return <Tag color="cyan">Penyesuaian (+)</Tag>;
       case 'adjustment_minus':
         return <Tag color="magenta">Penyesuaian (-)</Tag>;
+      case 'putaway':
+        return <Tag color="blue">Putaway / Penempatan</Tag>;
+      case 'internal_move':
+        return <Tag color="default">Mutasi Internal</Tag>;
+      case 'return_in':
+        return <Tag color="cyan">Retur Masuk</Tag>;
+      case 'return_out':
+        return <Tag color="volcano">Retur Keluar</Tag>;
+      case 'opening':
+        return <Tag color="default">Saldo Awal (Opening)</Tag>;
       default:
         return <Tag color="default">{type}</Tag>;
     }
@@ -180,11 +211,11 @@ export const StockCardPage: React.FC = () => {
                 Pilih Barang SKU
               </label>
               <Select
-                value={selectedSku}
+                value={selectedItem?.sku ?? selectedSku}
                 onChange={(val) => setSelectedSku(val)}
                 style={{ width: '100%' }}
                 data-testid="select-sku-card"
-                options={MOCK_ITEMS.map((item) => ({
+                options={items.map((item) => ({
                   value: item.sku,
                   label: `[${item.sku}] ${item.name} (${item.baseUom})`,
                 }))}
@@ -208,15 +239,15 @@ export const StockCardPage: React.FC = () => {
             <Row gutter={[16, 12]}>
               <Col xs={24} sm={8}>
                 <Text type="secondary" style={{ display: 'block', fontSize: 11 }}>Kode SKU</Text>
-                <Text strong style={{ color: '#0052cc', fontSize: 14 }}>{selectedItem.sku}</Text>
+                <Text strong style={{ color: '#0052cc', fontSize: 14 }}>{selectedItem?.sku ?? '-'}</Text>
               </Col>
               <Col xs={24} sm={10}>
                 <Text type="secondary" style={{ display: 'block', fontSize: 11 }}>Nama Barang</Text>
-                <Text strong>{selectedItem.name}</Text>
+                <Text strong>{selectedItem?.name ?? '-'}</Text>
               </Col>
               <Col xs={24} sm={6}>
                 <Text type="secondary" style={{ display: 'block', fontSize: 11 }}>Satuan Dasar</Text>
-                <Tag color="blue">{selectedItem.baseUom}</Tag>
+                <Tag color="blue">{selectedItem?.baseUom ?? '-'}</Tag>
               </Col>
             </Row>
           </Card>
@@ -225,6 +256,7 @@ export const StockCardPage: React.FC = () => {
             rowKey="id"
             columns={columns}
             dataSource={movements}
+            loading={isLoading}
             pagination={{ pageSize: 15 }}
             data-testid="table-stock-ledger"
           />

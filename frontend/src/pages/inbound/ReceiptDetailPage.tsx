@@ -25,13 +25,21 @@ import {
   SafetyCertificateOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useParams, useLocation } from 'react-router-dom';
-import { GoodsReceiptNote, DocStatus, getDocStatusTagColor } from '../../types/inbound';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  GoodsReceiptNote,
+  DocStatus,
+  ReceiptItemLine,
+  getDocStatusTagColor,
+} from '../../types/inbound';
 import { useAuthStore } from '../../store/useAuthStore';
 import { useMutationWithToast } from '../../hooks/useMutationWithToast';
 import { receiptService } from '../../api/services/receipts';
-import { mapReceiptDocumentDTO } from '../../api/mappers';
-import { ReceiptDocumentDTO } from '../../api/dto';
+import { documentService } from '../../api/services/documents';
+import { mapDocumentToGoodsReceiptNote } from '../../api/mappers';
+import { DocumentDetailDTO } from '../../api/dto';
 import { RejectReasonModal } from '../../components/inbound/RejectReasonModal';
+import { ReceiptAttachmentTab } from '../../components/inbound/ReceiptAttachmentTab';
 
 const { Title, Paragraph, Text } = Typography;
 
@@ -41,11 +49,19 @@ export const ReceiptDetailPage: React.FC = () => {
   const location = useLocation();
   const user = useAuthStore((state) => state.user);
 
-  const stateDoc = (location.state as { receipt?: ReceiptDocumentDTO })?.receipt;
-  const [doc, setDoc] = useState<ReceiptDocumentDTO | null>(stateDoc || null);
+  const queryClient = useQueryClient();
+  const stateDoc = (location.state as { doc?: DocumentDetailDTO })?.doc;
   const [rejectModalOpen, setRejectModalOpen] = useState<boolean>(false);
 
-  const grn: GoodsReceiptNote | null = doc ? mapReceiptDocumentDTO(doc) : null;
+  // Live detail from the shared document store (GET /documents/:id, doc_type GRN).
+  const { data: doc } = useQuery<DocumentDetailDTO | undefined>({
+    queryKey: ['receipt', Number(id)],
+    queryFn: () => documentService.getDetail(Number(id)),
+    enabled: Boolean(id),
+    initialData: stateDoc,
+  });
+
+  const grn: GoodsReceiptNote | null = doc ? mapDocumentToGoodsReceiptNote(doc, doc.lines) : null;
 
   // Maker-Checker Safeguard rule (BR-05): creator cannot approve their own document.
   const isMaker = Boolean(user && doc && user.id === doc.created_by);
@@ -58,7 +74,9 @@ export const ReceiptDetailPage: React.FC = () => {
     successTitle: 'Dokumen Berhasil Diajukan',
     successMessage: 'Dokumen GRN telah diajukan untuk persetujuan.',
     onSuccess: (status) => {
-      if (doc) setDoc({ ...doc, status: status as DocStatus });
+      queryClient.setQueryData<DocumentDetailDTO>(['receipt', Number(id)], (old) =>
+        old ? { ...old, status: status as DocStatus } : old
+      );
     },
   });
 
@@ -70,7 +88,9 @@ export const ReceiptDetailPage: React.FC = () => {
     successTitle: 'Dokumen Berhasil Disetujui',
     successMessage: 'Dokumen GRN telah disetujui dan stok diposting ke staging.',
     onSuccess: (status) => {
-      if (doc) setDoc({ ...doc, status: status as DocStatus });
+      queryClient.setQueryData<DocumentDetailDTO>(['receipt', Number(id)], (old) =>
+        old ? { ...old, status: status as DocStatus } : old
+      );
     },
   });
 
@@ -84,25 +104,29 @@ export const ReceiptDetailPage: React.FC = () => {
 
   const handleRejectSubmit = (reasonCode: string, notes?: string) => {
     setRejectModalOpen(false);
-    if (doc) {
-      setDoc({
-        ...doc,
-        status: 'draft',
-        notes: notes ? `[Alasan Penolakan ${reasonCode}]: ${notes}` : `[Alasan Penolakan]: ${reasonCode}`,
-      });
-    }
+    queryClient.setQueryData<DocumentDetailDTO>(['receipt', Number(id)], (old) =>
+      old
+        ? {
+            ...old,
+            status: 'draft',
+            notes: notes
+              ? `[Alasan Penolakan ${reasonCode}]: ${notes}`
+              : `[Alasan Penolakan]: ${reasonCode}`,
+          }
+        : old
+    );
   };
 
   if (!grn) {
     return (
       <div data-testid="receipt-detail-page">
         <Empty
-          description="Detail dokumen tidak dapat dimuat — backend belum menyediakan endpoint GET /receipts/:id. Buat dokumen baru terlebih dahulu melalui form penerimaan."
+          description="Detail dokumen tidak dapat dimuat. Periksa koneksi atau dokumen mungkin sudah dihapus."
           style={{ padding: 48 }}
         />
         <div style={{ textAlign: 'center' }}>
-          <Button type="primary" onClick={() => navigate('/inbound/receipts/new')}>
-            Buat GRN Baru
+          <Button type="primary" onClick={() => navigate('/inbound/receipts')}>
+            Kembali ke Daftar GRN
           </Button>
         </div>
       </div>
@@ -133,45 +157,49 @@ export const ReceiptDetailPage: React.FC = () => {
       title: 'Kode SKU',
       key: 'sku',
       width: 150,
-      render: (_: any, __: any, index: number) => (
-        <Text strong style={{ color: '#0052cc' }}>{`#${grn.items[index]?.itemId}`}</Text>
+      render: (_: any, record: ReceiptItemLine) => (
+        <Text strong style={{ color: '#0052cc' }}>{record.sku}</Text>
       ),
     },
     {
       title: 'Nama Barang',
       key: 'itemName',
-      render: (_: any, __: any, index: number) => <Text strong>{`Item #${grn.items[index]?.itemId}`}</Text>,
+      render: (_: any, record: ReceiptItemLine) => <Text strong>{record.itemName}</Text>,
     },
     {
       title: 'Satuan',
       key: 'uom',
       width: 90,
-      render: (_: any, __: any, index: number) => <Tag color="blue">{grn.items[index]?.uom || '-'}</Tag>,
+      render: (_: any, record: ReceiptItemLine) => <Tag color="blue">{record.uom || '-'}</Tag>,
     },
     {
       title: 'Qty Request',
       key: 'qtyRequest',
       width: 130,
-      render: (_: any, __: any, index: number) => <Text>{grn.items[index]?.qtyExpected}</Text>,
+      render: (_: any, record: ReceiptItemLine) => <Text>{record.qtyExpected}</Text>,
     },
     {
       title: 'Qty Processed',
       key: 'qtyProcessed',
       width: 130,
-      render: (_: any, __: any, index: number) => <Text type="success" strong>{grn.items[index]?.qtyReceived}</Text>,
+      render: (_: any, record: ReceiptItemLine) => (
+        <Text type="success" strong>{record.qtyReceived}</Text>
+      ),
     },
     {
       title: 'Status Line',
       key: 'status',
       width: 140,
-      render: (_: any, __: any, index: number) => <Tag>{grn.items[index]?.qtyRejected > 0 ? 'damaged' : 'available'}</Tag>,
+      render: (_: any, record: ReceiptItemLine) => (
+        <Tag>{record.qtyRejected > 0 ? 'damaged' : 'available'}</Tag>
+      ),
     },
     {
       title: 'Target Lokasi Storage Bin',
       key: 'location',
       width: 180,
-      render: (_: any, __: any, index: number) => {
-        const loc = grn.items[index]?.targetLocationCode;
+      render: (_: any, record: ReceiptItemLine) => {
+        const loc = record.targetLocationCode;
         return loc ? (
           <Space>
             <EnvironmentOutlined style={{ color: '#36b37e' }} />
@@ -362,6 +390,9 @@ export const ReceiptDetailPage: React.FC = () => {
             data-testid="table-grn-items"
           />
         </Card>
+
+        {/* Attachment (Lampiran) — surat jalan / BAP QC / foto truk */}
+        <ReceiptAttachmentTab receiptId={grn.id} isLocked={isLocked} />
       </Space>
 
       {/* Reject Reason Modal */}

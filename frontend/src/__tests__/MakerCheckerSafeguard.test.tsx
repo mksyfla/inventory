@@ -5,8 +5,9 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import { ReceiptDetailPage } from '../pages/inbound/ReceiptDetailPage';
 import { useAuthStore } from '../store/useAuthStore';
 import { receiptService } from '../api/services/receipts';
+import { documentService } from '../api/services/documents';
 import { queryClient } from '../api/queryClient';
-import { ReceiptDocumentDTO } from '../api/dto';
+import { DocumentDetailDTO } from '../api/dto';
 
 vi.mock('../api/services/receipts', () => ({
   receiptService: {
@@ -15,10 +16,20 @@ vi.mock('../api/services/receipts', () => ({
     approveReceipt: vi.fn(),
     putawaySuggestion: vi.fn(),
     putaway: vi.fn(),
+    listAttachments: vi.fn(),
+    createAttachment: vi.fn(),
+    deleteAttachment: vi.fn(),
   },
 }));
 
-const submittedDoc: ReceiptDocumentDTO = {
+vi.mock('../api/services/documents', () => ({
+  documentService: {
+    list: vi.fn(),
+    getDetail: vi.fn(),
+  },
+}));
+
+const submittedDoc: DocumentDetailDTO = {
   id: 2,
   public_id: 'pub-2',
   doc_no: 'GRN/WH01/2608/00002',
@@ -26,10 +37,43 @@ const submittedDoc: ReceiptDocumentDTO = {
   doc_date: '2026-08-12',
   status: 'submitted',
   warehouse_id: 1,
+  dest_warehouse_id: null,
   partner_id: 1,
+  reason_code: '',
+  notes: '',
+  created_at: '2026-08-12T14:30:00Z',
   created_by: 1,
+  submitted_at: '2026-08-12T14:45:00Z',
+  approved_at: null,
+  approved_by: null,
+  completed_at: null,
+  manager_approved_by: null,
+  manager_approved_at: null,
+  warehouse_code: 'WH01',
+  warehouse_name: 'Gudang Utama Jakarta',
+  dest_warehouse_code: '',
+  dest_warehouse_name: '',
+  partner_code: 'SUP-002',
+  partner_name: 'PT Pura Barutama (Paper Division)',
+  ref_doc_no: 'PO-2026-0108',
+  line_count: 1,
   lines: [
-    { id: 1, line_no: 1, item_id: 3, uom: 'ROLL', qty_request: 20, qty_processed: 0, batch_id: null, location_id: null, status: 'available' },
+    {
+      id: 1,
+      document_id: 2,
+      line_no: 1,
+      item_id: 3,
+      sku: 'SKU-PPR-001',
+      item_name: 'Kertas Sekuriti Roll 90GSM Paspor',
+      uom: 'ROLL',
+      conv_factor: 1,
+      qty_request: 20,
+      qty_processed: 0,
+      batch_id: null,
+      location_id: null,
+      status: 'available',
+      notes: '',
+    },
   ],
 };
 
@@ -41,7 +85,14 @@ const renderWithState = (createdBy: number, user: any) => {
   });
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={[{ pathname: '/inbound/receipts/2', state: { receipt: { ...submittedDoc, created_by: createdBy } } }]}>
+      <MemoryRouter
+        initialEntries={[
+          {
+            pathname: '/inbound/receipts/2',
+            state: { doc: { ...submittedDoc, created_by: createdBy } },
+          },
+        ]}
+      >
         <Routes>
           <Route path="/inbound/receipts/:id" element={<ReceiptDetailPage />} />
         </Routes>
@@ -55,6 +106,8 @@ describe('Maker-Checker Safeguard (BR-05) & Rejection Flow', () => {
     queryClient.clear();
     (receiptService.submitReceipt as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 2, status: 'submitted' });
     (receiptService.approveReceipt as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 2, status: 'approved' });
+    (receiptService.listAttachments as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (documentService.getDetail as ReturnType<typeof vi.fn>).mockResolvedValue(submittedDoc);
   });
 
   it('disables Approve button and shows Maker-Checker alert when current user created the GRN', async () => {

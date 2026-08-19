@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   Card,
   Button,
@@ -12,6 +12,8 @@ import {
   Alert,
   Popconfirm,
   notification,
+  Spin,
+  Empty,
 } from 'antd';
 import {
   ArrowLeftOutlined,
@@ -23,12 +25,15 @@ import {
   AlertOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useParams } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import {
   ItemRequest,
   RequestStatus,
   getRequestStatusTagColor,
-  MOCK_REQUEST_LIST,
 } from '../../types/outbound';
+import { documentService } from '../../api/services/documents';
+import { outboundService } from '../../api/services/outbound';
+import { mapDocumentToItemRequest } from '../../api/mappers';
 import { RejectRequestModal } from '../../components/outbound/RejectRequestModal';
 
 const { Title, Paragraph, Text } = Typography;
@@ -37,28 +42,61 @@ export const RequestDetailPage: React.FC = () => {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
 
-  const existingRequest = MOCK_REQUEST_LIST.find((r) => r.id === Number(id)) || MOCK_REQUEST_LIST[0];
-  const [request, setRequest] = useState<ItemRequest>(existingRequest);
+  // Load the live request header + lines from the backend document store.
+  const { data: loadedRequest, isLoading } = useQuery({
+    queryKey: ['request-detail', id],
+    queryFn: async () => {
+      const dto = await documentService.getDetail(Number(id));
+      return mapDocumentToItemRequest(dto, dto.lines);
+    },
+    enabled: !!id,
+  });
+
+  // Local overrides for state transitions that the backend persists via its
+  // own mutation endpoints (submit/approve) or that are UI-only (reject/cancel/
+  // fulfill have no dedicated request endpoint yet).
+  const [localStatus, setLocalStatus] = useState<RequestStatus | null>(null);
+  const [localRejectionReason, setLocalRejectionReason] = useState<string>();
   const [rejectModalOpen, setRejectModalOpen] = useState<boolean>(false);
 
-  const handleStateTransition = (nextStatus: RequestStatus, actionLabel: string) => {
-    setRequest((prev) => ({ ...prev, status: nextStatus }));
-    notification.success({
-      message: `Status Permintaan Diperbarui`,
-      description: `Permintaan ${request.requestNo} telah berhasil diubah menjadi '${actionLabel}'.`,
-    });
+  const request: ItemRequest | undefined = useMemo(() => {
+    if (!loadedRequest) return undefined;
+    return {
+      ...loadedRequest,
+      status: localStatus ?? loadedRequest.status,
+      rejectionReason: localRejectionReason ?? loadedRequest.rejectionReason,
+    };
+  }, [loadedRequest, localStatus, localRejectionReason]);
+
+  const handleStateTransition = async (
+    nextStatus: RequestStatus,
+    actionLabel: string,
+    persist?: () => Promise<unknown>
+  ) => {
+    try {
+      if (persist) {
+        await persist();
+      }
+      setLocalStatus(nextStatus);
+      notification.success({
+        message: `Status Permintaan Diperbarui`,
+        description: `Permintaan ${request?.requestNo ?? ''} telah berhasil diubah menjadi '${actionLabel}'.`,
+      });
+    } catch {
+      notification.error({
+        message: 'Gagal Memperbarui Status Permintaan',
+        description: `Transisi ke '${actionLabel}' ditolak server.`,
+      });
+    }
   };
 
   const handleRejectSubmit = (reasonCode: string, notes?: string) => {
-    setRequest((prev) => ({
-      ...prev,
-      status: 'rejected',
-      rejectionReason: notes ? `[${reasonCode}]: ${notes}` : `[Kategori Penolakan]: ${reasonCode}`,
-    }));
+    setLocalStatus('rejected');
+    setLocalRejectionReason(notes ? `[${reasonCode}]: ${notes}` : `[Kategori Penolakan]: ${reasonCode}`);
     setRejectModalOpen(false);
     notification.warning({
       message: 'Permintaan Barang Ditolak',
-      description: `Permintaan ${request.requestNo} telah ditolak dengan alasan '${reasonCode}'.`,
+      description: `Permintaan ${request?.requestNo ?? ''} telah ditolak dengan alasan '${reasonCode}'.`,
     });
   };
 
@@ -124,6 +162,22 @@ export const RequestDetailPage: React.FC = () => {
     },
   ];
 
+  if (isLoading) {
+    return (
+      <div data-testid="request-detail-page" style={{ textAlign: 'center', padding: 48 }}>
+        <Spin />
+      </div>
+    );
+  }
+
+  if (!request) {
+    return (
+      <div data-testid="request-detail-page">
+        <Empty description="Permintaan tidak ditemukan." />
+      </div>
+    );
+  }
+
   const statusTag = getRequestStatusTagColor(request.status);
   const isLocked = request.status === 'fulfilled' || request.status === 'cancelled' || request.status === 'rejected';
 
@@ -177,7 +231,9 @@ export const RequestDetailPage: React.FC = () => {
                   <Button
                     type="primary"
                     icon={<SendOutlined />}
-                    onClick={() => handleStateTransition('submitted', 'Diajukan')}
+                    onClick={() => handleStateTransition('submitted', 'Diajukan', () =>
+                      outboundService.submitRequest(Number(id))
+                    )}
                     data-testid="btn-action-submit-request"
                   >
                     Ajukan Permintaan (Submit)
@@ -199,7 +255,9 @@ export const RequestDetailPage: React.FC = () => {
                   <Button
                     type="primary"
                     icon={<CheckOutlined />}
-                    onClick={() => handleStateTransition('approved', 'Disetujui')}
+                    onClick={() => handleStateTransition('approved', 'Disetujui', () =>
+                      outboundService.approveRequest(Number(id))
+                    )}
                     data-testid="btn-action-approve-request"
                   >
                     Setujui Permintaan (Approve)

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   Card,
   Button,
@@ -13,6 +13,8 @@ import {
   Tooltip,
   Tabs,
   notification,
+  Spin,
+  Empty,
 } from 'antd';
 import {
   ArrowLeftOutlined,
@@ -26,14 +28,18 @@ import {
   ExclamationCircleOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useParams } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import {
   DeliveryOrder,
   DeliveryStatus,
+  DeliveryItemLine,
   StockAllocation,
   PODData,
   getDeliveryStatusTagColor,
-  MOCK_DO_LIST,
 } from '../../types/outbound';
+import { documentService } from '../../api/services/documents';
+import { outboundService } from '../../api/services/outbound';
+import { mapDocumentToDeliveryOrder } from '../../api/mappers';
 import {
   OverrideAllocationModal,
   OverrideAllocationFormValues,
@@ -48,83 +54,104 @@ export const DeliveryDetailPage: React.FC = () => {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
 
-  const existingDo = MOCK_DO_LIST.find((d) => d.id === Number(id)) || MOCK_DO_LIST[0];
-  const [delivery, setDelivery] = useState<DeliveryOrder>(existingDo);
+  // Load the live DO header + lines from the backend document store.
+  const { data: loadedDelivery, isLoading } = useQuery({
+    queryKey: ['delivery-detail', id],
+    queryFn: async () => {
+      const dto = await documentService.getDetail(Number(id));
+      return mapDocumentToDeliveryOrder(dto, dto.lines);
+    },
+    enabled: !!id,
+  });
 
+  // Local overrides for the demo-flow state machine. FEFO allocation is
+  // persisted on the backend (allocateDelivery); picking/packing/ship/POD
+  // transitions remain UI-only for now.
+  const [localStatus, setLocalStatus] = useState<DeliveryStatus | null>(null);
+  const [localItems, setLocalItems] = useState<DeliveryItemLine[] | null>(null);
+  const [localDriver, setLocalDriver] = useState<{
+    driverName?: string;
+    vehiclePlateNo?: string;
+    shippingNotes?: string;
+  }>({});
+  const [localPod, setLocalPod] = useState<PODData | undefined>(undefined);
   const [overrideModalOpen, setOverrideModalOpen] = useState<boolean>(false);
   const [printModalOpen, setPrintModalOpen] = useState<boolean>(false);
   const [podModalOpen, setPodModalOpen] = useState<boolean>(false);
   const [targetItemIndex, setTargetItemIndex] = useState<number>(0);
 
-  const handleRunFefoAllocation = () => {
-    const allocatedItems = delivery.items.map((item, idx) => {
-      const mockBatchNo = idx === 0 ? 'LOT-SIC-202608-01' : 'LOT-PUR-2026-99';
-      const mockExpiry = idx === 0 ? '2027-08-10' : '2028-08-10';
-      const mockBin = idx === 0 ? 'JKT01-Z1-R01-B01' : 'JKT01-Z1-R01-B02';
+  const delivery: DeliveryOrder | undefined = useMemo(() => {
+    if (!loadedDelivery) return undefined;
+    return {
+      ...loadedDelivery,
+      status: localStatus ?? loadedDelivery.status,
+      items: localItems ?? loadedDelivery.items,
+      driverName: localDriver.driverName ?? loadedDelivery.driverName,
+      vehiclePlateNo: localDriver.vehiclePlateNo ?? loadedDelivery.vehiclePlateNo,
+      shippingNotes: localDriver.shippingNotes ?? loadedDelivery.shippingNotes,
+      pod: localPod ?? loadedDelivery.pod,
+    };
+  }, [loadedDelivery, localStatus, localItems, localDriver, localPod]);
 
-      const allocation: StockAllocation = {
-        id: Date.now() + idx,
-        deliveryItemId: item.id,
-        batchNo: mockBatchNo,
-        expiryDate: mockExpiry,
-        locationCode: mockBin,
-        qtyAllocated: item.qtyOrdered,
-        isOverridden: false,
-      };
-
-      return {
-        ...item,
-        qtyAllocated: item.qtyOrdered,
-        allocations: [allocation],
-      };
-    });
-
-    setDelivery((prev) => ({
-      ...prev,
-      status: 'allocated',
-      items: allocatedItems,
-    }));
-
-    notification.success({
-      message: 'Alokasi Stok FEFO/FIFO Berhasil Di-Trigger',
-      description: 'Stok barang berdasarkan batch terdekat expiry date telah ter-reserve.',
-    });
+  const handleRunFefoAllocation = async () => {
+    try {
+      const baseItems = localItems ?? loadedDelivery?.items ?? [];
+      const results = await outboundService.allocateDelivery(
+        Number(id),
+        baseItems.map((item) => ({ line_id: item.id, qty: item.qtyOrdered }))
+      );
+      const allocatedItems = baseItems.map((item) => {
+        const allocations = results
+          .filter((r) => r.line_id === item.id)
+          .map((r) => ({
+            id: r.allocation_id,
+            deliveryItemId: item.id,
+            batchNo: r.batch_id != null ? `LOT-${r.batch_id}` : '-',
+            locationCode: r.location_code,
+            qtyAllocated: r.qty_allocated,
+            isOverridden: false,
+          }));
+        const qtyAllocated = allocations.reduce((acc, a) => acc + a.qtyAllocated, 0);
+        return { ...item, qtyAllocated, allocations };
+      });
+      setLocalItems(allocatedItems);
+      setLocalStatus('allocated');
+      notification.success({
+        message: 'Alokasi Stok FEFO/FIFO Berhasil Di-Trigger',
+        description: 'Stok barang berdasarkan batch terdekat expiry date telah ter-reserve.',
+      });
+    } catch {
+      notification.error({
+        message: 'Alokasi FEFO Gagal',
+        description: 'Terjadi kesalahan saat memanggil endpoint alokasi server.',
+      });
+    }
   };
 
   const handleStateTransition = (nextStatus: DeliveryStatus, actionLabel: string) => {
-    setDelivery((prev) => ({ ...prev, status: nextStatus }));
+    setLocalStatus(nextStatus);
     notification.success({
       message: `Status Delivery Order Diperbarui`,
-      description: `Dokumen ${delivery.doNo} telah berhasil diubah menjadi '${actionLabel}'.`,
+      description: `Dokumen ${delivery?.doNo ?? ''} telah berhasil diubah menjadi '${actionLabel}'.`,
     });
   };
 
   const handlePostShipment = (driverName: string, vehiclePlateNo: string, shippingNotes?: string) => {
-    setDelivery((prev) => ({
-      ...prev,
-      status: 'shipped',
-      driverName,
-      vehiclePlateNo,
-      shippingNotes,
-    }));
-
+    setLocalDriver({ driverName, vehiclePlateNo, shippingNotes });
+    setLocalStatus('shipped');
     notification.success({
       message: 'Posting Pengeluaran Barang / Ship Berhasil',
-      description: `Surat Jalan ${delivery.doNo} resmi dikirim oleh driver ${driverName} (${vehiclePlateNo}).`,
+      description: `Surat Jalan ${delivery?.doNo ?? ''} resmi dikirim oleh driver ${driverName} (${vehiclePlateNo}).`,
     });
   };
 
   const handleSubmitPOD = (podData: PODData) => {
-    setDelivery((prev) => ({
-      ...prev,
-      status: 'delivered',
-      pod: podData,
-    }));
-
+    setLocalPod(podData);
+    setLocalStatus('delivered');
     setPodModalOpen(false);
     notification.success({
       message: 'Bukti Serah Terima (POD) Berhasil Disimpan',
-      description: `Surat Jalan ${delivery.doNo} telah diterima oleh ${podData.receivedBy}. Status DO menjadi Delivered.`,
+      description: `Surat Jalan ${delivery?.doNo ?? ''} telah diterima oleh ${podData.receivedBy}. Status DO menjadi Delivered.`,
     });
   };
 
@@ -134,28 +161,26 @@ export const DeliveryDetailPage: React.FC = () => {
   };
 
   const handleSaveOverrideAllocation = (values: OverrideAllocationFormValues) => {
-    setDelivery((prev) => {
-      const updatedItems = [...prev.items];
-      const item = updatedItems[targetItemIndex];
-      if (item && item.allocations.length > 0) {
-        const firstAlloc = item.allocations[0];
-        item.allocations = [
-          {
-            ...firstAlloc,
-            batchNo: values.alternativeBatchNo,
-            locationCode: values.alternativeLocationCode,
-            isOverridden: true,
-            overrideReason: `[${values.reasonCode}]: ${values.notes}`,
-          },
-        ];
-      }
-      return { ...prev, items: updatedItems };
-    });
-
+    const currentItems = localItems ?? loadedDelivery?.items ?? [];
+    const updatedItems = [...currentItems];
+    const item = updatedItems[targetItemIndex];
+    if (item && item.allocations.length > 0) {
+      const firstAlloc = item.allocations[0];
+      item.allocations = [
+        {
+          ...firstAlloc,
+          batchNo: values.alternativeBatchNo,
+          locationCode: values.alternativeLocationCode,
+          isOverridden: true,
+          overrideReason: `[${values.reasonCode}]: ${values.notes}`,
+        },
+      ];
+    }
+    setLocalItems(updatedItems);
     setOverrideModalOpen(false);
     notification.warning({
       message: 'Manual Override FEFO Berhasil Diterapkan',
-      description: `Alokasi batch barang untuk ${delivery.items[targetItemIndex]?.sku} disesuaikan secara manual.`,
+      description: `Alokasi batch barang untuk ${currentItems[targetItemIndex]?.sku} disesuaikan secara manual.`,
     });
   };
 
@@ -181,6 +206,22 @@ export const DeliveryDetailPage: React.FC = () => {
         return 0;
     }
   };
+
+  if (isLoading) {
+    return (
+      <div data-testid="delivery-detail-page" style={{ textAlign: 'center', padding: 48 }}>
+        <Spin />
+      </div>
+    );
+  }
+
+  if (!delivery) {
+    return (
+      <div data-testid="delivery-detail-page">
+        <Empty description="Delivery Order tidak ditemukan." />
+      </div>
+    );
+  }
 
   const currentTargetItem = delivery.items[targetItemIndex] || delivery.items[0];
 

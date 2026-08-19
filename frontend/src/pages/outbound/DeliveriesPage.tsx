@@ -18,19 +18,29 @@ import {
   ReloadOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import {
   DeliveryOrder,
   DeliveryStatus,
   getDeliveryStatusTagColor,
-  MOCK_DO_LIST,
 } from '../../types/outbound';
+import { documentService } from '../../api/services/documents';
+import { mapDocumentToDeliveryOrder } from '../../api/mappers';
 import { useDebouncedSearch } from '../../hooks/useDebouncedSearch';
 
 const { Title, Paragraph, Text } = Typography;
 
 export const DeliveriesPage: React.FC = () => {
   const navigate = useNavigate();
-  const [deliveries] = useState<DeliveryOrder[]>(MOCK_DO_LIST);
+
+  // Live delivery orders from the backend document store (doc_type = DO).
+  const { data: deliveries = [], isLoading } = useQuery({
+    queryKey: ['deliveries'],
+    queryFn: async () => {
+      const dtos = await documentService.list({ doc_type: 'DO' });
+      return dtos.map((dto) => mapDocumentToDeliveryOrder(dto));
+    },
+  });
 
   const { searchTerm, setSearchTerm, debouncedTerm } = useDebouncedSearch('', 300);
   const [selectedStatus, setSelectedStatus] = useState<DeliveryStatus | null>(null);
@@ -177,6 +187,7 @@ export const DeliveriesPage: React.FC = () => {
             rowKey="id"
             columns={columns}
             dataSource={filteredDeliveries}
+            loading={isLoading}
             pagination={{ pageSize: 10, showTotal: (total) => `Total ${total} Delivery Order` }}
             data-testid="table-deliveries"
           />

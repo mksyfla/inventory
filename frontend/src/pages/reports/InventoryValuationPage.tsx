@@ -21,9 +21,12 @@ import {
   DollarOutlined,
   PieChartOutlined,
 } from '@ant-design/icons';
-import { InventoryValuationItem, MOCK_VALUATION_REPORTS } from '../../types/report';
+import { InventoryValuationItem } from '../../types/report';
 import { MOCK_CATEGORIES } from '../../types/item';
-import { MOCK_WAREHOUSES } from '../../types/location';
+import { useQuery } from '@tanstack/react-query';
+import { reportService } from '../../api/services/reports';
+import { warehouseService } from '../../api/services/warehouses';
+import { mapValuationReportDTO, mapWarehouseDTO } from '../../api/mappers';
 
 const { Title, Paragraph, Text } = Typography;
 
@@ -32,7 +35,25 @@ export const InventoryValuationPage: React.FC = () => {
   const [selectedWarehouse, setSelectedWarehouse] = useState<string>('all');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
 
-  const filteredReports = MOCK_VALUATION_REPORTS.filter((item) => {
+  // Real valuation report from the backend plus the warehouse master for the
+  // filter dropdown.
+  const { data: valuationReports = [], isLoading } = useQuery({
+    queryKey: ['valuation-reports'],
+    queryFn: async () => {
+      const dtos = await reportService.valuation();
+      return dtos.map(mapValuationReportDTO);
+    },
+  });
+
+  const { data: warehouses = [] } = useQuery({
+    queryKey: ['warehouses'],
+    queryFn: async () => {
+      const dtos = await warehouseService.list();
+      return dtos.map(mapWarehouseDTO);
+    },
+  });
+
+  const filteredReports = valuationReports.filter((item) => {
     const matchesSearch =
       item.sku.toLowerCase().includes(searchQuery.toLowerCase()) ||
       item.itemName.toLowerCase().includes(searchQuery.toLowerCase());
@@ -223,7 +244,7 @@ export const InventoryValuationPage: React.FC = () => {
                 data-testid="select-warehouse-valuation"
                 options={[
                   { value: 'all', label: 'Semua Gudang' },
-                  ...MOCK_WAREHOUSES.map((w) => ({ value: String(w.id), label: w.name })),
+                  ...warehouses.map((w) => ({ value: String(w.id), label: w.name })),
                 ]}
               />
             </Col>
@@ -250,6 +271,7 @@ export const InventoryValuationPage: React.FC = () => {
             rowKey="id"
             columns={columns}
             dataSource={filteredReports}
+            loading={isLoading}
             pagination={{ pageSize: 10 }}
             data-testid="table-inventory-valuation"
           />

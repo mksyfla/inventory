@@ -32,10 +32,12 @@ import (
 	"inventory/internal/pkg/auth"
 	"inventory/internal/pkg/metrics"
 	redisclient "inventory/internal/pkg/redis"
+	adminuc "inventory/internal/usecase/admin"
 	countinguc "inventory/internal/usecase/counting"
 	inbounduc "inventory/internal/usecase/inbound"
 	itemuc "inventory/internal/usecase/item"
 	outbounduc "inventory/internal/usecase/outbound"
+	queryuc "inventory/internal/usecase/query"
 	stockuc "inventory/internal/usecase/stock"
 	transferuc "inventory/internal/usecase/transfer"
 
@@ -100,6 +102,8 @@ func newContractRouter(t *testing.T) *echo.Echo {
 		OutboundUsecase: &outbounduc.OutboundUsecase{},
 		TransferUsecase: &transferuc.TransferUsecase{},
 		CountingUsecase: &countinguc.CountingUsecase{},
+		QueryUsecase:    &queryuc.ReadUsecase{},
+		AdminUsecase:    &adminuc.AdminUsecase{},
 		Metrics:         metrics.New(),
 		HealthCheckers: []HealthChecker{
 			{Name: "postgres", Check: func(ctx context.Context) error { return nil }},

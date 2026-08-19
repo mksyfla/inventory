@@ -7,15 +7,23 @@ import {
   Card,
   Row,
   Col,
-  Alert,
 } from 'antd';
-import { HomeOutlined } from '@ant-design/icons';
-import { useWarehouseStore } from '../../store/useWarehouseStore';
+import { useQuery } from '@tanstack/react-query';
+import { Warehouse } from '../../types/warehouse';
+import { warehouseService } from '../../api/services/warehouses';
+import { mapWarehouseDTO } from '../../api/mappers';
 
 const { Title, Paragraph, Text } = Typography;
 
 export const WarehousesPage: React.FC = () => {
-  const { warehouses } = useWarehouseStore();
+  // Live master warehouse list from the backend (GET /warehouses).
+  const { data: warehouses = [], isLoading } = useQuery<Warehouse[]>({
+    queryKey: ['warehouses'],
+    queryFn: async () => {
+      const dtos = await warehouseService.list();
+      return dtos.map(mapWarehouseDTO);
+    },
+  });
 
   const columns = [
     {
@@ -29,6 +37,12 @@ export const WarehousesPage: React.FC = () => {
       dataIndex: 'name',
       key: 'name',
       render: (name: string) => <Text strong>{name}</Text>,
+    },
+    {
+      title: 'Alamat',
+      dataIndex: 'address',
+      key: 'address',
+      render: (address?: string) => (address ? <Text>{address}</Text> : <Text type="secondary">-</Text>),
     },
     {
       title: 'Status Operasional',
@@ -50,24 +64,17 @@ export const WarehousesPage: React.FC = () => {
               Master Data Gudang (Warehouse Facilities)
             </Title>
             <Paragraph type="secondary" style={{ margin: 0 }}>
-              Daftar gudang yang diizinkan untuk akun Anda (berasal dari klaim JWT).
+              Daftar seluruh fasilitas gudang yang terdaftar di backend.
             </Paragraph>
           </Col>
         </Row>
-
-        <Alert
-          message="Endpoint Gudang Tidak Tersedia"
-          description="Kontrak API (openapi.yaml) belum menyediakan endpoint CRUD warehouse. Daftar gudang di bawah ini disediakan dari konteks sesi aktif (klaim JWT) dan tidak dapat diedit melalui aplikasi ini."
-          type="info"
-          showIcon
-          icon={<HomeOutlined />}
-        />
 
         <Card variant="borderless">
           <Table
             rowKey="code"
             columns={columns}
             dataSource={warehouses}
+            loading={isLoading}
             pagination={false}
             data-testid="table-warehouses"
           />

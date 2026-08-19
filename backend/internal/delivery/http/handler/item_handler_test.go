@@ -93,6 +93,22 @@ func (m *itemMock) ListPartners(ctx context.Context) ([]postgres.MasterPartners,
 	return result, nil
 }
 
+func (m *itemMock) UpdatePartner(ctx context.Context, arg postgres.UpdatePartnerParams) (postgres.MasterPartners, error) {
+	p, ok := m.partners[arg.ID]
+	if !ok {
+		return postgres.MasterPartners{}, pgx.ErrNoRows
+	}
+	p.Code = arg.Code
+	p.PartnerType = arg.PartnerType
+	p.Name = arg.Name
+	p.Address = arg.Address
+	p.ContactName = arg.ContactName
+	p.ContactPhone = arg.ContactPhone
+	p.IsActive = arg.IsActive
+	m.partners[arg.ID] = p
+	return p, nil
+}
+
 func (m *itemMock) ListCategories(ctx context.Context) ([]postgres.MasterCategories, error) {
 	return []postgres.MasterCategories{
 		{ID: 31, Code: "CAT-RAW", Name: "Bahan Baku", IsActive: true},
@@ -309,6 +325,51 @@ func TestGetPartner_Handler_NotFound(t *testing.T) {
 	c.SetParamValues("999")
 
 	err := h.GetPartner(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+func TestUpdatePartner_Handler(t *testing.T) {
+	h, e, uc := newItemHandler()
+
+	// Seed a partner (mock map stores it under id=1) before PATCHing.
+	_, err := uc.CreatePartner(context.Background(), itemuc.CreatePartnerInput{
+		Code:         "SUPP-01",
+		PartnerType:  "supplier",
+		Name:         "PT Maju Jaya",
+		ContactName:  "Budi",
+		ContactPhone: "08123456789",
+	})
+	require.NoError(t, err)
+
+	body := `{"code":"SUPP-01","partner_type":"customer","name":"PT Maju Jaya Updated","contact_name":"Andi","contact_phone":"08129999999","is_active":true}`
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/partners/1", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetParamNames("id")
+	c.SetParamValues("1")
+
+	err = h.UpdatePartner(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var resp response.Response
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.True(t, resp.Success)
+}
+
+func TestUpdatePartner_Handler_NotFound(t *testing.T) {
+	h, e, _ := newItemHandler()
+	body := `{"code":"SUPP-01","partner_type":"supplier","name":"PT X","is_active":true}`
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/partners/999", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetParamNames("id")
+	c.SetParamValues("999")
+
+	err := h.UpdatePartner(c)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusNotFound, rec.Code)
 }

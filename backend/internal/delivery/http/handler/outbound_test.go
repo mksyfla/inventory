@@ -142,6 +142,23 @@ func (m *oDocs) UpsertDelivery(ctx context.Context, d *document.Delivery) error 
 	return nil
 }
 
+// ── attachment stubs (lampiran GRN) ───────────────────────────────────────
+func (m *oDocs) ListAttachments(ctx context.Context, documentID int64) ([]*document.Attachment, error) {
+	return nil, nil
+}
+
+func (m *oDocs) CreateAttachment(ctx context.Context, a *document.Attachment) error {
+	return nil
+}
+
+func (m *oDocs) GetAttachmentByID(ctx context.Context, id int64) (*document.Attachment, error) {
+	return nil, nil
+}
+
+func (m *oDocs) DeleteAttachment(ctx context.Context, id int64) error {
+	return nil
+}
+
 func (m *oDocs) NextSequence(ctx context.Context, docType, period string) (int64, error) {
 	return 1, nil
 }

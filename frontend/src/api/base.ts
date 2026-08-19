@@ -25,6 +25,10 @@ export async function patch<T>(url: string, body?: unknown, config?: Config): Pr
   return unwrap(apiClient.patch<ApiResponse<T>>(url, body, config));
 }
 
+export async function put<T>(url: string, body?: unknown, config?: Config): Promise<T> {
+  return unwrap(apiClient.put<ApiResponse<T>>(url, body, config));
+}
+
 export async function del<T = undefined>(url: string, config?: Config): Promise<T> {
   return unwrap(apiClient.delete<ApiResponse<T>>(url, config));
 }

@@ -17,15 +17,25 @@ import { ArrowLeftOutlined, SaveOutlined, PlusOutlined, DeleteOutlined } from '@
 import { useForm, Controller, useFieldArray } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import dayjs from 'dayjs';
 import { transferFormSchema, TransferFormValues } from '../../types/transfer';
-import { MOCK_ITEMS } from '../../types/item';
-import { MOCK_WAREHOUSES } from '../../types/location';
+import { warehouseService, itemService, transferService } from '../../api/services';
 
 const { Title, Paragraph, Text } = Typography;
 
 export const TransferFormPage: React.FC = () => {
   const navigate = useNavigate();
+
+  const { data: warehouses = [] } = useQuery({
+    queryKey: ['warehouses'],
+    queryFn: warehouseService.list,
+  });
+
+  const { data: items = [] } = useQuery({
+    queryKey: ['items'],
+    queryFn: itemService.listItems,
+  });
 
   const {
     control,
@@ -44,11 +54,11 @@ export const TransferFormPage: React.FC = () => {
       notes: 'Pengiriman persediaan barang antar gudang cabang',
       items: [
         {
-          itemId: MOCK_ITEMS[0].id,
-          sku: MOCK_ITEMS[0].sku,
-          itemName: MOCK_ITEMS[0].name,
-          uom: MOCK_ITEMS[0].baseUom,
-          batchNo: 'LOT-SIC-202608-01',
+          itemId: 1,
+          sku: 'SKU-001',
+          itemName: 'Barang Mutasi',
+          uom: 'EA',
+          batchNo: 'LOT-2026-001',
           expiryDate: dayjs().add(1, 'year').format('YYYY-MM-DD'),
           qtySent: 50,
         },
@@ -64,22 +74,40 @@ export const TransferFormPage: React.FC = () => {
   const watchOriginId = watch('originWarehouseId');
 
   const handleSelectItem = (index: number, itemId: number) => {
-    const selected = MOCK_ITEMS.find((i) => i.id === itemId);
+    const selected = items.find((i) => i.id === itemId);
     if (selected) {
       setValue(`items.${index}.itemId`, selected.id);
       setValue(`items.${index}.sku`, selected.sku);
       setValue(`items.${index}.itemName`, selected.name);
-      setValue(`items.${index}.uom`, selected.baseUom);
+      setValue(`items.${index}.uom`, selected.base_uom);
     }
   };
 
-  const handleFormSubmit = (_values: TransferFormValues) => {
-    notification.success({
-      message: 'Pengiriman Mutasi Berhasil Diposting',
-      description: 'Stok pada gudang asal telah berkurang dan berpindah ke status In-Transit.',
-    });
+  const handleFormSubmit = async (values: TransferFormValues) => {
+    try {
+      const created = await transferService.createTransfer({
+        warehouse_id: values.originWarehouseId,
+        dest_warehouse_id: values.destinationWarehouseId,
+        notes: values.notes,
+        lines: values.items.map((line) => ({
+          item_id: line.itemId,
+          qty: line.qtySent,
+          uom: line.uom,
+        })),
+      });
 
-    navigate('/transfer');
+      notification.success({
+        message: 'Pengiriman Mutasi Berhasil Diposting',
+        description: `Dokumen ${created.doc_no} telah dibuat — stok gudang asal berpindah ke status In-Transit.`,
+      });
+
+      navigate('/transfer');
+    } catch {
+      notification.error({
+        message: 'Gagal Membuat Pengiriman Mutasi',
+        description: 'Pastikan backend tersedia dan coba lagi.',
+      });
+    }
   };
 
   return (
@@ -127,7 +155,7 @@ export const TransferFormPage: React.FC = () => {
                         {...field}
                         style={{ width: '100%' }}
                         data-testid="select-origin-warehouse"
-                        options={MOCK_WAREHOUSES.map((w) => ({
+                        options={warehouses.map((w) => ({
                           value: w.id,
                           label: `${w.code} - ${w.name}`,
                         }))}
@@ -149,7 +177,7 @@ export const TransferFormPage: React.FC = () => {
                         style={{ width: '100%' }}
                         data-testid="select-destination-warehouse"
                         status={errors.destinationWarehouseId ? 'error' : ''}
-                        options={MOCK_WAREHOUSES.map((w) => ({
+                        options={warehouses.map((w) => ({
                           value: w.id,
                           label: `${w.code} - ${w.name}`,
                           disabled: w.id === watchOriginId,
@@ -221,10 +249,10 @@ export const TransferFormPage: React.FC = () => {
                   icon={<PlusOutlined />}
                   onClick={() =>
                     append({
-                      itemId: MOCK_ITEMS[0].id,
-                      sku: MOCK_ITEMS[0].sku,
-                      itemName: MOCK_ITEMS[0].name,
-                      uom: MOCK_ITEMS[0].baseUom,
+                      itemId: items[0]?.id ?? 0,
+                      sku: items[0]?.sku ?? '',
+                      itemName: items[0]?.name ?? '',
+                      uom: items[0]?.base_uom ?? 'EA',
                       batchNo: 'LOT-2026-001',
                       expiryDate: dayjs().add(1, 'year').format('YYYY-MM-DD'),
                       qtySent: 10,
@@ -268,7 +296,7 @@ export const TransferFormPage: React.FC = () => {
                             style={{ width: '100%' }}
                             onChange={(val) => handleSelectItem(index, val)}
                             data-testid={`select-item-sku-${index}`}
-                            options={MOCK_ITEMS.map((item) => ({
+                            options={items.map((item) => ({
                               value: item.id,
                               label: `${item.sku} - ${item.name}`,
                             }))}

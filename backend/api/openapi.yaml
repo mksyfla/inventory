@@ -519,6 +519,49 @@ paths:
                 "403": { $ref: "#/components/responses/Error" }
                 "404": { $ref: "#/components/responses/Error" }
                 "422": { $ref: "#/components/responses/ValidationError" }
+        patch:
+            tags: [Partners]
+            summary: Update a partner
+            description: |
+                Requires `partner.write`. Full-form replace (frontend sends the
+                whole partner). Body limited to 1 MB. Contact name/phone are
+                encrypted at rest. 404 if the partner does not exist; 409 if a
+                duplicate code is supplied.
+            parameters:
+                - { $ref: "#/components/parameters/XWarehouseId" }
+                - name: id
+                  in: path
+                  required: true
+                  schema: { type: integer, format: int64, minimum: 1 }
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            {
+                                $ref: "#/components/schemas/UpdatePartnerRequest",
+                            }
+            responses:
+                "200":
+                    description: Partner updated
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              {
+                                                  $ref: "#/components/schemas/Partner",
+                                              }
+                "401": { $ref: "#/components/responses/Error" }
+                "403": { $ref: "#/components/responses/Error" }
+                "404": { $ref: "#/components/responses/Error" }
+                "409": { $ref: "#/components/responses/Error" }
+                "422": { $ref: "#/components/responses/ValidationError" }
 
     /categories:
         get:
@@ -832,6 +875,120 @@ paths:
                 "403": { $ref: "#/components/responses/Error" }
                 "404": { $ref: "#/components/responses/Error" }
                 "409": { $ref: "#/components/responses/Error" }
+                "422": { $ref: "#/components/responses/ValidationError" }
+
+    /receipts/{id}/attachments:
+        get:
+            tags: [Inbound M2]
+            summary: List GRN attachment metadata (Fase 6, lampiran)
+            description: |
+                Mengembalikan metadata lampiran dokumen GRN (surat jalan, BAP
+                QC, foto truk, dokumen lain) — bukan isi file. File URL dapat
+                digunakan untuk unduh. Dokumen tidak ditemukan -> 404.
+                Requires `grn.read`.
+            security:
+                - bearerAuth: []
+            parameters:
+                - { $ref: "#/components/parameters/XWarehouseId" }
+                - { $ref: "#/components/parameters/ItemID" }
+            responses:
+                "200":
+                    description: Attachment metadata list
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              type: array
+                                              items:
+                                                  {
+                                                      $ref: "#/components/schemas/AttachmentResponse",
+                                                  }
+                "401": { $ref: "#/components/responses/Error" }
+                "403": { $ref: "#/components/responses/Error" }
+                "404": { $ref: "#/components/responses/Error" }
+                "422": { $ref: "#/components/responses/ValidationError" }
+
+        post:
+            tags: [Inbound M2]
+            summary: Add a GRN attachment (metadata row) (Fase 6, lampiran)
+            description: |
+                Mencatat metadata lampiran pada dokumen GRN. Body limit 10M;
+                file diharapkan diunggah terpisah dan `file_url` menunjuk ke
+                hasilnya. Dokumen tidak ditemukan -> 404. Requires `grn.create`.
+
+                Validasi (422): `category` salah satu enum; `file_name` wajib,
+                maksimal 255 karakter; `file_size_bytes` >= 0; `file_url`
+                wajib, maksimal 500 karakter.
+            security:
+                - bearerAuth: []
+            parameters:
+                - { $ref: "#/components/parameters/XWarehouseId" }
+                - { $ref: "#/components/parameters/ItemID" }
+                - { $ref: "#/components/parameters/IdempotencyKey" }
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema: { $ref: "#/components/schemas/AddAttachmentRequest" }
+            responses:
+                "201":
+                    description: Attachment metadata created
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              {
+                                                  $ref: "#/components/schemas/AttachmentResponse",
+                                              }
+                "401": { $ref: "#/components/responses/Error" }
+                "403": { $ref: "#/components/responses/Error" }
+                "404": { $ref: "#/components/responses/Error" }
+                "422": { $ref: "#/components/responses/ValidationError" }
+
+    /receipts/{id}/attachments/{attachment_id}:
+        delete:
+            tags: [Inbound M2]
+            summary: Delete a GRN attachment (metadata row) (Fase 6, lampiran)
+            description: |
+                Menghapus metadata lampiran (dan mengosongkan daftar). Lampiran
+                tidak ditemukan -> 404. Requires `grn.create`.
+            security:
+                - bearerAuth: []
+            parameters:
+                - { $ref: "#/components/parameters/XWarehouseId" }
+                - { $ref: "#/components/parameters/ItemID" }
+                - { $ref: "#/components/parameters/AttachmentID" }
+            responses:
+                "200":
+                    description: Attachment deleted
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              type: object
+                                              properties:
+                                                  deleted: { type: boolean }
+                "401": { $ref: "#/components/responses/Error" }
+                "403": { $ref: "#/components/responses/Error" }
+                "404": { $ref: "#/components/responses/Error" }
                 "422": { $ref: "#/components/responses/ValidationError" }
 
     /requests:
@@ -1586,6 +1743,55 @@ paths:
                 "409": { $ref: "#/components/responses/Error" }
                 "422": { $ref: "#/components/responses/ValidationError" }
 
+    /counts/{id}:
+        get:
+            tags: [Counting M6]
+            summary: Get count session detail with snapshot/result lines (M6.3)
+            description: |
+                Mengambil header sesi opname `CNT` beserta baris snapshot dan
+                hasil hitung (supervisor/manager reconciliation view). Berbeda
+                dengan `/documents/{id}` — baris opname hanya ada di
+                `doc.count_lines` (qty_system, qty_counted, variance), sehingga
+                endpoint khusus ini mengembalikannya. Menggunakan hak akses
+                `stock.read` yang sudah tersedia.
+
+                Param `blind=1` adalah varian layar petugas penghitung:
+                `qty_system` TIDAK dikirim dalam payload (Blind Count FR-6.1).
+                Tanpa param, `qty_system` disertakan untuk rekonsiliasi
+                supervisor.
+            security:
+                - bearerAuth: []
+            parameters:
+                - { $ref: "#/components/parameters/XWarehouseId" }
+                - name: id
+                  in: path
+                  required: true
+                  schema: { type: integer, format: int64, minimum: 1 }
+                - name: blind
+                  in: query
+                  required: false
+                  schema: { type: boolean }
+                  description: "Sembunyikan qty_system (Blind Count FR-6.1)"
+            responses:
+                "200":
+                    description: Count session header + snapshot/result lines
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - {
+                                          $ref: "#/components/schemas/ApiResponse",
+                                      }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              {
+                                                  $ref: "#/components/schemas/CountDocumentDetail",
+                                              }
+                "401": { $ref: "#/components/responses/Error" }
+                "403": { $ref: "#/components/responses/Error" }
+                "404": { $ref: "#/components/responses/Error" }
+
     /counts/{id}/lines:
         post:
             tags: [Counting M6]
@@ -1846,6 +2052,576 @@ paths:
                         application/json:
                             schema: { type: object }
 
+    # ─── Shared read / query endpoints (Fase 10.4) ───────────────────────
+    /documents:
+        get:
+            tags: [Documents]
+            summary: List documents across document types (GRN/REQ/DO/TRF/CNT/ADJ)
+            description: |
+                Requires `stock.read`. Filters use the `''` = no-filter convention.
+                `warehouse_id` uses `0` = no filter.
+            parameters:
+                - name: doc_type
+                  in: query
+                  required: false
+                  schema: { type: string, example: GRN }
+                - name: status
+                  in: query
+                  required: false
+                  schema: { type: string, example: submitted }
+                - name: warehouse_id
+                  in: query
+                  required: false
+                  schema: { type: integer, format: int64 }
+                - name: limit
+                  in: query
+                  required: false
+                  schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+                - name: offset
+                  in: query
+                  required: false
+                  schema: { type: integer, minimum: 0, default: 0 }
+            responses:
+                "200":
+                    description: Document list
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              type: array
+                                              items: { $ref: "#/components/schemas/DocumentSummary" }
+                "401":
+                    $ref: "#/components/responses/Error"
+                "403":
+                    $ref: "#/components/responses/Error"
+
+    /documents/{id}:
+        get:
+            tags: [Documents]
+            summary: Document detail (header + source/dest warehouse + partner + lines)
+            description: Requires `stock.read`.
+            parameters:
+                - { $ref: "#/components/parameters/XWarehouseId" }
+                - name: id
+                  in: path
+                  required: true
+                  schema: { type: integer, format: int64 }
+            responses:
+                "200":
+                    description: Document detail
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - type: object
+                                      properties:
+                                          data: { $ref: "#/components/schemas/DocumentDetail" }
+                "404":
+                    $ref: "#/components/responses/Error"
+                "401":
+                    $ref: "#/components/responses/Error"
+
+    /stock/balances:
+        get:
+            tags: [Stock]
+            summary: Current stock balances per location/batch (warehouse-scoped)
+            description: |
+                Requires `stock.read`. `warehouse_code` defaults to the
+                mandatory `X-Warehouse-Id` header (active warehouse).
+            parameters:
+                - { $ref: "#/components/parameters/XWarehouseId" }
+                - name: warehouse_code
+                  in: query
+                  required: false
+                  schema: { type: string, example: WH01 }
+                - name: status
+                  in: query
+                  required: false
+                  schema: { type: string, example: available }
+                - name: search
+                  in: query
+                  required: false
+                  description: Case-insensitive match on SKU or item name
+                  schema: { type: string }
+                - name: category_id
+                  in: query
+                  required: false
+                  schema: { type: integer, format: int64 }
+            responses:
+                "200":
+                    description: Stock balance list
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              type: array
+                                              items: { $ref: "#/components/schemas/StockBalance" }
+                "401":
+                    $ref: "#/components/responses/Error"
+
+    /stock/batches:
+        get:
+            tags: [Stock]
+            summary: Batch traceability list with current balances
+            description: |
+                Requires `stock.read`. `search` matches batch_no, SKU or item name.
+            parameters:
+                - { $ref: "#/components/parameters/XWarehouseId" }
+                - name: search
+                  in: query
+                  required: false
+                  schema: { type: string }
+            responses:
+                "200":
+                    description: Batch trace list
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              type: array
+                                              items: { $ref: "#/components/schemas/BatchTrace" }
+                "401":
+                    $ref: "#/components/responses/Error"
+
+    /stock/ledger:
+        get:
+            tags: [Stock]
+            summary: Immutable movement ledger (stock card)
+            description: |
+                Requires `stock.read`. Returns movement rows joined with item,
+                location, batch and operator. `item_id` filters to one item;
+                `from`/`to` bound the moved_at window (RFC3339, both optional).
+            parameters:
+                - { $ref: "#/components/parameters/XWarehouseId" }
+                - name: item_id
+                  in: query
+                  required: false
+                  schema: { type: integer, format: int64 }
+                - name: from
+                  in: query
+                  required: false
+                  description: RFC3339 inclusive lower bound (default 1970-01-01)
+                  schema: { type: string, format: date-time }
+                - name: to
+                  in: query
+                  required: false
+                  description: RFC3339 inclusive upper bound (default 2999-12-31)
+                  schema: { type: string, format: date-time }
+                - name: limit
+                  in: query
+                  required: false
+                  schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+                - name: offset
+                  in: query
+                  required: false
+                  schema: { type: integer, minimum: 0, default: 0 }
+            responses:
+                "200":
+                    description: Stock ledger rows
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              type: array
+                                              items: { $ref: "#/components/schemas/StockLedger" }
+                "401":
+                    $ref: "#/components/responses/Error"
+
+    /warehouses:
+        get:
+            tags: [Master Data]
+            summary: Warehouse master list
+            description: Requires `location.read`.
+            responses:
+                "200":
+                    description: Warehouse list
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              type: array
+                                              items: { $ref: "#/components/schemas/Warehouse" }
+                "401":
+                    $ref: "#/components/responses/Error"
+
+    /users:
+        get:
+            tags: [Admin]
+            summary: User list with roles and warehouse codes
+            description: Requires `audit.read`.
+            responses:
+                "200":
+                    description: User list
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              type: array
+                                              items: { $ref: "#/components/schemas/UserSummary" }
+                "401":
+                    $ref: "#/components/responses/Error"
+                "403":
+                    $ref: "#/components/responses/Error"
+        post:
+            tags: [Admin]
+            summary: Create a user with role and warehouse assignments
+            description: Requires `user.write`. The password is Argon2id-hashed before storage.
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema: { $ref: "#/components/schemas/CreateUserRequest" }
+            responses:
+                "201":
+                    description: Created
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              type: object
+                                              properties:
+                                                  id: { type: integer, format: int64 }
+                "401":
+                    $ref: "#/components/responses/Error"
+                "403":
+                    $ref: "#/components/responses/Error"
+                "409":
+                    $ref: "#/components/responses/Error"
+
+    /users/{id}:
+        patch:
+            tags: [Admin]
+            summary: Update a user (profile, password, role and warehouse assignments)
+            description: Requires `user.write`. Roles/WarehouseIDs are authoritative; omit password to keep it.
+            parameters:
+                - name: id
+                  in: path
+                  required: true
+                  schema: { type: integer, format: int64 }
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema: { $ref: "#/components/schemas/UpdateUserRequest" }
+            responses:
+                "200":
+                    description: Updated
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              type: object
+                                              properties:
+                                                  id: { type: integer, format: int64 }
+                "401":
+                    $ref: "#/components/responses/Error"
+                "403":
+                    $ref: "#/components/responses/Error"
+                "404":
+                    $ref: "#/components/responses/Error"
+
+    /roles:
+        get:
+            tags: [Admin]
+            summary: Role list with permission codes
+            description: Requires `audit.read`.
+            responses:
+                "200":
+                    description: Role list
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              type: array
+                                              items: { $ref: "#/components/schemas/RoleSummary" }
+                "401":
+                    $ref: "#/components/responses/Error"
+                "403":
+                    $ref: "#/components/responses/Error"
+        post:
+            tags: [Admin]
+            summary: Create a role with its permission set
+            description: Requires `role.write`.
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema: { $ref: "#/components/schemas/CreateRoleRequest" }
+            responses:
+                "201":
+                    description: Created
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              type: object
+                                              properties:
+                                                  id: { type: integer, format: int64 }
+                "401":
+                    $ref: "#/components/responses/Error"
+                "403":
+                    $ref: "#/components/responses/Error"
+                "409":
+                    $ref: "#/components/responses/Error"
+
+    /roles/{id}:
+        patch:
+            tags: [Admin]
+            summary: Update a role (fields and permission set)
+            description: Requires `role.write`.
+            parameters:
+                - name: id
+                  in: path
+                  required: true
+                  schema: { type: integer, format: int64 }
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema: { $ref: "#/components/schemas/UpdateRoleRequest" }
+            responses:
+                "200":
+                    description: Updated
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              type: object
+                                              properties:
+                                                  id: { type: integer, format: int64 }
+                "401":
+                    $ref: "#/components/responses/Error"
+                "403":
+                    $ref: "#/components/responses/Error"
+                "404":
+                    $ref: "#/components/responses/Error"
+
+    /permissions:
+        get:
+            tags: [Admin]
+            summary: Permission list (role permission matrix)
+            description: Requires `audit.read`.
+            responses:
+                "200":
+                    description: Permission list
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              type: array
+                                              items: { $ref: "#/components/schemas/PermissionSummary" }
+                "401":
+                    $ref: "#/components/responses/Error"
+
+    /settings:
+        get:
+            tags: [Admin]
+            summary: Read system settings
+            description: Requires `settings.read`. Returns the flat JSON object stored by PUT.
+            responses:
+                "200":
+                    description: Settings object
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - type: object
+                                      properties:
+                                          data: { $ref: "#/components/schemas/Settings" }
+                "401":
+                    $ref: "#/components/responses/Error"
+                "403":
+                    $ref: "#/components/responses/Error"
+        put:
+            tags: [Admin]
+            summary: Upsert system settings
+            description: Requires `settings.write`. Every key in the flat JSON object is stored.
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema: { $ref: "#/components/schemas/Settings" }
+            responses:
+                "200":
+                    description: Updated
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              type: object
+                                              properties:
+                                                  updated: { type: boolean, example: true }
+                "401":
+                    $ref: "#/components/responses/Error"
+                "403":
+                    $ref: "#/components/responses/Error"
+
+    /audit-logs:
+        get:
+            tags: [Admin]
+            summary: Audit log list (paginated)
+            description: Requires `audit.read`.
+            parameters:
+                - name: limit
+                  in: query
+                  required: false
+                  schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+                - name: offset
+                  in: query
+                  required: false
+                  schema: { type: integer, minimum: 0, default: 0 }
+            responses:
+                "200":
+                    description: Audit log list
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              type: array
+                                              items: { $ref: "#/components/schemas/AuditLog" }
+                "401":
+                    $ref: "#/components/responses/Error"
+
+    /reports/fsn:
+        get:
+            tags: [Reports]
+            summary: FSN analysis report (fast/slow/non-moving classification)
+            description: Requires `report.read`.
+            responses:
+                "200":
+                    description: FSN report rows
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              type: array
+                                              items: { $ref: "#/components/schemas/FsnReportRow" }
+                "401":
+                    $ref: "#/components/responses/Error"
+
+    /reports/valuation:
+        get:
+            tags: [Reports]
+            summary: Inventory valuation report (ending balance x last cost)
+            description: Requires `report.read`.
+            responses:
+                "200":
+                    description: Valuation report rows
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              type: array
+                                              items: { $ref: "#/components/schemas/ValuationReportRow" }
+                "401":
+                    $ref: "#/components/responses/Error"
+
+    /reports/space-utilization:
+        get:
+            tags: [Reports]
+            summary: Warehouse space utilization report per location
+            description: Requires `report.read`.
+            responses:
+                "200":
+                    description: Space utilization rows
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - type: object
+                                      properties:
+                                          data:
+                                              type: array
+                                              items: { $ref: "#/components/schemas/SpaceUtilizationRow" }
+                "401":
+                    $ref: "#/components/responses/Error"
+
+    /dashboard/summary:
+        get:
+            tags: [Dashboard]
+            summary: Operational KPI card summary
+            description: Requires `dashboard.read`.
+            responses:
+                "200":
+                    description: KPI summary
+                    content:
+                        application/json:
+                            schema:
+                                allOf:
+                                    - { $ref: "#/components/schemas/ApiResponse" }
+                                    - type: object
+                                      properties:
+                                          data: { $ref: "#/components/schemas/DashboardSummary" }
+                "401":
+                    $ref: "#/components/responses/Error"
+
 components:
     securitySchemes:
         bearerAuth:
@@ -1871,6 +2647,12 @@ components:
             name: id
             in: path
             required: true
+            schema: { type: integer, format: int64, minimum: 1 }
+        AttachmentID:
+            name: attachment_id
+            in: path
+            required: true
+            description: ID lampiran (dari GET /receipts/{id}/attachments)
             schema: { type: integer, format: int64, minimum: 1 }
         IdempotencyKey:
             name: Idempotency-Key
@@ -1946,6 +2728,322 @@ components:
                 sku: { type: string }
                 requested: {}
                 available: {}
+
+        DocumentSummary:
+            type: object
+            properties:
+                id: { type: integer, format: int64 }
+                public_id: { type: string, format: uuid }
+                doc_no: { type: string, example: GRN/WH01/2608/00001 }
+                doc_type: { type: string, example: GRN }
+                doc_date: { type: string, format: date }
+                status: { type: string, example: submitted }
+                warehouse_id: { type: integer, format: int64 }
+                dest_warehouse_id: { type: integer, format: int64, nullable: true }
+                partner_id: { type: integer, format: int64, nullable: true }
+                reason_code: { type: string }
+                notes: { type: string }
+                created_at: { type: string, format: date-time }
+                created_by: { type: integer, format: int64 }
+                submitted_at: { type: string, format: date-time, nullable: true }
+                approved_at: { type: string, format: date-time, nullable: true }
+                approved_by: { type: integer, format: int64, nullable: true }
+                completed_at: { type: string, format: date-time, nullable: true }
+                manager_approved_by: { type: integer, format: int64, nullable: true }
+                manager_approved_at: { type: string, format: date-time, nullable: true }
+                warehouse_code: { type: string }
+                warehouse_name: { type: string }
+                dest_warehouse_code: { type: string }
+                dest_warehouse_name: { type: string }
+                partner_code: { type: string }
+                partner_name: { type: string }
+                ref_doc_no: { type: string }
+                line_count: { type: integer, format: int64 }
+
+        DocumentLine:
+            type: object
+            properties:
+                id: { type: integer, format: int64 }
+                document_id: { type: integer, format: int64 }
+                line_no: { type: integer }
+                item_id: { type: integer, format: int64 }
+                sku: { type: string }
+                item_name: { type: string }
+                uom: { type: string }
+                conv_factor: { type: number, example: 1 }
+                qty_request: { type: number }
+                qty_processed: { type: number }
+                batch_id: { type: integer, format: int64, nullable: true }
+                location_id: { type: integer, format: int64, nullable: true }
+                status: { type: string, example: pending }
+                notes: { type: string }
+
+        WarehouseRef:
+            type: object
+            properties:
+                id: { type: integer, format: int64 }
+                code: { type: string }
+                name: { type: string }
+                is_active: { type: boolean }
+
+        PartnerRef:
+            type: object
+            properties:
+                id: { type: integer, format: int64 }
+                code: { type: string }
+                partner_type: { type: string, example: supplier }
+                name: { type: string }
+                is_active: { type: boolean }
+
+        DocumentDetail:
+            type: object
+            allOf:
+                - { $ref: "#/components/schemas/DocumentSummary" }
+                - type: object
+                  properties:
+                      source_warehouse: { $ref: "#/components/schemas/WarehouseRef" }
+                      dest_warehouse: { $ref: "#/components/schemas/WarehouseRef" }
+                      partner: { $ref: "#/components/schemas/PartnerRef" }
+                      lines:
+                          type: array
+                          items: { $ref: "#/components/schemas/DocumentLine" }
+
+        StockBalance:
+            type: object
+            properties:
+                balance_id: { type: integer, format: int64 }
+                item_id: { type: integer, format: int64 }
+                sku: { type: string }
+                item_name: { type: string }
+                base_uom: { type: string }
+                location_id: { type: integer, format: int64 }
+                location_code: { type: string }
+                zone: { type: string }
+                rack: { type: string }
+                level: { type: string }
+                batch_id: { type: integer, format: int64, nullable: true }
+                batch_no: { type: string }
+                expiry_date: { type: string, format: date, nullable: true }
+                status: { type: string, example: available }
+                qty_onhand: { type: number }
+                qty_reserved: { type: number }
+                updated_at: { type: string, format: date-time }
+
+        BatchTrace:
+            type: object
+            properties:
+                batch_id: { type: integer, format: int64 }
+                batch_no: { type: string }
+                item_id: { type: integer, format: int64 }
+                sku: { type: string }
+                item_name: { type: string }
+                base_uom: { type: string }
+                mfg_date: { type: string, format: date, nullable: true }
+                expiry_date: { type: string, format: date, nullable: true }
+                balance_id: { type: integer, format: int64, nullable: true }
+                location_id: { type: integer, format: int64, nullable: true }
+                location_code: { type: string }
+                status: { type: string }
+                qty_onhand: { type: number }
+                qty_reserved: { type: number }
+                grn_no: { type: string }
+                grn_date: { type: string, format: date, nullable: true }
+                supplier_name: { type: string }
+
+        StockLedger:
+            type: object
+            properties:
+                id: { type: integer, format: int64 }
+                moved_at: { type: string, format: date-time }
+                item_id: { type: integer, format: int64 }
+                sku: { type: string }
+                item_name: { type: string }
+                base_uom: { type: string }
+                location_id: { type: integer, format: int64 }
+                location_code: { type: string }
+                batch_id: { type: integer, format: int64, nullable: true }
+                batch_no: { type: string }
+                status: { type: string }
+                movement_type: { type: string, example: issue }
+                qty: { type: number }
+                qty_after: { type: number }
+                doc_no: { type: string }
+                created_by: { type: integer, format: int64 }
+                operator_name: { type: string }
+
+        Warehouse:
+            type: object
+            properties:
+                id: { type: integer, format: int64 }
+                code: { type: string, example: WH01 }
+                name: { type: string }
+                address: { type: string }
+                is_active: { type: boolean }
+
+        UserSummary:
+            type: object
+            properties:
+                id: { type: integer, format: int64 }
+                username: { type: string }
+                email: { type: string }
+                full_name: { type: string }
+                phone: { type: string, nullable: true }
+                is_active: { type: boolean }
+                last_login_at: { type: string, format: date-time, nullable: true }
+                roles:
+                    type: array
+                    items: { type: string, example: sysadmin }
+                warehouses:
+                    type: array
+                    items: { type: string, example: WH01 }
+                warehouse_ids:
+                    type: array
+                    items: { type: integer, format: int64, example: 1 }
+
+        RoleSummary:
+            type: object
+            properties:
+                id: { type: integer, format: int64 }
+                code: { type: string }
+                name: { type: string }
+                description: { type: string, nullable: true }
+                permissions:
+                    type: array
+                    items: { type: string, example: stock.read }
+
+        PermissionSummary:
+            type: object
+            properties:
+                id: { type: integer, format: int64 }
+                code: { type: string, example: item.read }
+
+        CreateUserRequest:
+            type: object
+            required: [username, full_name, password]
+            properties:
+                username: { type: string, minLength: 3, maxLength: 50 }
+                email: { type: string }
+                full_name: { type: string }
+                phone: { type: string }
+                password: { type: string, format: password, minLength: 6 }
+                is_active: { type: boolean, default: true }
+                roles:
+                    type: array
+                    items: { type: string, example: INBOUND_STAFF }
+                warehouse_ids:
+                    type: array
+                    items: { type: integer, format: int64 }
+
+        UpdateUserRequest:
+            type: object
+            required: [full_name]
+            properties:
+                full_name: { type: string }
+                email: { type: string }
+                phone: { type: string }
+                password: { type: string, format: password, minLength: 6 }
+                is_active: { type: boolean, default: true }
+                roles:
+                    type: array
+                    items: { type: string, example: INBOUND_STAFF }
+                warehouse_ids:
+                    type: array
+                    items: { type: integer, format: int64 }
+
+        CreateRoleRequest:
+            type: object
+            required: [code, name]
+            properties:
+                code: { type: string, minLength: 2, maxLength: 40 }
+                name: { type: string, minLength: 2, maxLength: 100 }
+                description: { type: string }
+                permissions:
+                    type: array
+                    items: { type: string, example: item.read }
+
+        UpdateRoleRequest:
+            type: object
+            required: [code, name]
+            properties:
+                code: { type: string, minLength: 2, maxLength: 40 }
+                name: { type: string, minLength: 2, maxLength: 100 }
+                description: { type: string }
+                permissions:
+                    type: array
+                    items: { type: string, example: item.read }
+
+        Settings:
+            type: object
+            additionalProperties: true
+            description: Flat JSON object of system settings keyed by name (e.g. companyName, minStockThresholdPct).
+
+        AuditLog:
+            type: object
+            properties:
+                id: { type: integer, format: int64 }
+                occurred_at: { type: string, format: date-time }
+                user_id: { type: integer, format: int64, nullable: true }
+                actor_username: { type: string }
+                action: { type: string, example: approve }
+                entity: { type: string, example: document }
+                entity_id: { type: integer, format: int64, nullable: true }
+                old_value: { type: object, nullable: true }
+                new_value: { type: object, nullable: true }
+                ip_address: { type: string }
+                request_id: { type: string, format: uuid }
+
+        FsnReportRow:
+            type: object
+            properties:
+                id: { type: integer, format: int64 }
+                sku: { type: string }
+                item_name: { type: string }
+                category_name: { type: string }
+                base_uom: { type: string }
+                last_movement_date: { type: string, format: date-time }
+                fsn_category: { type: string, example: fast_moving }
+                turnover_ratio: { type: integer }
+                current_qty: { type: number }
+                total_valuation: { type: number }
+
+        ValuationReportRow:
+            type: object
+            properties:
+                id: { type: integer, format: int64 }
+                sku: { type: string }
+                item_name: { type: string }
+                category_name: { type: string }
+                uom: { type: string }
+                unit_price: { type: number }
+                ending_qty: { type: number }
+                ending_value: { type: number }
+                inbound_qty: { type: number }
+                inbound_value: { type: number }
+                outbound_qty: { type: number }
+                outbound_value: { type: number }
+
+        SpaceUtilizationRow:
+            type: object
+            properties:
+                warehouse_id: { type: integer, format: int64 }
+                warehouse_code: { type: string }
+                warehouse_name: { type: string }
+                location_id: { type: integer, format: int64 }
+                location_code: { type: string }
+                zone_name: { type: string }
+                loc_type: { type: string, example: storage }
+                capacity_volume_m3: { type: number }
+                used_volume_m3: { type: number }
+
+        DashboardSummary:
+            type: object
+            properties:
+                grn_today: { type: integer, format: int64 }
+                do_today: { type: integer, format: int64 }
+                req_open: { type: integer, format: int64 }
+                do_open: { type: integer, format: int64 }
+                below_min_items: { type: integer, format: int64 }
+                total_valuation: { type: number }
 
         LoginRequest:
             type: object
@@ -2380,6 +3478,54 @@ components:
                         maxLength: 30,
                         description: "Optional, maksimal 30 karakter. Encrypted at rest (UU PDP)",
                     }
+        UpdatePartnerRequest:
+            type: object
+            description: |
+                Body untuk PATCH /partners/{id}. Frontend selalu mengirim seluruh
+                form (termasuk `code` yang non-editable di UI). Validasi sama dengan
+                CreatePartnerRequest, ditambah `is_active` untuk toggle status.
+            required: [code, partner_type, name, is_active]
+            properties:
+                code:
+                    {
+                        type: string,
+                        minLength: 1,
+                        maxLength: 30,
+                        description: "Wajib, 1-30 karakter, unik",
+                    }
+                partner_type:
+                    {
+                        type: string,
+                        enum: [supplier, customer, internal_unit],
+                        description: "Wajib, salah satu enum",
+                    }
+                name:
+                    {
+                        type: string,
+                        minLength: 1,
+                        maxLength: 150,
+                        description: "Wajib, 1-150 karakter",
+                    }
+                address:
+                    {
+                        type: string,
+                        maxLength: 500,
+                        description: "Optional, maksimal 500 karakter",
+                    }
+                contact_name:
+                    {
+                        type: string,
+                        maxLength: 100,
+                        description: "Optional, maksimal 100 karakter. Encrypted at rest (UU PDP)",
+                    }
+                contact_phone:
+                    {
+                        type: string,
+                        maxLength: 30,
+                        description: "Optional, maksimal 30 karakter. Encrypted at rest (UU PDP)",
+                    }
+                is_active:
+                    { type: boolean, description: "Wajib, status aktif mitra" }
         Partner:
             type: object
             properties:
@@ -2612,6 +3758,61 @@ components:
                         type: string,
                         description: "Status dokumen setelah aksi",
                         example: approved,
+                    }
+
+        AttachmentResponse:
+            type: object
+            properties:
+                id: { type: integer, format: int64 }
+                document_id: { type: integer, format: int64 }
+                category:
+                    {
+                        type: string,
+                        enum: [delivery_note, qc_inspection, truck_photo, other],
+                    }
+                file_name: { type: string }
+                file_size_bytes: { type: integer, format: int64 }
+                file_url: { type: string }
+                uploaded_by: { type: integer, format: int64 }
+                created_at:
+                    {
+                        type: string,
+                        format: date-time,
+                        description: "Waktu unggah (RFC3339)",
+                    }
+
+        AddAttachmentRequest:
+            type: object
+            description: |
+                Metadata lampiran GRN. File diharapkan diunggah terpisah;
+                `file_url` menunjuk ke hasil unggah.
+            required: [category, file_name, file_url]
+            properties:
+                category:
+                    {
+                        type: string,
+                        enum: [delivery_note, qc_inspection, truck_photo, other],
+                        description: "Wajib. Jenis lampiran",
+                    }
+                file_name:
+                    {
+                        type: string,
+                        maxLength: 255,
+                        description: "Wajib. Nama file, maksimal 255 karakter",
+                    }
+                file_size_bytes:
+                    {
+                        type: integer,
+                        format: int64,
+                        minimum: 0,
+                        default: 0,
+                        description: "Opsional. Ukuran file dalam byte (>= 0)",
+                    }
+                file_url:
+                    {
+                        type: string,
+                        maxLength: 500,
+                        description: "Wajib. Lokasi file, maksimal 500 karakter",
                     }
 
         PutawayRequest:
@@ -3283,6 +4484,60 @@ components:
                 lines:
                     type: array
                     items: { $ref: "#/components/schemas/CountLineSummary" }
+
+        CountLineDetail:
+            type: object
+            description: |
+                Satu baris `doc.count_lines` untuk tampilan reconciliation
+                (supervisor/manager). Berbeda dari `CountLineSummary`, di sini
+                `qty_system` DIKEMBALIKAN — view ini untuk supervisor, bukan
+                petugas penghitung (Blind Count FR-6.1 tetap berlaku).
+            properties:
+                id: { type: integer, format: int64 }
+                item_id: { type: integer, format: int64 }
+                sku: { type: string }
+                item_name: { type: string }
+                uom: { type: string }
+                location_id: { type: integer, format: int64 }
+                location_code: { type: string }
+                batch_id: { type: integer, format: int64, nullable: true }
+                batch_no: { type: string }
+                expiry_date: { type: string, format: date }
+                qty_system:
+                    {
+                        type: number,
+                        format: double,
+                        nullable: true,
+                        description: "null / absent saat blind=1 (Blind Count FR-6.1)",
+                    }
+                qty_counted: { type: number, format: double, nullable: true }
+                variance: { type: number, format: double, nullable: true }
+                reason_code: { type: string }
+                counted_by: { type: integer, format: int64, nullable: true }
+                counted_at:
+                    { type: string, format: date-time, nullable: true }
+
+        CountDocumentDetail:
+            type: object
+            description: |
+                Header sesi opname `CNT` beserta baris snapshot/hasil untuk
+                halaman reconciliation supervisor (GET /counts/{id}).
+            properties:
+                id: { type: integer, format: int64 }
+                public_id: { type: string, format: uuid }
+                doc_no: { type: string, example: CNT/WH01/2608/00001 }
+                doc_type: { type: string, example: CNT }
+                doc_date: { type: string, format: date }
+                status: { type: string, example: draft }
+                warehouse_id: { type: integer, format: int64 }
+                notes: { type: string }
+                created_at: { type: string, format: date-time }
+                created_by: { type: integer, format: int64 }
+                warehouse_code: { type: string }
+                warehouse_name: { type: string }
+                lines:
+                    type: array
+                    items: { $ref: "#/components/schemas/CountLineDetail" }
 
         InputCountLineRequest:
             type: object

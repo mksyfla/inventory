@@ -5,10 +5,10 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import React from 'react';
 import { ReceiptFormPage } from '../pages/inbound/ReceiptFormPage';
 import { itemService } from '../api/services/items';
+import { warehouseService } from '../api/services/warehouses';
 import { partnerService } from '../api/services/partners';
 import { receiptService } from '../api/services/receipts';
 import { queryClient } from '../api/queryClient';
-import { useWarehouseStore } from '../store/useWarehouseStore';
 
 vi.mock('../api/services/items', () => ({
   itemService: {
@@ -19,6 +19,10 @@ vi.mock('../api/services/items', () => ({
     softDeleteItem: vi.fn(),
     importItems: vi.fn(),
   },
+}));
+
+vi.mock('../api/services/warehouses', () => ({
+  warehouseService: { list: vi.fn() },
 }));
 
 vi.mock('../api/services/partners', () => ({
@@ -85,12 +89,9 @@ const renderWithProviders = (ui: React.ReactElement) =>
 describe('ReceiptFormPage Component', () => {
   beforeEach(() => {
     queryClient.clear();
-    useWarehouseStore.setState({
-      warehouses: [{ id: 1, code: 'WH01', name: 'Gudang Utama', address: '', isActive: true }],
-      activeWarehouseId: 1,
-      activeWarehouse: { id: 1, code: 'WH01', name: 'Gudang Utama', address: '', isActive: true },
-      activeWarehouseCode: 'WH01',
-    });
+    (warehouseService.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { id: 1, code: 'WH01', name: 'Gudang Utama', address: '', is_active: true },
+    ]);
     (itemService.listItems as ReturnType<typeof vi.fn>).mockResolvedValue(mockItems);
     (partnerService.listPartners as ReturnType<typeof vi.fn>).mockResolvedValue(mockPartners);
     (receiptService.createReceipt as ReturnType<typeof vi.fn>).mockResolvedValue({

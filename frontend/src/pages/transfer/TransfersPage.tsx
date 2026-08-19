@@ -13,12 +13,14 @@ import {
 } from 'antd';
 import { PlusOutlined, SearchOutlined, EyeOutlined, SwapOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import {
   StockTransfer,
   TransferStatus,
   getTransferStatusTagColor,
-  MOCK_TRANSFER_LIST,
 } from '../../types/transfer';
+import { documentService } from '../../api/services';
+import { mapDocumentToTransfer } from '../../api/mappers';
 
 const { Title, Paragraph } = Typography;
 
@@ -27,8 +29,18 @@ export const TransfersPage: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedStatus, setSelectedStatus] = useState<string>('all');
 
+  const { data: transfers = [], isLoading } = useQuery({
+    queryKey: ['transfers'],
+    queryFn: async () => {
+      const docs = await documentService.list({ doc_type: 'TRF', limit: 100 });
+      // Pass the doc explicitly — map() would otherwise feed the array index
+      // into mapDocumentToTransfer's second (lines) parameter.
+      return docs.map((d) => mapDocumentToTransfer(d));
+    },
+  });
+
   const filteredTransfers = useMemo(() => {
-    return MOCK_TRANSFER_LIST.filter((transfer) => {
+    return transfers.filter((transfer) => {
       const matchesSearch =
         transfer.transferNo.toLowerCase().includes(searchQuery.toLowerCase()) ||
         transfer.originWarehouseName.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -39,7 +51,7 @@ export const TransfersPage: React.FC = () => {
 
       return matchesSearch && matchesStatus;
     });
-  }, [searchQuery, selectedStatus]);
+  }, [transfers, searchQuery, selectedStatus]);
 
   const columns = [
     {
@@ -168,6 +180,7 @@ export const TransfersPage: React.FC = () => {
             rowKey="id"
             columns={columns}
             dataSource={filteredTransfers}
+            loading={isLoading}
             pagination={{ pageSize: 10 }}
             data-testid="table-transfers"
           />

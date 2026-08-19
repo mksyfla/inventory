@@ -16,12 +16,14 @@ import (
 	"inventory/internal/pkg/metrics"
 	redisclient "inventory/internal/pkg/redis"
 	"inventory/internal/repository/postgres"
+	adminuc "inventory/internal/usecase/admin"
 	inbounduc "inventory/internal/usecase/inbound"
 	itemuc "inventory/internal/usecase/item"
 	outbounduc "inventory/internal/usecase/outbound"
 	stockuc "inventory/internal/usecase/stock"
 	countinguc "inventory/internal/usecase/counting"
 	transferuc "inventory/internal/usecase/transfer"
+	queryuc "inventory/internal/usecase/query"
 
 	"inventory/internal/pkg/docnum"
 
@@ -297,6 +299,19 @@ func main() {
 		docnum.NewGenerator(docRepo),
 	)
 
+	// 7f. Shared read module (Fase 10.4): documents, stock, admin, reports,
+	// dashboard — read-only, one repository over the sqlc queries.
+	queryUsecase := queryuc.NewReadUsecase(postgres.NewQueryRepository(queries))
+
+	// 7g. Admin write module (Fase 10.x): RBAC CRUD + system settings. The
+	// audit writer is the same lookup used by the transfer module (its
+	// InsertAuditLog method satisfies admin.AuditLogWriter structurally).
+	adminUsecase := adminuc.NewAdminUsecase(
+		postgres.NewPostgresAdminRepository(pool),
+		txRunner,
+		transferLookup,
+	)
+
 	// 8. Init asynq client for async jobs (Fase 3.4)
 	asynqClient := asynq.NewClient(asynq.RedisClientOpt{Addr: cfg.RedisAddr})
 	defer asynqClient.Close()
@@ -316,6 +331,8 @@ func main() {
 		OutboundUsecase: outboundUsecase,
 		TransferUsecase: transferUsecase,
 		CountingUsecase: countingUsecase,
+		QueryUsecase:    queryUsecase,
+		AdminUsecase:    adminUsecase,
 		AsynqClient:     asynqClient,
 		Metrics:         metricsSvc,
 		HealthCheckers: []httpDelivery.HealthChecker{

@@ -65,3 +65,24 @@ type ReceiptStatusResponse struct {
 	ID     int64  `json:"id"`
 	Status string `json:"status"`
 }
+
+// AddAttachmentRequest is the metadata payload of POST /api/v1/receipts/{id}/attachments.
+// File bytes are not uploaded; the row persists the reference plus category/size.
+type AddAttachmentRequest struct {
+	Category      string `json:"category" validate:"required,oneof=delivery_note qc_inspection truck_photo other"`
+	FileName      string `json:"file_name" validate:"required,max=255"`
+	FileSizeBytes int64  `json:"file_size_bytes" validate:"min=0"`
+	FileURL       string `json:"file_url" validate:"required,max=500"`
+}
+
+// AttachmentResponse is one lampiran metadata row of a GRN document.
+type AttachmentResponse struct {
+	ID            int64  `json:"id"`
+	DocumentID    int64  `json:"document_id"`
+	Category      string `json:"category"`
+	FileName      string `json:"file_name"`
+	FileSizeBytes int64  `json:"file_size_bytes"`
+	FileURL       string `json:"file_url"`
+	UploadedBy    int64  `json:"uploaded_by"`
+	CreatedAt     string `json:"created_at"`
+}

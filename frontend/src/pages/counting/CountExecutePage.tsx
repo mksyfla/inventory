@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Card,
   Table,
@@ -10,6 +10,8 @@ import {
   Row,
   Col,
   Alert,
+  Spin,
+  Empty,
   notification,
 } from 'antd';
 import {
@@ -19,7 +21,10 @@ import {
   BarcodeOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useParams } from 'react-router-dom';
-import { CountSession, CountSessionLine, MOCK_COUNT_SESSIONS } from '../../types/counting';
+import { useQuery } from '@tanstack/react-query';
+import { CountSessionLine } from '../../types/counting';
+import { countService } from '../../api/services';
+import { mapCountDetailToSession } from '../../api/mappers';
 
 const { Title, Paragraph, Text } = Typography;
 
@@ -27,23 +32,37 @@ export const CountExecutePage: React.FC = () => {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
 
-  const existingSession =
-    MOCK_COUNT_SESSIONS.find((s) => s.id === Number(id) || String(s.id) === String(id)) ||
-    MOCK_COUNT_SESSIONS[0];
+  const { data: session, isLoading } = useQuery({
+    queryKey: ['count-detail-blind', id],
+    // Blind Count (FR-6.1): blind=true tells the backend to omit qty_system
+    // from the payload, so the field device never receives it.
+    queryFn: async () => {
+      const dto = await countService.getCountDetail(Number(id), true);
+      return mapCountDetailToSession(dto);
+    },
+    enabled: !!id,
+  });
 
-  const [session, setSession] = useState<CountSession>(existingSession);
+  const [lines, setLines] = useState<CountSessionLine[]>([]);
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (session) setLines(session.items);
+  }, [session]);
 
   const handleQtyCountedChange = (index: number, val: number | null) => {
     if (val === null) return;
-    setSession((prev) => {
-      const updated = [...prev.items];
+    setLines((prev) => {
+      const updated = [...prev];
       updated[index] = { ...updated[index], qtyCounted: val };
-      return { ...prev, items: updated };
+      return updated;
     });
   };
 
-  const handleSubmitForReview = () => {
-    const isAnyUncounted = session.items.some((i) => i.qtyCounted === undefined);
+  const handleSubmitForReview = async () => {
+    if (!session) return;
+
+    const isAnyUncounted = lines.some((i) => i.qtyCounted === undefined);
     if (isAnyUncounted) {
       notification.warning({
         message: 'Barang Belum Dihitung Lengkap',
@@ -52,13 +71,44 @@ export const CountExecutePage: React.FC = () => {
       return;
     }
 
-    notification.success({
-      message: 'Hasil Hitung Fisik (Blind Count) Berhasil Disimpan',
-      description: 'Sesi opname dikirim ke Supervisor untuk tahap rekonsiliasi selisih.',
-    });
+    try {
+      setSubmitting(true);
+      await countService.inputCountLines(
+        session.id,
+        lines.map((l) => ({ count_line_id: l.id, qty_counted: l.qtyCounted ?? 0 }))
+      );
 
-    navigate(`/counting/${session.id}`);
+      notification.success({
+        message: 'Hasil Hitung Fisik (Blind Count) Berhasil Disimpan',
+        description: 'Sesi opname dikirim ke Supervisor untuk tahap rekonsiliasi selisih.',
+      });
+
+      navigate(`/counting/${session.id}`);
+    } catch {
+      notification.error({
+        message: 'Gagal Menyimpan Hasil Hitung',
+        description: 'Pastikan backend tersedia dan coba lagi.',
+      });
+    } finally {
+      setSubmitting(false);
+    }
   };
+
+  if (isLoading) {
+    return (
+      <div data-testid="count-execute-page" style={{ textAlign: 'center', padding: 48 }}>
+        <Spin />
+      </div>
+    );
+  }
+
+  if (!session) {
+    return (
+      <div data-testid="count-execute-page">
+        <Empty description="Sesi opname tidak ditemukan" />
+      </div>
+    );
+  }
 
   // BLIND COUNT: Columns MUST NOT display `qtySystem`
   const columns = [
@@ -137,6 +187,7 @@ export const CountExecutePage: React.FC = () => {
                 type="primary"
                 style={{ background: '#52c41a', borderColor: '#52c41a' }}
                 icon={<CheckCircleOutlined />}
+                loading={submitting}
                 onClick={handleSubmitForReview}
                 data-testid="btn-submit-count-review"
               >
@@ -173,7 +224,7 @@ export const CountExecutePage: React.FC = () => {
           <Table
             rowKey="id"
             columns={columns}
-            dataSource={session.items}
+            dataSource={lines}
             pagination={false}
             data-testid="table-execute-lines"
           />

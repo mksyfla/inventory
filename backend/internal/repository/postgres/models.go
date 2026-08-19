@@ -32,6 +32,17 @@ type DocAllocations struct {
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 }
 
+type DocAttachments struct {
+	ID            int64              `json:"id"`
+	DocumentID    int64              `json:"document_id"`
+	Category      string             `json:"category"`
+	FileName      string             `json:"file_name"`
+	FileSizeBytes int64              `json:"file_size_bytes"`
+	FileUrl       string             `json:"file_url"`
+	UploadedBy    int64              `json:"uploaded_by"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+}
+
 type DocCountLines struct {
 	ID         int64              `json:"id"`
 	DocumentID int64              `json:"document_id"`
@@ -245,9 +256,17 @@ type SecRolePermissions struct {
 }
 
 type SecRoles struct {
-	ID   int64       `json:"id"`
-	Code pgtype.Text `json:"code"`
-	Name pgtype.Text `json:"name"`
+	ID          int64       `json:"id"`
+	Code        pgtype.Text `json:"code"`
+	Name        pgtype.Text `json:"name"`
+	Description pgtype.Text `json:"description"`
+}
+
+type SecSettings struct {
+	Key       string             `json:"key"`
+	Value     []byte             `json:"value"`
+	UpdatedBy pgtype.Int8        `json:"updated_by"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
 }
 
 type SecUserRoles struct {
@@ -265,4 +284,5 @@ type SecUsers struct {
 	IsActive     bool               `json:"is_active"`
 	MfaSecret    pgtype.Text        `json:"mfa_secret"`
 	LastLoginAt  pgtype.Timestamptz `json:"last_login_at"`
+	Phone        pgtype.Text        `json:"phone"`
 }

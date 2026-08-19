@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Card,
   Button,
@@ -13,6 +13,8 @@ import {
   Input,
   InputNumber,
   Select,
+  Spin,
+  Empty,
   notification,
 } from 'antd';
 import {
@@ -21,14 +23,14 @@ import {
   ExclamationCircleOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useParams } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import {
-  StockTransfer,
   StockTransferLine,
   TransferStatus,
   getTransferStatusTagColor,
-  MOCK_TRANSFER_LIST,
 } from '../../types/transfer';
-import { MOCK_LOCATIONS } from '../../types/location';
+import { documentService, locationService, transferService } from '../../api/services';
+import { mapDocumentToTransfer } from '../../api/mappers';
 
 const { Title, Paragraph, Text } = Typography;
 
@@ -36,41 +38,63 @@ export const TransferDetailPage: React.FC = () => {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
 
-  const existingTransfer =
-    MOCK_TRANSFER_LIST.find((t) => t.id === Number(id) || String(t.id) === String(id)) ||
-    MOCK_TRANSFER_LIST[0];
+  const { data: detail, isLoading } = useQuery({
+    queryKey: ['transfer-detail', id],
+    queryFn: async () => {
+      const dto = await documentService.getDetail(Number(id));
+      return mapDocumentToTransfer(dto, dto.lines);
+    },
+    enabled: !!id,
+  });
 
-  const [transfer, setTransfer] = useState<StockTransfer>(existingTransfer);
-  const [discrepancyReason, setDiscrepancyReason] = useState<string>(
-    existingTransfer.discrepancyReason || ''
-  );
+  const { data: locations = [] } = useQuery({
+    queryKey: ['locations', detail?.destinationWarehouseId],
+    queryFn: () => locationService.listLocations(detail?.destinationWarehouseId ?? 0),
+    enabled: !!detail && !!detail.destinationWarehouseId,
+  });
+
+  // Local overrides for the receive-in flow (qty received, target bin, status).
+  const [lines, setLines] = useState<StockTransferLine[]>([]);
+  const [status, setStatus] = useState<TransferStatus>('draft');
+  const [discrepancyReason, setDiscrepancyReason] = useState<string>('');
+  const [receiving, setReceiving] = useState(false);
+
+  useEffect(() => {
+    if (detail) {
+      setLines(detail.items);
+      setStatus(detail.status);
+      setDiscrepancyReason(detail.discrepancyReason || '');
+    }
+  }, [detail]);
 
   const handleQtyReceivedChange = (index: number, val: number | null) => {
     if (val === null) return;
-    setTransfer((prev) => {
-      const updatedItems = [...prev.items];
-      const current = updatedItems[index];
+    setLines((prev) => {
+      const updated = [...prev];
+      const current = updated[index];
       const variance = current.qtySent - val;
-      updatedItems[index] = {
+      updated[index] = {
         ...current,
         qtyReceived: val,
         qtyVariance: variance > 0 ? variance : 0,
       };
-      return { ...prev, items: updatedItems };
+      return updated;
     });
   };
 
   const handleLocationChange = (index: number, locCode: string) => {
-    setTransfer((prev) => {
-      const updatedItems = [...prev.items];
-      updatedItems[index] = { ...updatedItems[index], targetLocationCode: locCode };
-      return { ...prev, items: updatedItems };
+    setLines((prev) => {
+      const updated = [...prev];
+      updated[index] = { ...updated[index], targetLocationCode: locCode };
+      return updated;
     });
   };
 
-  const hasVariance = transfer.items.some((item) => (item.qtyVariance || 0) > 0);
+  const hasVariance = lines.some((item) => (item.qtyVariance || 0) > 0);
 
-  const handleConfirmTransferIn = () => {
+  const handleConfirmTransferIn = async () => {
+    if (!detail) return;
+
     if (hasVariance && !discrepancyReason.trim()) {
       notification.error({
         message: 'Alasan Selisih Transit Wajib Diisi (FE-403)',
@@ -80,22 +104,39 @@ export const TransferDetailPage: React.FC = () => {
       return;
     }
 
-    const nextStatus: TransferStatus = hasVariance ? 'partial_received' : 'received';
+    const codeToId = new Map(locations.map((l) => [l.code, l.id]));
 
-    setTransfer((prev) => ({
-      ...prev,
-      status: nextStatus,
-      discrepancyReason: hasVariance ? discrepancyReason : undefined,
-    }));
+    try {
+      setReceiving(true);
+      const result = await transferService.receiveTransfer(
+        detail.id,
+        lines.map((item) => ({
+          line_id: item.id,
+          qty_received: item.qtyReceived ?? item.qtySent,
+          location_id: item.targetLocationCode ? (codeToId.get(item.targetLocationCode) ?? 0) : 0,
+          notes: hasVariance ? discrepancyReason : undefined,
+        }))
+      );
 
-    notification.success({
-      message: 'Konfirmasi Penerimaan Mutasi (Transfer In) Berhasil',
-      description: `Barang telah diterima di Gudang ${transfer.destinationWarehouseName} dan dimasukkan ke stok aktif.`,
-    });
+      const nextStatus: TransferStatus = result.discrepancy ? 'partial_received' : 'received';
+      setStatus(nextStatus);
+
+      notification.success({
+        message: 'Konfirmasi Penerimaan Mutasi (Transfer In) Berhasil',
+        description: `Barang telah diterima di Gudang ${detail.destinationWarehouseName} dan dimasukkan ke stok aktif.`,
+      });
+    } catch {
+      notification.error({
+        message: 'Gagal Konfirmasi Penerimaan',
+        description: 'Pastikan lokasi bin tujuan telah dipilih dan backend tersedia.',
+      });
+    } finally {
+      setReceiving(false);
+    }
   };
 
-  const getStepCurrentIndex = (status: TransferStatus) => {
-    switch (status) {
+  const getStepCurrentIndex = (s: TransferStatus) => {
+    switch (s) {
       case 'draft':
         return 0;
       case 'in_transit':
@@ -109,6 +150,22 @@ export const TransferDetailPage: React.FC = () => {
         return 0;
     }
   };
+
+  if (isLoading) {
+    return (
+      <div data-testid="transfer-detail-page" style={{ textAlign: 'center', padding: 48 }}>
+        <Spin />
+      </div>
+    );
+  }
+
+  if (!detail) {
+    return (
+      <div data-testid="transfer-detail-page">
+        <Empty description="Dokumen mutasi tidak ditemukan" />
+      </div>
+    );
+  }
 
   const columns = [
     {
@@ -152,7 +209,7 @@ export const TransferDetailPage: React.FC = () => {
           max={record.qtySent}
           value={record.qtyReceived ?? record.qtySent}
           onChange={(val) => handleQtyReceivedChange(idx, val)}
-          disabled={transfer.status === 'received' || transfer.status === 'partial_received'}
+          disabled={status === 'received' || status === 'partial_received'}
           data-testid={`input-qty-received-${idx}`}
         />
       ),
@@ -179,20 +236,20 @@ export const TransferDetailPage: React.FC = () => {
       render: (_: any, record: StockTransferLine, idx: number) => (
         <Select
           style={{ width: '100%' }}
-          value={record.targetLocationCode || MOCK_LOCATIONS[0].code}
+          value={record.targetLocationCode || locations[0]?.code}
           onChange={(val) => handleLocationChange(idx, val)}
-          disabled={transfer.status === 'received' || transfer.status === 'partial_received'}
+          disabled={status === 'received' || status === 'partial_received'}
           data-testid={`select-target-bin-${idx}`}
-          options={MOCK_LOCATIONS.map((loc: { code: string; type: string }) => ({
+          options={locations.map((loc) => ({
             value: loc.code,
-            label: `${loc.code} (${loc.type})`,
+            label: `${loc.code} (${loc.loc_type})`,
           }))}
         />
       ),
     },
   ];
 
-  const statusTag = getTransferStatusTagColor(transfer.status);
+  const statusTag = getTransferStatusTagColor(status);
 
   return (
     <div data-testid="transfer-detail-page">
@@ -205,24 +262,25 @@ export const TransferDetailPage: React.FC = () => {
               <div>
                 <Space align="center">
                   <Title level={3} style={{ margin: 0 }}>
-                    Dokumen Mutasi: {transfer.transferNo}
+                    Dokumen Mutasi: {detail.transferNo}
                   </Title>
                   <Tag color={statusTag.color}>{statusTag.label}</Tag>
                 </Space>
                 <Paragraph type="secondary" style={{ margin: 0 }}>
-                  Dari {transfer.originWarehouseName} ke {transfer.destinationWarehouseName}
+                  Dari {detail.originWarehouseName} ke {detail.destinationWarehouseName}
                 </Paragraph>
               </div>
             </Space>
           </Col>
 
-          {transfer.status === 'in_transit' && (
+          {status === 'in_transit' && (
             <Col>
               <Button
                 type="primary"
                 size="large"
                 style={{ background: '#52c41a', borderColor: '#52c41a' }}
                 icon={<CheckCircleOutlined />}
+                loading={receiving}
                 onClick={handleConfirmTransferIn}
                 data-testid="btn-confirm-transfer-in"
               >
@@ -235,8 +293,8 @@ export const TransferDetailPage: React.FC = () => {
         {/* Progress Steps */}
         <Card variant="borderless">
           <Steps
-            current={getStepCurrentIndex(transfer.status)}
-            status={transfer.status === 'cancelled' ? 'error' : 'process'}
+            current={getStepCurrentIndex(status)}
+            status={status === 'cancelled' ? 'error' : 'process'}
             items={[
               { title: 'Draft Pengiriman', description: 'Gudang Asal' },
               { title: 'In-Transit', description: 'Dalam Perjalanan Armada' },
@@ -250,19 +308,19 @@ export const TransferDetailPage: React.FC = () => {
           <Row gutter={[24, 16]}>
             <Col xs={24} sm={12} md={6}>
               <Text type="secondary" style={{ display: 'block', fontSize: 12 }}>Gudang Pengirim (Origin)</Text>
-              <Text strong style={{ color: '#0052cc' }}>{transfer.originWarehouseName}</Text>
+              <Text strong style={{ color: '#0052cc' }}>{detail.originWarehouseName}</Text>
             </Col>
             <Col xs={24} sm={12} md={6}>
               <Text type="secondary" style={{ display: 'block', fontSize: 12 }}>Gudang Penerima (Destination)</Text>
-              <Text strong style={{ color: '#722ed1' }}>{transfer.destinationWarehouseName}</Text>
+              <Text strong style={{ color: '#722ed1' }}>{detail.destinationWarehouseName}</Text>
             </Col>
             <Col xs={24} sm={12} md={6}>
               <Text type="secondary" style={{ display: 'block', fontSize: 12 }}>Pengemudi / Driver</Text>
-              <Text strong>{transfer.driverName || '-'}</Text>
+              <Text strong>{detail.driverName || '-'}</Text>
             </Col>
             <Col xs={24} sm={12} md={6}>
               <Text type="secondary" style={{ display: 'block', fontSize: 12 }}>Plat Nomor Armada</Text>
-              <Text strong>{transfer.vehiclePlateNo || '-'}</Text>
+              <Text strong>{detail.vehiclePlateNo || '-'}</Text>
             </Col>
           </Row>
         </Card>
@@ -296,7 +354,7 @@ export const TransferDetailPage: React.FC = () => {
               placeholder="Contoh: Ditemukan kemasan fisik rusak akibat benturan saat pengangkutan truk"
               value={discrepancyReason}
               onChange={(e) => setDiscrepancyReason(e.target.value)}
-              disabled={transfer.status === 'received' || transfer.status === 'partial_received'}
+              disabled={status === 'received' || status === 'partial_received'}
               data-testid="input-discrepancy-reason"
             />
           </Card>
@@ -307,7 +365,7 @@ export const TransferDetailPage: React.FC = () => {
           <Table
             rowKey="id"
             columns={columns}
-            dataSource={transfer.items}
+            dataSource={lines}
             pagination={false}
             data-testid="table-transfer-items"
           />

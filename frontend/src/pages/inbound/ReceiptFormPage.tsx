@@ -29,12 +29,12 @@ import { useNavigate, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import dayjs from "dayjs";
 import { receiptFormSchema, ReceiptFormValues } from "../../types/inbound";
-import { useWarehouseStore } from "../../store/useWarehouseStore";
 import { useMutationWithToast } from "../../hooks/useMutationWithToast";
 import { itemService } from "../../api/services/items";
+import { warehouseService } from "../../api/services/warehouses";
 import { partnerService } from "../../api/services/partners";
 import { receiptService } from "../../api/services/receipts";
-import { mapItemDTO } from "../../api/mappers";
+import { mapItemDTO, mapWarehouseDTO } from "../../api/mappers";
 
 const { Title, Paragraph, Text } = Typography;
 
@@ -42,7 +42,14 @@ export const ReceiptFormPage: React.FC = () => {
     const navigate = useNavigate();
     const { id } = useParams<{ id: string }>();
     const isEditMode = Boolean(id && id !== "new");
-    const { warehouses, activeWarehouseId } = useWarehouseStore();
+
+    const { data: warehouses = [] } = useQuery({
+        queryKey: ["warehouses"],
+        queryFn: async () => {
+            const dtos = await warehouseService.list();
+            return dtos.map(mapWarehouseDTO);
+        },
+    });
 
     const { data: items = [] } = useQuery({
         queryKey: ["items"],
@@ -71,7 +78,7 @@ export const ReceiptFormPage: React.FC = () => {
         defaultValues: {
             poReference: "",
             supplierId: undefined,
-            warehouseId: activeWarehouseId,
+            warehouseId: undefined as unknown as number,
             receiptDate: dayjs().format("YYYY-MM-DD"),
             notes: "",
             items: [],
@@ -92,6 +99,14 @@ export const ReceiptFormPage: React.FC = () => {
             setValue("supplierId", partners[0].id);
         }
     }, [partners]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    // Auto-select the first real warehouse (real DB id from GET /warehouses)
+    // once they load, so POST /receipts never sends a fabricated warehouse id.
+    useEffect(() => {
+        if (warehouses.length > 0 && !watch("warehouseId")) {
+            setValue("warehouseId", warehouses[0].id);
+        }
+    }, [warehouses]); // eslint-disable-line react-hooks/exhaustive-deps
 
     useEffect(() => {
         if (items.length > 0 && fields.length === 0) {

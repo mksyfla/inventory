@@ -11,8 +11,10 @@ import (
 )
 
 type Querier interface {
+	AssignRolePermission(ctx context.Context, arg AssignRolePermissionParams) (SecRolePermissions, error)
 	AssignUserRole(ctx context.Context, arg AssignUserRoleParams) (SecUserRoles, error)
 	CreateAllocation(ctx context.Context, arg CreateAllocationParams) (DocAllocations, error)
+	CreateAttachment(ctx context.Context, arg CreateAttachmentParams) (DocAttachments, error)
 	CreateBatch(ctx context.Context, arg CreateBatchParams) (MasterBatches, error)
 	// ============ CATEGORIES ============
 	CreateCategory(ctx context.Context, arg CreateCategoryParams) (MasterCategories, error)
@@ -26,13 +28,19 @@ type Querier interface {
 	CreateLocation(ctx context.Context, arg CreateLocationParams) (MasterLocations, error)
 	// ============ PARTNERS ============
 	CreatePartner(ctx context.Context, arg CreatePartnerParams) (MasterPartners, error)
+	CreateRole(ctx context.Context, arg CreateRoleParams) (SecRoles, error)
 	CreateStockMovement(ctx context.Context, arg CreateStockMovementParams) (CreateStockMovementRow, error)
 	CreateTransferReceipt(ctx context.Context, arg CreateTransferReceiptParams) (DocTransferReceipts, error)
 	CreateUser(ctx context.Context, arg CreateUserParams) (CreateUserRow, error)
+	// ============ ADMIN WRITE (users / roles / settings) ============
+	CreateUserFull(ctx context.Context, arg CreateUserFullParams) (CreateUserFullRow, error)
 	CreateWarehouse(ctx context.Context, arg CreateWarehouseParams) (MasterWarehouses, error)
+	DeleteAttachmentByID(ctx context.Context, id int64) error
 	DeleteItemUoMs(ctx context.Context, itemID int64) error
 	DeleteLocation(ctx context.Context, id int64) error
 	DeletePartner(ctx context.Context, id int64) error
+	DeleteRolePermissions(ctx context.Context, roleID int64) error
+	DeleteUserRoles(ctx context.Context, userID int64) error
 	// Creates a zeroed balance row if absent so the subsequent SELECT ... FOR
 	// UPDATE actually locks it. Without this, two concurrent transactions that
 	// both see "no row" would later race on the upsert and overwrite each
@@ -41,10 +49,27 @@ type Querier interface {
 	// Manual override target: locks one specific balance (Fase 7.3). Must belong
 	// to the warehouse, be available, and not be expired.
 	GetAllocationCandidateByBalanceID(ctx context.Context, arg GetAllocationCandidateByBalanceIDParams) (GetAllocationCandidateByBalanceIDRow, error)
+	GetAttachmentByID(ctx context.Context, id int64) (DocAttachments, error)
 	GetBatchByItemAndNo(ctx context.Context, arg GetBatchByItemAndNoParams) (MasterBatches, error)
+	// Snapshot/result lines of a count session joined with item/location/batch so
+	// the supervisor reconciliation screen (GET /counts/{id}) renders without N+1.
+	// qty_system is intentionally included here: this view is for the supervisor,
+	// not the blind-count field screen.
+	GetCountLinesWithItem(ctx context.Context, documentID int64) ([]GetCountLinesWithItemRow, error)
+	// Ringkasan KPI dashboard operasional (Fase 10.x).
+	GetDashboardSummary(ctx context.Context) (GetDashboardSummaryRow, error)
 	GetDeliveryByDocument(ctx context.Context, documentID int64) (DocDeliveries, error)
 	GetDocumentByID(ctx context.Context, id int64) (DocDocuments, error)
 	GetDocumentByIDempotencyKey(ctx context.Context, idempotencyKey pgtype.Text) (DocDocuments, error)
+	GetDocumentLinesWithItem(ctx context.Context, documentID int64) ([]GetDocumentLinesWithItemRow, error)
+	GetDocumentPartner(ctx context.Context, id int64) (GetDocumentPartnerRow, error)
+	GetDocumentWarehouse(ctx context.Context, id int64) (GetDocumentWarehouseRow, error)
+	// ============ REPORTS ============
+	// Classifies items by velocity from the movement ledger (Fase 10.x):
+	//   fast_moving  : last movement within the last 30 days
+	//   slow_moving  : last movement 30-180 days ago
+	//   dead_stock   : no movement in the last 180 days (or never)
+	GetFsnReport(ctx context.Context) ([]GetFsnReportRow, error)
 	GetItemByBarcode(ctx context.Context, barcode pgtype.Text) (GetItemByBarcodeRow, error)
 	GetItemByID(ctx context.Context, id int64) (MasterItems, error)
 	GetItemBySKU(ctx context.Context, sku string) (GetItemBySKURow, error)
@@ -53,15 +78,22 @@ type Querier interface {
 	GetLocationByID(ctx context.Context, id int64) (MasterLocations, error)
 	GetLocationByWarehouseCode(ctx context.Context, arg GetLocationByWarehouseCodeParams) (MasterLocations, error)
 	GetPartnerByID(ctx context.Context, id int64) (MasterPartners, error)
-	GetRoleByCode(ctx context.Context, code pgtype.Text) (SecRoles, error)
+	GetPermissionByCode(ctx context.Context, code pgtype.Text) (SecPermissions, error)
+	GetRoleByCode(ctx context.Context, code pgtype.Text) (GetRoleByCodeRow, error)
+	// Memakai kapasitas volume (capacity) per lokasi sebagai pembilang dan
+	// memperkirakan pemakaian dari keberadaan saldo stok aktif di lokasi tsb.
+	GetSpaceUtilizationReport(ctx context.Context) ([]GetSpaceUtilizationReportRow, error)
 	GetStagingLocation(ctx context.Context, warehouseID int64) (MasterLocations, error)
 	GetStockBalanceByIDForUpdate(ctx context.Context, id int64) (GetStockBalanceByIDForUpdateRow, error)
 	GetStockBalanceForUpdate(ctx context.Context, arg GetStockBalanceForUpdateParams) (InvStockBalances, error)
 	// ============ FASE 8 (M5 Transfer & M6 Stock Opname) ============
 	// Lokasi transit gudang tujuan (tempat saldo in_transit dicatat saat /send).
 	GetTransitLocation(ctx context.Context, warehouseID int64) (MasterLocations, error)
-	GetUserByID(ctx context.Context, id int64) (SecUsers, error)
-	GetUserByUsername(ctx context.Context, username string) (SecUsers, error)
+	GetUserByID(ctx context.Context, id int64) (GetUserByIDRow, error)
+	GetUserByUsername(ctx context.Context, username string) (GetUserByUsernameRow, error)
+	// Periode valuasi: saldo akhir x harga pokok terakhir, plus total pergerakan
+	// masuk/keluar (fallback ke seluruh riwayat bila tanpa filter periode).
+	GetValuationReport(ctx context.Context) ([]GetValuationReportRow, error)
 	GetWarehouseByCode(ctx context.Context, code string) (MasterWarehouses, error)
 	// ============ INBOUND (Fase 6 - GRN) ============
 	GetWarehouseByID(ctx context.Context, id int64) (GetWarehouseByIDRow, error)
@@ -74,23 +106,45 @@ type Querier interface {
 	// is race-safe against concurrent allocators/posters.
 	ListAllocationCandidates(ctx context.Context, arg ListAllocationCandidatesParams) ([]ListAllocationCandidatesRow, error)
 	ListAllocationsByDocument(ctx context.Context, documentID int64) ([]ListAllocationsByDocumentRow, error)
+	// ============ Lampiran Dokumen / GRN attachments (Fase 6 lampiran GRN) ============
+	ListAttachmentsByDocument(ctx context.Context, documentID int64) ([]DocAttachments, error)
+	ListAuditLogs(ctx context.Context, arg ListAuditLogsParams) ([]ListAuditLogsRow, error)
+	ListBatchTrace(ctx context.Context, dollar_1 interface{}) ([]ListBatchTraceRow, error)
 	ListCategories(ctx context.Context) ([]MasterCategories, error)
 	ListCountLines(ctx context.Context, documentID int64) ([]DocCountLines, error)
 	// Sumber snapshot qty_system saat sesi opname dibuka (FR-6.1). Scope dapat
 	// dipersempit per zona ('' = semua) dan/atau per item (0 = semua).
 	ListCountSnapshotBalances(ctx context.Context, arg ListCountSnapshotBalancesParams) ([]ListCountSnapshotBalancesRow, error)
 	ListDocumentLines(ctx context.Context, documentID int64) ([]DocDocumentLines, error)
+	// ============ READ / QUERY ENDPOINTS (Fase 10.4 GETs) ============
+	// List/detail GETs shared across document types (GRN/REQ/DO/TRF/CNT/ADJ).
+	// Filter params use the '' = no-filter convention to keep sqlc params as
+	// plain text; warehouse_id uses 0 = no filter.
+	ListDocuments(ctx context.Context, arg ListDocumentsParams) ([]ListDocumentsRow, error)
 	ListItemUoMs(ctx context.Context, itemID int64) ([]MasterItemUoms, error)
 	ListItems(ctx context.Context) ([]ListItemsRow, error)
 	ListLocations(ctx context.Context, warehouseID int64) ([]MasterLocations, error)
 	ListPartners(ctx context.Context) ([]MasterPartners, error)
+	ListPermissions(ctx context.Context) ([]SecPermissions, error)
 	ListPutawayCandidates(ctx context.Context, warehouseID int64) ([]ListPutawayCandidatesRow, error)
 	// ============ RBAC (Fase 2.4) ============
 	ListRolePermissions(ctx context.Context) ([]ListRolePermissionsRow, error)
+	ListRoles(ctx context.Context) ([]ListRolesRow, error)
+	ListSettings(ctx context.Context) ([]SecSettings, error)
+	// ============ STOCK (balances / batch trace) ============
+	ListStockBalances(ctx context.Context, arg ListStockBalancesParams) ([]ListStockBalancesRow, error)
+	// Immutable movement ledger rows joined with item/location/batch/user so the
+	// stock card page can render without extra lookups. item_id uses 0 = no filter;
+	// moved_at is constrained to [from, to].
+	ListStockLedger(ctx context.Context, arg ListStockLedgerParams) ([]ListStockLedgerRow, error)
 	ListStockMovementsKeyset(ctx context.Context, arg ListStockMovementsKeysetParams) ([]ListStockMovementsKeysetRow, error)
 	ListTransferReceipts(ctx context.Context, documentID int64) ([]DocTransferReceipts, error)
 	ListUserRoleCodes(ctx context.Context, userID int64) ([]string, error)
+	ListUserRoleIDs(ctx context.Context, userID int64) ([]int64, error)
 	ListUserWarehouseCodes(ctx context.Context, userID int64) ([]string, error)
+	ListUserWarehouseIDs(ctx context.Context, userID int64) ([]int64, error)
+	// ============ ADMIN (users / roles / audit logs) ============
+	ListUsers(ctx context.Context) ([]ListUsersRow, error)
 	ListWarehouseCodes(ctx context.Context) ([]string, error)
 	ListWarehouses(ctx context.Context) ([]MasterWarehouses, error)
 	SoftDeleteItem(ctx context.Context, arg SoftDeleteItemParams) (SoftDeleteItemRow, error)
@@ -105,7 +159,10 @@ type Querier interface {
 	UpdateItem(ctx context.Context, arg UpdateItemParams) (UpdateItemRow, error)
 	UpdateLocation(ctx context.Context, arg UpdateLocationParams) (MasterLocations, error)
 	UpdatePartner(ctx context.Context, arg UpdatePartnerParams) (MasterPartners, error)
+	UpdateRole(ctx context.Context, arg UpdateRoleParams) (SecRoles, error)
 	UpdateStockBalanceQty(ctx context.Context, arg UpdateStockBalanceQtyParams) (UpdateStockBalanceQtyRow, error)
+	UpdateUser(ctx context.Context, arg UpdateUserParams) (UpdateUserRow, error)
+	UpdateUserPassword(ctx context.Context, arg UpdateUserPasswordParams) (int64, error)
 	UpsertDelivery(ctx context.Context, arg UpsertDeliveryParams) error
 	// ============ Dokumen (Fase 5.1 - BR-04) ============
 	// Atomic sequence bump: returns the next sequence for (doc_type, period).
@@ -113,6 +170,7 @@ type Querier interface {
 	// Period is computed by the application from the same clock as the document
 	// number so the sequence and the formatted number can never diverge.
 	UpsertDocumentNumber(ctx context.Context, arg UpsertDocumentNumberParams) (int32, error)
+	UpsertSetting(ctx context.Context, arg UpsertSettingParams) (SecSettings, error)
 	// ============ STOCK BALANCES & MOVEMENTS ============
 	UpsertStockBalance(ctx context.Context, arg UpsertStockBalanceParams) (UpsertStockBalanceRow, error)
 	UpsertStockBalanceFull(ctx context.Context, arg UpsertStockBalanceFullParams) error

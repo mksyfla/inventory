@@ -147,6 +147,23 @@ func (m *mockDocs) UpdateManagerApproval(ctx context.Context, id, managerID int6
 	return nil
 }
 
+// ── attachment stubs (lampiran GRN) ───────────────────────────────────────
+func (m *mockDocs) ListAttachments(ctx context.Context, documentID int64) ([]*document.Attachment, error) {
+	return nil, nil
+}
+
+func (m *mockDocs) CreateAttachment(ctx context.Context, a *document.Attachment) error {
+	return nil
+}
+
+func (m *mockDocs) GetAttachmentByID(ctx context.Context, id int64) (*document.Attachment, error) {
+	return nil, nil
+}
+
+func (m *mockDocs) DeleteAttachment(ctx context.Context, id int64) error {
+	return nil
+}
+
 // mockWh serves WarehouseLookup.
 type mockWh struct{ warehouses map[int64]*WarehouseInfo }
 

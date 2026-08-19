@@ -111,6 +111,23 @@ func (m *mockDocs) CreateTransferReceipt(ctx context.Context, rec *document.Tran
 	return nil
 }
 
+// ── attachment stubs (lampiran GRN) ───────────────────────────────────────
+func (m *mockDocs) ListAttachments(ctx context.Context, documentID int64) ([]*document.Attachment, error) {
+	return nil, nil
+}
+
+func (m *mockDocs) CreateAttachment(ctx context.Context, a *document.Attachment) error {
+	return nil
+}
+
+func (m *mockDocs) GetAttachmentByID(ctx context.Context, id int64) (*document.Attachment, error) {
+	return nil, nil
+}
+
+func (m *mockDocs) DeleteAttachment(ctx context.Context, id int64) error {
+	return nil
+}
+
 // mockItems serves ItemLookup.
 type mockItems struct {
 	items map[int64]*ItemInfo
