@@ -49,7 +49,7 @@ services:
         volumes:
             - ./backend/db/migrations:/migrations:ro
             - ./backend/db/migrate.sh:/migrate.sh:ro
-        command: ["sh", "/migrate.sh"]
+        command: ["bash", "-c", "apt-get update && apt-get install -y bash && bash /migrate.sh"]
         restart: "no"
 
     # Backend API (binary dari backend/Dockerfile)

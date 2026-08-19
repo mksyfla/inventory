@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # SIMBAR database migrator (idempotent, one-shot service di docker-compose).
 #
 # Menunggu Postgres siap, lalu menerapkan db/migrations/*.up.sql secara
