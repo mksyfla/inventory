@@ -591,8 +591,8 @@ ORDER BY i.sku, b.id;
 SELECT b.id AS batch_id, b.batch_no, b.item_id, i.sku, i.name::text AS item_name,
        i.base_uom, b.mfg_date, b.expiry_date,
        sb.id AS balance_id, sb.location_id, l.code AS location_code,
-       sb.status::text, sb.qty_onhand, sb.qty_reserved,
-       grn.grn_no, grn.grn_date, grn.supplier_name
+       COALESCE(sb.status::text, '')::text AS sb_status, sb.qty_onhand, sb.qty_reserved,
+       COALESCE(grn.grn_no, '') AS grn_no, grn.grn_date, grn.supplier_name
 FROM master.batches b
 JOIN master.items i ON i.id = b.item_id
 LEFT JOIN inv.stock_balances sb ON sb.batch_id = b.id

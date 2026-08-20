@@ -54,7 +54,7 @@ DELETE FROM doc.documents WHERE doc_no IN (
 );
 
 -- 5. Document number sequences for the seeded period
-DELETE FROM doc.document_numbers WHERE period = '202608';
+DELETE FROM doc.document_numbers WHERE period = '2608';
 
 -- 6. Stock balances (seeded item × location keys)
 DELETE FROM inv.stock_balances b

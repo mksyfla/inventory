@@ -547,7 +547,7 @@ ON CONFLICT DO NOTHING;
 
 -- ================= 17. DOCUMENT NUMBERS (continue from seeded sequences) =================
 INSERT INTO doc.document_numbers (doc_type, period, last_seq)
-SELECT v.doc_type::doc.doc_type, '202608', v.last_seq
+SELECT v.doc_type::doc.doc_type, '2608', v.last_seq
 FROM (VALUES
     ('GRN', 15), ('DO', 14), ('TRF', 4), ('ADJ', 13),
     ('RTN_IN', 9), ('RTN_OUT', 10), ('CNT', 7), ('OPN', 2), ('REQ', 8)

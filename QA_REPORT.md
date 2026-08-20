@@ -34,8 +34,9 @@ Major tested functionality includes:
 
 - **Total Test Cases**: 114
 - **Passed**: 109
-- **Failed**: 3
-- **Blocked**: 2
+- **Failed**: 3 (initial run — all 3 re-verified as **PASS** after fixes; see §9)
+- **Blocked**: 2 (`BLK-01` Playwright CDN download, `BLK-02` migration — `BLK-02` unblocked by the BUG-03 fix; `docker compose up` now applies all migrations cleanly)
+- **Security (this run)**: 1 CRITICAL / 2 HIGH / 1 MEDIUM / 2 LOW findings — see §10.
 
 ---
 
@@ -251,18 +252,170 @@ Major tested functionality includes:
 
 ## 8. Overall QA Result
 
-### **PASS WITH ISSUES**
+### **PASS (functional) / NOT RELEASE-READY (security)**
 
 **Final Summary & Verdict**:
-All testing performed on the `kasyfil-integrations` branch—comprising automated unit/integration suites, functional workflow lifecycles, and input validation/error handling passes—confirms that the application is functional and well-integrated, but contains 4 specific defects that require developer attention:
+Two assessment layers were completed on the `kasyfil-integrations` branch: (a) functional QA plus the re-fixing of the 4 previously-reported defects, and (b) a Docker-based vulnerability assessment and penetration test (§10). The application is **functionally sound and stable**, but the security assessment surfaced **deployment-blocking findings** that must be remediated before production.
 
 1. **Automated Test Results**: 100% PASS (152/152 frontend Vitest component/integration tests; all Go backend unit & integration test packages).
 2. **Functional & Integration Results**: Core business workflows (Inbound GRN, Outbound DO, Warehouse Transfers, Cycle Counting, Manual Adjustments, Reports, and Admin Management) successfully transition across states with RBAC authorization enforcement.
 3. **Input Validation Results**: The Echo validation middleware, DTO constraints, and domain business rules properly sanitize missing fields, invalid data types, malformed JSON, out-of-range numbers, invalid enums, date formats, and non-positive path/query parameters with structured HTTP 422 `ERR_VALIDATION` responses.
-4. **Total Bugs Found**: 4 defects:
-    - `BUG-01` (High): HTTP 500 on `GET /stock/batches` due to nullable column scanning into Go string.
-    - `BUG-02` (High): Document number sequence collision on pre-seeded database due to `YYYYMM` vs `YYMM` period format mismatch.
-    - `BUG-03` (Medium): Docker migration container failure due to CRLF line termination in `migrate.sh`.
-    - `BUG-04` (High): HTTP 500 on partner creation/update due to AES ciphertext length exceeding `VARCHAR(30)` column constraint.
-5. **Total Blocked Tests**: 2 environment/infrastructure items (`BLK-01`, `BLK-02`).
-6. **Verdict**: **PASS WITH ISSUES**. The integration is functional and stable for primary workflows, and addressing the 4 identified issues will bring the application to full release compliance.
+4. **Defects Fixed** (all 4 re-verified as PASS, see §9):
+    - `BUG-01` (High): HTTP 500 on `GET /stock/batches` — **FIXED** (COALESCE nullable columns).
+    - `BUG-02` (High): Document-number sequence collision (`YYYYMM` vs `YYMM`) — **FIXED**.
+    - `BUG-03` (Medium): Docker migration CRLF failure — **FIXED** (`.gitattributes` LF enforcement).
+    - `BUG-04` (High): HTTP 500 on partner create/update — **FIXED** (AES-GCM encryption restored + widened columns).
+5. **Total Blocked Tests**: `BLK-01` (Playwright CDN download — environmental); `BLK-02` (migration) **unblocked** by the BUG-03 fix.
+6. **Security Findings** (see §10): **1 CRITICAL** (SEC-01 committed JWT secret → authentication bypass), **2 HIGH** (SEC-02 cross-warehouse BOLA, SEC-03 hardcoded AES key), **1 MEDIUM** (SEC-04 default admin credentials), **2 LOW** (SEC-05 public OpenAPI/Swagger, SEC-06 no TLS/HSTS). RBAC, warehouse-header checks, JWT alg/expiry validation, SQL-injection resistance, XSS non-reflection, rate limiting, security headers, and Argon2id hashing all verified as correctly implemented (§10.4).
+7. **Verdict**: **PASS** on functional readiness — all documented functional bugs are fixed and re-verified. **NOT RELEASE-READY** on security: remediate the two P0 items (SEC-01 JWT secret rotation + SEC-02 warehouse-level object authorization) and the P1 items (SEC-03, SEC-04) before production deployment. Recommended order of action is in §10.6.
+
+---
+
+## 9. Bug Fix Verification (Follow-up)
+
+All 4 defects from the previous report were fixed on branch `kasyfil-integrations` and re-verified against the live Docker stack (`docker compose up --build`). Backend test suite passes after the changes (`go test ./...`).
+
+| Bug ID | Fix applied                                                                                      | Verification (live API)                                       | Status   |
+| ------ | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------- | -------- |
+| BUG-01 | `ListBatchTrace` query COALESCEs nullable `sb.status`/`grn.grn_no` columns (explicit `::text` cast so sqlc infers `string`) — `backend/db/queries/init.sql`, regenerated `init.sql.go` | `GET /api/v1/stock/batches` → **HTTP 200**, 10 batch-trace rows | **FIXED** |
+| BUG-02 | Seed data period corrected from `YYYYMM` (`'202608'`) to `YYMM` (`'2608'`) to match `docnum.Generator` — `000003_seed_data.up.sql` & `.down.sql` | `POST /api/v1/receipts` → **HTTP 201**, `GRN/WH01/2608/00016` (no more 409) | **FIXED** |
+| BUG-03 | `.gitattributes` enforces `*.sh text eol=lf`; one-shot `migrate` container applies all migrations and exits **0** | `docker compose up` → `inventory_migrate` **Exited (0)**      | **FIXED** |
+| BUG-04 | Proper fix (the prior "fix" removed AES encryption — a security regression). Restored AES-256-GCM encryption + new migration `000011` widens `master.partners.contact_phone`/`contact_name` to `VARCHAR(255)` | `POST /api/v1/partners` → **HTTP 201**, ciphertext stored at rest (56-char base64), decrypt round-trips | **FIXED** |
+
+**Note on BUG-04**: The original fix (commit `9ff202d`) had simply removed encryption and stored partner `contact_name`/`contact_phone` as plaintext — that broke the encryption unit test and exposed PII at rest. The correct fix restores AES-256-GCM encryption and widens the columns to fit the base64 ciphertext. See also `SEC-03` below for the related hardcoded-key weakness.
+
+---
+
+## 10. Vulnerability Assessment & Penetration Testing (Docker-based)
+
+### 10.1 Scope & Methodology
+
+- **Target**: SIMBAR backend API running in Docker (`http://localhost:8080`), stack = `api` + `worker` + `postgres:16` + `redis:8` (docker-compose).
+- **Approach**:
+    1. **Manual penetration testing** — auth/authn bypass, RBAC, broken object-level authorization (BOLA/IDOR), SQL injection, XSS reflection, rate limiting, transport security, CORS, info disclosure. JWT forgery used the committed dev secret to demonstrate authentication bypass.
+    2. **Automated scanners (Docker-based)** — OWASP ZAP baseline (web app), Nikto (web server fingerprinting/misconfiguration), Trivy (container image CVE scan of `simbar-backend:latest`).
+    3. **Static code review** — secrets/keys, auth configuration, query construction, crypto usage.
+- **Date**: 2026-08-19. **Branch**: `kasyfil-integrations`.
+- **Remediation status**: Not yet applied (findings documented for developer action).
+
+### 10.2 Executive Summary
+
+The application's **role-based authorization (RBAC), password hashing, input validation, and rate limiting are solid**, and the previous bugs are fixed. However, **the deployed configuration is not production-safe**: the JWT signing secret is committed to the repository, which allows **full authentication bypass** (anyone can forge a sysadmin token), and **document endpoints are missing warehouse-level object authorization**, allowing cross-warehouse data reads. Two cryptographic secrets (JWT secret, AES data key) are hardcoded.
+
+| Severity | Count |
+| -------- | ----- |
+| **CRITICAL** | 1 |
+| **HIGH** | 2 |
+| **MEDIUM** | 1 |
+| **LOW** | 2 |
+
+### 10.3 Findings (Manual + Static Review)
+
+#### SEC-01 — CRITICAL: JWT signing secret is known → full authentication bypass
+
+- **Endpoint**: all `/api/v1/*` protected routes.
+- **Description**: The HS256 JWT secret is committed to the repository:
+    - `docker-compose.yml:74,104` → `JWT_SECRET=dev-only-jwt-secret-change-me-0123456789`
+    - `backend/internal/config/config.go:23` → `getEnv("JWT_SECRET", "super-secret-key")` (default fallback)
+    - `config.go:35` enforces a 32-char minimum **only when `APP_ENV=production`**.
+- **PoC**: A JWT signed with the committed secret and claims `roles=["sysadmin"], warehouses=["WH01"]` was accepted:
+    - `GET /api/v1/users` (forged sysadmin) → **HTTP 200**, returned user list incl. `admin`, `imanager`, `supervisor` with their roles.
+- **Impact**: Anyone who can read the repo (or who leaks the secret via the container image / env) can mint tokens as **any role for any warehouse** — full compromise: create users, approve/reject documents, read/modify stock, exfiltrate PII. The `alg=none` and wrong-secret vectors are correctly rejected, but that does not help while the real secret is public.
+- **Remediation**:
+    1. Generate a cryptographically random secret ≥ 32 bytes at deploy time (e.g. `openssl rand -base64 32`); store in a secret manager / `.env` that is **never committed**.
+    2. Remove the insecure defaults; make the app **refuse to start** if the secret is missing, is the known default, or is < 32 bytes — in all environments, not just production.
+    3. Rotate the secret (invalidate previously issued tokens).
+    4. Ensure `docker-compose.yml` does not ship a real secret.
+
+#### SEC-02 — HIGH: Broken Object-Level Authorization (cross-warehouse document read)
+
+- **Endpoints**: `GET /api/v1/documents` and `GET /api/v1/documents/:id` (and related detail routes).
+- **Description**: A user assigned to only warehouse WH02 can list and read documents belonging to warehouse WH01.
+- **PoC** (forged `inventory_manager`, `warehouses=["WH02"]`):
+    - `GET /api/v1/documents` (no `warehouse_id` query param) → **HTTP 200** with 17 documents, including `GRN/WH01/2608/00016`, `DO/WH01/2608/00012`, `TRF/WH01/...`.
+    - `GET /api/v1/documents?warehouse_id=1` → **HTTP 200** (returns WH01 documents).
+    - `GET /api/v1/documents/17` → **HTTP 200** with the full WH01 GRN (header, warehouse, line items, SKUs, quantities).
+- **Root cause**: `ListDocuments` filters with `($3 = 0 OR d.warehouse_id = $3)` where `$3` comes from the unvalidated `?warehouse_id` query parameter — it is never checked against the caller's assigned warehouses (JWT `warehouses` claim). The warehouse middleware only validates the `X-Warehouse-Id` header value, which is ignored by the list filter. `GetDocumentDetail` takes **only** `id` (handler → usecase → repo), so it has no warehouse scope at all.
+- **Impact**: Confidentiality breach across warehouses in a multi-warehouse deployment; combined with SEC-01, trivial to exploit. The RBAC role check (`stock:read`) is enforced, but warehouse scoping is not.
+- **Remediation**:
+    1. Derive the warehouse scope from the authenticated JWT claims, and reject (`403`) any `?warehouse_id` that is not among the caller's warehouses.
+    2. Scope `GetDocumentDetail` (and `GetCountDocumentDetail`) by the caller's warehouses — return `404`/`403` when the document belongs to an out-of-scope warehouse.
+    3. Add integration tests with per-warehouse users covering list and detail endpoints.
+
+#### SEC-03 — HIGH: Hardcoded AES-256-GCM key for PII at rest
+
+- **Location**: `backend/internal/usecase/item/item_usecase.go:17` → `var AESKey = []byte("this-is-a-very-secret-32byte-key")`.
+- **Description**: The AES key used to encrypt partner `contact_name`/`contact_phone` (BUG-04 fix) is a hardcoded literal in source.
+- **Impact**: Anyone with source code or DB access can decrypt the stored PII — the encryption provides confidentiality only against attackers without repo access.
+- **Remediation**: Use a key-management service (AWS KMS / Google Cloud KMS / Vault) or an environment-injected key; support key rotation; consider envelope encryption (per-row DEK wrapped by a master key).
+
+#### SEC-04 — MEDIUM: Default admin credentials still active
+
+- **Endpoint**: `POST /api/v1/auth/login`.
+- **Description**: Seed migration `000002_seed_rbac.up.sql:100` bootstraps `admin` with an Argon2id hash of `Admin@123456` (comment: *"change after first login!"*). `POST /auth/login` with `admin`/`Admin@123456` → **HTTP 200** with valid tokens; no forced password change was observed on first login.
+- **Impact**: If credentials are not rotated after deployment, anyone can log in as a full sysadmin.
+- **Remediation**: Force a password change on first login; disable/disallow default seeds in production; audit logins with default credentials; rotate the admin password immediately.
+
+#### SEC-05 — LOW: Public OpenAPI spec & Swagger UI (information disclosure)
+
+- **PoC**: `GET /api/v1/openapi.json` → **HTTP 200**; `GET /swagger` → **HTTP 200** (unauthenticated).
+- **Impact**: Exposes the full API surface (routes, parameters, schemas), which lowers the barrier for attackers. Acceptable for dev; should be disabled/gated in production.
+- **Remediation**: Serve documentation only in dev, or behind authentication in production.
+
+#### SEC-06 — LOW: No TLS / no HSTS on API
+
+- **PoC**: API is served over plain HTTP; no `Strict-Transport-Security` header on responses.
+- **Impact**: Over an unencrypted production channel, credentials and JWTs can be intercepted (tokens also travel as `Authorization: Bearer` headers).
+- **Remediation**: Terminate TLS at the reverse proxy; set `Strict-Transport-Security`; redirect HTTP → HTTPS; ensure JWTs are never transmitted over plain HTTP in production.
+
+### 10.4 Security Controls Verified (Positive)
+
+| ID    | Control                                                      | Result |
+| ----- | ------------------------------------------------------------ | ------ |
+| P-01  | Wrong JWT secret → signature rejected                         | `401` ✓ |
+| P-02  | `alg=none` token rejected (HMAC-method enforcement)           | `401` ✓ |
+| P-03  | Expired token rejected                                        | `401` ✓ |
+| P-04  | RBAC (Casbin): `requester` → `GET /users` and `POST /partners` | `403` ✓ |
+| P-05  | Warehouse assignment on header: WH02-only user + `X-Warehouse-Id: WH01` → `GET /items` | `403` ✓ |
+| P-06  | Missing `X-Warehouse-Id` header                               | `400` ✓ |
+| P-07  | SQL injection attempts (login username, `?search=`) — parameterized queries | No injection (`200`/`401`, no error) ✓ |
+| P-08  | XSS payload (`<script>alert(1)</script>`) not reflected        | ✓ |
+| P-09  | Login rate limiting (25 attempts / 15 min per IP, Redis sliding window) — 30 bad logins → `429`; further logins blocked for the window | `429` ✓ |
+| P-10  | Security headers present on protected **and** public endpoints: `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `X-XSS-Protection`, `Content-Security-Policy: default-src 'self'`, `Referrer-Policy`, `Permissions-Policy`, `Cache-Control: no-store`; no `Server` banner leak | ✓ |
+| P-11  | CORS not enabled — hostile-origin preflight gets no `Access-Control-Allow-Origin` | ✓ |
+| P-12  | Passwords hashed with Argon2id (`m=64MB, t=3, p=2`)            | ✓ |
+| P-13  | Audit logging present (`GET /api/v1/audit-logs`)               | ✓ |
+
+### 10.5 Automated Scanner Results (Docker-based)
+
+**Nikto v2.6.1** (built from `sullo/nikto` in an Alpine container, `--network host`, `-Tuning 1234bde`)
+
+- **4486 requests, 0 errors, 2 items reported**, scan time 20s.
+- Findings:
+    1. `/: Uncommon header 'x-request-id' found` — request-tracking header (informational; not a vulnerability).
+    2. `/: Suggested security header missing: strict-transport-security` — **confirms SEC-06** (no HSTS).
+- Positive: **no server banner retrieved** — the API does not disclose its framework/version in response headers (no version-disclosure finding).
+
+**OWASP ZAP baseline** (`ghcr.io/zaproxy/zaproxy`) — **could not complete in this environment.** The ZAP image pull from `ghcr.io` stalled on a large layer and the registry connection was throttled/unreliable, so the automated web scan did not run. Equivalent coverage was obtained manually (§10.3, §10.4): authentication/RBAC/IDOR, injection/XSS, rate limiting, security headers (verified present, see P-10), CORS, and info disclosure. ZAP baseline is recommended as a scheduled CI job where registry access is stable (see 10.6 P2).
+
+**Trivy** (`aquasec/trivy image simbar-backend:latest`) — **CVE scan could not complete in this environment.** Trivy's 108 MiB vulnerability-DB download from `mirror.gcr.io` was throttled (~20–110 KiB/s) and the run died mid-download after multiple retries (first at timeout, then connection drop at ~57%). No CVE results are therefore claimed here.
+
+Manual composition assessment of `simbar-backend:latest` (substitute for the unavailable DB lookup):
+
+- **Runtime base**: `alpine:3.20.10` (current patch) with a minimal package set — `musl 1.2.5-r3`, `busybox 1.36.1-r31`, `libcrypto3/libssl3 3.3.7-r0` (OpenSSL), `zlib 1.3.2-r0`, `ca-certificates`, `tzdata`, `apk-tools` — all at the current revision for the 3.20 branch, so no stale OS-package versions were found.
+- **Application**: single static Go 1.25.0 binary (`/app/api`, 28.7 MB, `CGO_ENABLED=0`, `-trimpath -ldflags "-s -w"`). No shell utilities or build tooling are shipped in the runtime image (only `ca-certificates`/`tzdata` added on top of alpine).
+- **Supply-chain note**: a full `trivy image` run (including Go-module advisories for the 27 direct/indirect deps — echo v4.15.4, pgx v5.10.0, casbin v2.135.0, golang-jwt v5.3.1, golang.org/x/* etc.) must be executed in CI with stable registry access before production deployment.
+
+### 10.6 Recommendations (Prioritized)
+
+| Priority | Action | Findings addressed |
+| -------- | ------ | ------------------ |
+| **P0 — Deploy block** | Move the JWT secret out of the repo/env into a secret manager with a random ≥32-byte value; refuse to start on missing/short/known-default secrets; rotate the current secret. | SEC-01 |
+| **P0 — Deploy block** | Scope all document (and count) reads/writes to the caller's assigned warehouses (from JWT claims); reject `?warehouse_id` outside the caller's warehouses with `403`; add per-warehouse integration tests. | SEC-02 |
+| P1 | Move the AES data key to KMS/env-injected key with rotation; consider envelope encryption for PII. | SEC-03 |
+| P1 | Force password change on first login; remove/disable default-seeded credentials in production; rotate the current admin password. | SEC-04 |
+| P2 | Gate OpenAPI/Swagger behind dev-only or auth. | SEC-05 |
+| P2 | Enforce TLS + HSTS behind the reverse proxy in production. | SEC-06 |
+| P2 | Run ZAP + Nikto + Trivy as a scheduled CI job (stable registry access) so the scans in §10.5 are reproducible. | — |
+
+**Note on SEC-01 severity**: the RBAC layer, warehouse-header check, `alg=none` protection, and Argon2id hashing are all correctly implemented — they were verified in §10.4. But a known signing secret bypasses the entire authentication layer, which is why SEC-01 is rated CRITICAL and blocks production deployment regardless of the otherwise-sound controls.
