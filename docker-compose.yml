@@ -34,7 +34,7 @@ services:
 
     # One-shot migrator: menunggu Postgres naik, lalu menerapkan
     # db/migrations/*.up.sql secara berurutan (idempotent — skrip
-    # db/migrate.sh mencatat versi di schema_migrations).
+    # db/migrate.sh mencatat versi di tabel simbar_migrations).
     migrate:
         container_name: inventory_migrate
         image: postgres:16
@@ -59,6 +59,7 @@ services:
             context: ./backend
             dockerfile: Dockerfile
         image: simbar-backend:latest
+        restart: unless-stopped
         depends_on:
             db:
                 condition: service_healthy
@@ -87,9 +88,25 @@ services:
             start_period: 15s
 
     # Asynq worker (job planner: expiry alert, reorder calc, dll)
+    # Dibangun dari Dockerfile yang sama dengan `api` (layer-cache membuat
+    # build keduanya murah). Tag image BEDA dari api — bila dua service
+    # mengekspor ke tag yang sama, `docker compose build` gagal
+    # ("image already exists") karena keduanya dibangun paralel.
     worker:
         container_name: inventory_worker
-        image: simbar-backend:latest
+        build:
+            context: ./backend
+            dockerfile: Dockerfile
+        image: simbar-worker:latest
+        restart: unless-stopped
+        # Worker tidak mengekspos HTTP :8080, jadi HEALTHCHECK bawaan image
+        # (ping /healthz) tak akan pernah lolos. Ganti dengan cek proses hidup.
+        healthcheck:
+            test: ["CMD-SHELL", "pgrep -f /app/worker >/dev/null 2>&1 || exit 1"]
+            interval: 30s
+            timeout: 3s
+            retries: 3
+            start_period: 10s
         depends_on:
             db:
                 condition: service_healthy
@@ -105,24 +122,24 @@ services:
             - DB_POOL_MAX=10
         command: ["/app/worker"]
 
-    # Frontend SPA (React + Vite)
+    # Frontend SPA (React + Vite) — image produksi: nginx statik + proxy /api
+    # ke service `api`. Bundle dibangun di build-stage Dockerfile (VITE_API_BASE_URL
+    # default /api/v1, same-origin lewat nginx — tanpa CORS). Host port 5173
+    # dipetakan ke port 80 nginx agar URL tetap sama seperti mode dev.
     frontend:
         container_name: inventory_frontend
-        image: node:20-alpine
-        working_dir: /app
+        build:
+            context: ./frontend
+            dockerfile: Dockerfile
+            args:
+                VITE_API_BASE_URL: /api/v1
+        image: simbar-frontend:latest
+        restart: unless-stopped
         depends_on:
             api:
                 condition: service_healthy
-        environment:
-            - NODE_ENV=development
-            - VITE_BACKEND_URL=http://api:8080
-            - VITE_API_BASE_URL=/api/v1
         ports:
-            - 5173:5173
-        volumes:
-            - ./frontend:/app
-            - /app/node_modules
-        command: ["sh", "-c", "npm install && npm run dev -- --host 0.0.0.0"]
+            - 5173:80
 
 volumes:
     postgres_data:
