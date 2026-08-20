@@ -233,7 +233,7 @@ export const FsnAnalysisPage: React.FC = () => {
                 value={selectedCategory}
                 onChange={(val) => setSelectedCategory(val)}
                 style={{ width: '100%' }}
-                data-testid="select-category-fsn"
+                data-testid="select-item-category"
                 options={[
                   { value: 'all', label: 'Semua Kategori' },
                   ...categories.map((c) => ({ value: c.name, label: c.name })),
