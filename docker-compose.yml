@@ -105,6 +105,25 @@ services:
             - DB_POOL_MAX=10
         command: ["/app/worker"]
 
+    # Frontend SPA (React + Vite)
+    frontend:
+        container_name: inventory_frontend
+        image: node:20-alpine
+        working_dir: /app
+        depends_on:
+            api:
+                condition: service_healthy
+        environment:
+            - NODE_ENV=development
+            - VITE_BACKEND_URL=http://api:8080
+            - VITE_API_BASE_URL=/api/v1
+        ports:
+            - 5173:5173
+        volumes:
+            - ./frontend:/app
+            - /app/node_modules
+        command: ["sh", "-c", "npm install && npm run dev -- --host 0.0.0.0"]
+
 volumes:
     postgres_data:
     redis_data:
