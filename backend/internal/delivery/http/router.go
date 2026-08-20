@@ -122,9 +122,10 @@ func NewRouter(cfg ...RouterConfig) *echo.Echo {
 		auth.POST("/refresh", authHandler.Refresh, echoMiddleware.BodyLimit("1M"))
 		auth.POST("/logout", authHandler.Logout, echoMiddleware.BodyLimit("1M"))
 
-		// ─── Protected endpoints (JWT + rate limit) ─────────────────────
+		// ─── Protected endpoints (JWT + rate limit + idempotency) ──────────
 		protected := v1.Group("", middleware.JWTAuthMiddleware(c.JWTSecret))
 		protected.Use(middleware.UserRateLimiter(store))
+		protected.Use(middleware.IdempotencyFilter())
 
 		// ─── Master Data endpoints (Phase 3) ────────────────────────────
 		if c.ItemUsecase != nil {
@@ -276,9 +277,12 @@ func NewRouter(cfg ...RouterConfig) *echo.Echo {
 }
 
 // rbacMW returns the Casbin RBAC middleware for the given resource/action,
-// or nil when no enforcer is configured (e.g. unit tests without policies).
+// or nil when no enforcer is configured in test environments.
 func rbacMW(c RouterConfig, resource, action string) []echo.MiddlewareFunc {
 	if c.Enforcer == nil {
+		if c.AppEnv == "production" || c.AppEnv == "staging" {
+			panic("RBAC Enforcer is required and cannot be nil in production or staging environment")
+		}
 		return nil
 	}
 	return []echo.MiddlewareFunc{middleware.RBACMiddleware(c.Enforcer, resource, action)}

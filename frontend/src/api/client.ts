@@ -294,17 +294,10 @@ apiClient.interceptors.response.use(
                 if (refreshResponse.data?.success && refreshResponse.data.data?.access_token) {
                     const newToken = refreshResponse.data.data.access_token;
                     const newRefreshToken = refreshResponse.data.data.refresh_token;
-                    const currentUser = useAuthStore.getState().user;
-                    if (currentUser) {
-                        useAuthStore.getState().login(currentUser, newToken, newRefreshToken);
-                    }
+                    useAuthStore.getState().setSession(newToken, newRefreshToken);
 
-                    apiClient.defaults.headers.common.Authorization = `Bearer ${newToken}`;
-                    originalRequest.headers.Authorization = `Bearer ${newToken}`;
-
-                    if (ENABLE_LOGGING)
-                        console.log("%c✓ Token refreshed", "color:#2fa84f;font-weight:bold;");
                     processQueue(null, newToken);
+                    originalRequest.headers.Authorization = `Bearer ${newToken}`;
                     return apiClient(originalRequest);
                 }
 

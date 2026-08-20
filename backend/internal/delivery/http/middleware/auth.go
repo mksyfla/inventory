@@ -20,6 +20,8 @@ const (
 	ClaimsKey authContextKey = "jwt_claims"
 	// UserIDKey is the context key for the authenticated user ID.
 	UserIDKey authContextKey = "user_id"
+	// WarehouseCodeKey is the context key for the active warehouse code.
+	WarehouseCodeKey authContextKey = "warehouse_code"
 )
 
 // JWTAuthMiddleware validates the Bearer token from the Authorization header,
@@ -116,6 +118,12 @@ func RBACMiddleware(enforcer *casbin.Enforcer, resource, action string) echo.Mid
 					"ERR_FORBIDDEN", "You do not have permission to perform this action", nil,
 					reqID(c))
 			}
+
+			// Inject active warehouse code into Echo and request context
+			c.Set(string(WarehouseCodeKey), warehouseID)
+			ctx := c.Request().Context()
+			ctx = context.WithValue(ctx, WarehouseCodeKey, warehouseID)
+			c.SetRequest(c.Request().WithContext(ctx))
 
 			return next(c)
 		}

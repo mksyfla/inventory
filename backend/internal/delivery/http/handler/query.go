@@ -28,13 +28,17 @@ func NewQueryHandler(uc *queryuc.ReadUsecase) *QueryHandler {
 	return &QueryHandler{uc: uc}
 }
 
-// warehouseCode returns the active warehouse code: an explicit ?warehouse_code
-// wins, otherwise the mandatory X-Warehouse-Id header set by RBAC middleware.
+// warehouseCode returns the active warehouse code: always prioritizes the
+// mandatory X-Warehouse-Id header verified by RBAC middleware.
 func warehouseCode(c echo.Context) string {
-	if code := c.QueryParam("warehouse_code"); code != "" {
-		return code
+	headerCode := c.Request().Header.Get("X-Warehouse-Id")
+	if headerCode != "" {
+		return headerCode
 	}
-	return c.Request().Header.Get("X-Warehouse-Id")
+	if ctxCode, ok := c.Get("warehouse_code").(string); ok && ctxCode != "" {
+		return ctxCode
+	}
+	return c.QueryParam("warehouse_code")
 }
 
 // ListDocuments handles GET /api/v1/documents.
@@ -81,6 +85,13 @@ func (h *QueryHandler) GetDocumentDetail(c echo.Context) error {
 	if err != nil {
 		return writeUsecaseError(c, err, "Document not found")
 	}
+
+	// C-03 IDOR protection: verify document warehouse against caller's warehouse header
+	headerWh := c.Request().Header.Get("X-Warehouse-Id")
+	if headerWh != "" && doc.WarehouseCode != headerWh && doc.DestWarehouseCode != headerWh {
+		return response.Error(c, http.StatusNotFound, "ERR_NOT_FOUND", "Document not found", nil, reqID(c))
+	}
+
 	return response.Success(c, http.StatusOK, doc, nil)
 }
 
@@ -99,6 +110,12 @@ func (h *QueryHandler) GetCountDocumentDetail(c echo.Context) error {
 	if err != nil {
 		return writeUsecaseError(c, err, "Count session not found")
 	}
+
+	headerWh := c.Request().Header.Get("X-Warehouse-Id")
+	if headerWh != "" && doc.WarehouseCode != headerWh {
+		return response.Error(c, http.StatusNotFound, "ERR_NOT_FOUND", "Count session not found", nil, reqID(c))
+	}
+
 	return response.Success(c, http.StatusOK, doc, nil)
 }
 

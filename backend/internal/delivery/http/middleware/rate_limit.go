@@ -1,7 +1,6 @@
 package middleware
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 	"time"
@@ -11,28 +10,53 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-// RateLimitMiddleware implements a sliding-window rate limiter using a KVStore (Redis or in-memory).
-// For each request, it increments a counter keyed by identifier and limits to maxReqs per window duration.
-// The window TTL is re-armed on every request so an interrupted Expire can never
-// permanently lock a client out (sliding window by activity).
+// RateLimitOptions configures the rate limiter behavior.
+type RateLimitOptions struct {
+	MaxReqs    int64
+	Window     time.Duration
+	KeyFn      func(c echo.Context) string
+	FailClosed bool
+}
+
+// RateLimitMiddleware implements a rate limiter using a KVStore (Redis or in-memory).
 func RateLimitMiddleware(store redisclient.KVStore, maxReqs int64, window time.Duration, keyFn func(c echo.Context) string) echo.MiddlewareFunc {
+	return RateLimitMiddlewareWithOptions(store, RateLimitOptions{
+		MaxReqs:    maxReqs,
+		Window:     window,
+		KeyFn:      keyFn,
+		FailClosed: false,
+	})
+}
+
+// RateLimitMiddlewareWithOptions creates a rate limiter with custom failure behavior.
+func RateLimitMiddlewareWithOptions(store redisclient.KVStore, opts RateLimitOptions) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
-			ctx := context.Background()
-			key := "rate:" + keyFn(c)
+			ctx := c.Request().Context()
+			key := "rate:" + opts.KeyFn(c)
 
 			count, err := store.IncrBy(ctx, key, 1)
 			if err != nil {
-				// On store error, fail-open so legitimate requests are not blocked
+				if opts.FailClosed {
+					return echo.NewHTTPError(http.StatusServiceUnavailable, "Rate limiter unavailable")
+				}
+				// On non-critical endpoints, fail-open
 				return next(c)
 			}
 
-			// Always re-arm the window TTL; failure here only means the counter
-			// will expire at the previously set TTL (or, worst case, at no TTL).
-			_ = store.Expire(ctx, key, window)
+			// Re-arm or set TTL on initial count
+			_ = store.Expire(ctx, key, opts.Window)
 
-			if count > maxReqs {
-				c.Response().Header().Set("Retry-After", fmt.Sprintf("%d", int(window.Seconds())))
+			remaining := opts.MaxReqs - count
+			if remaining < 0 {
+				remaining = 0
+			}
+
+			c.Response().Header().Set("X-RateLimit-Limit", fmt.Sprintf("%d", opts.MaxReqs))
+			c.Response().Header().Set("X-RateLimit-Remaining", fmt.Sprintf("%d", remaining))
+
+			if count > opts.MaxReqs {
+				c.Response().Header().Set("Retry-After", fmt.Sprintf("%d", int(opts.Window.Seconds())))
 				return echo.NewHTTPError(http.StatusTooManyRequests, "Rate limit exceeded")
 			}
 
@@ -51,16 +75,22 @@ func UserRateLimiter(store redisclient.KVStore) echo.MiddlewareFunc {
 	})
 }
 
-// LoginRateLimiter returns a stricter per-IP limiter for login: 5 attempts/15 minutes.
+// LoginRateLimiter returns a per-IP limiter for login: 25 attempts/15 minutes with fail-closed security.
 func LoginRateLimiter(store redisclient.KVStore) echo.MiddlewareFunc {
-	return RateLimitMiddleware(store, 25, 15*time.Minute, func(c echo.Context) string {
-		return "login:" + c.RealIP()
+	return RateLimitMiddlewareWithOptions(store, RateLimitOptions{
+		MaxReqs:    25,
+		Window:     15 * time.Minute,
+		KeyFn:      func(c echo.Context) string { return "login:" + c.RealIP() },
+		FailClosed: true,
 	})
 }
 
-// RegisterRateLimiter returns a per-IP limiter for registration: 10 attempts/15 minutes.
+// RegisterRateLimiter returns a per-IP limiter for registration: 10 attempts/15 minutes with fail-closed security.
 func RegisterRateLimiter(store redisclient.KVStore) echo.MiddlewareFunc {
-	return RateLimitMiddleware(store, 10, 15*time.Minute, func(c echo.Context) string {
-		return "register:" + c.RealIP()
+	return RateLimitMiddlewareWithOptions(store, RateLimitOptions{
+		MaxReqs:    10,
+		Window:     15 * time.Minute,
+		KeyFn:      func(c echo.Context) string { return "register:" + c.RealIP() },
+		FailClosed: true,
 	})
 }

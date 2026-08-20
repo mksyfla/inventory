@@ -22,10 +22,11 @@ import {
   PieChartOutlined,
 } from '@ant-design/icons';
 import { InventoryValuationItem } from '../../types/report';
-import { MOCK_CATEGORIES } from '../../types/item';
 import { useQuery } from '@tanstack/react-query';
 import { reportService } from '../../api/services/reports';
 import { warehouseService } from '../../api/services/warehouses';
+import { itemService } from '../../api/services/items';
+import { CategoryDTO } from '../../api/dto';
 import { mapValuationReportDTO, mapWarehouseDTO } from '../../api/mappers';
 
 const { Title, Paragraph, Text } = Typography;
@@ -35,8 +36,7 @@ export const InventoryValuationPage: React.FC = () => {
   const [selectedWarehouse, setSelectedWarehouse] = useState<string>('all');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
 
-  // Real valuation report from the backend plus the warehouse master for the
-  // filter dropdown.
+  // Real valuation report from the backend plus the warehouse and category master for dropdowns.
   const { data: valuationReports = [], isLoading } = useQuery({
     queryKey: ['valuation-reports'],
     queryFn: async () => {
@@ -51,6 +51,11 @@ export const InventoryValuationPage: React.FC = () => {
       const dtos = await warehouseService.list();
       return dtos.map(mapWarehouseDTO);
     },
+  });
+
+  const { data: categories = [] } = useQuery<CategoryDTO[]>({
+    queryKey: ['categories'],
+    queryFn: () => itemService.listCategories(),
   });
 
   const filteredReports = valuationReports.filter((item) => {
@@ -257,7 +262,7 @@ export const InventoryValuationPage: React.FC = () => {
                 data-testid="select-category-valuation"
                 options={[
                   { value: 'all', label: 'Semua Kategori' },
-                  ...MOCK_CATEGORIES.map((c) => ({ value: c.name, label: c.name })),
+                  ...categories.map((c) => ({ value: c.name, label: c.name })),
                 ]}
               />
             </Col>

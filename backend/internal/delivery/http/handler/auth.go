@@ -18,6 +18,9 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
+// dummyArgon2idHash is a valid Argon2id hash used to equalize execution time on unknown usernames.
+const dummyArgon2idHash = "$argon2id$v=19$m=65536,t=3,p=2$dHVtbXlzYWx0MTIzNDU2$O1dO5w/cZkO0+qfTfEaB2lW8zP7oN1rG9V0sI4hL2kM"
+
 // UserLookup is a function type to fetch user credentials by username.
 // In production this would call the repository; in tests it can be mocked.
 type UserLookup func(ctx context.Context, username string) (userID int64, passwordHash string, roles []string, warehouses []string, err error)
@@ -96,6 +99,8 @@ func (h *AuthHandler) Login(c echo.Context) error {
 
 	userID, passwordHash, roles, warehouses, err := h.lookupUser(c.Request().Context(), req.Username)
 	if err != nil {
+		// Timing attack mitigation (H-11): perform dummy password verification
+		_, _ = auth.VerifyPassword(req.Password, dummyArgon2idHash)
 		return response.Error(c, http.StatusUnauthorized, "ERR_UNAUTHENTICATED", "Invalid credentials", nil, reqID(c))
 	}
 
@@ -130,11 +135,20 @@ func (h *AuthHandler) Login(c echo.Context) error {
 // Validates the old refresh token, revokes it, and issues a new token pair (Rotating Refresh Token).
 func (h *AuthHandler) Refresh(c echo.Context) error {
 	var req dto.RefreshRequest
-	if !bindAndValidate(c, &req) {
-		return nil
+	_ = c.Bind(&req)
+
+	refreshToken := req.RefreshToken
+	if refreshToken == "" {
+		if cookie, err := c.Cookie(auth.RefreshTokenCookieName); err == nil && cookie.Value != "" {
+			refreshToken = cookie.Value
+		}
 	}
 
-	claims, err := auth.ParseRefreshToken(req.RefreshToken, h.jwtSecret)
+	if refreshToken == "" {
+		return response.Error(c, http.StatusUnprocessableEntity, "ERR_VALIDATION", "Missing refresh token in request body or cookie", nil, reqID(c))
+	}
+
+	claims, err := auth.ParseRefreshToken(refreshToken, h.jwtSecret)
 	if err != nil {
 		return response.Error(c, http.StatusUnauthorized, "ERR_UNAUTHENTICATED", "Invalid or expired refresh token", nil, reqID(c))
 	}
@@ -191,22 +205,24 @@ func (h *AuthHandler) Refresh(c echo.Context) error {
 // Revokes the provided refresh token from Redis.
 func (h *AuthHandler) Logout(c echo.Context) error {
 	var req dto.RefreshRequest
-	if !bindAndValidate(c, &req) {
-		return nil
+	_ = c.Bind(&req)
+
+	refreshToken := req.RefreshToken
+	if refreshToken == "" {
+		if cookie, err := c.Cookie(auth.RefreshTokenCookieName); err == nil && cookie.Value != "" {
+			refreshToken = cookie.Value
+		}
 	}
 
-	claims, err := auth.ParseRefreshToken(req.RefreshToken, h.jwtSecret)
-	if err != nil {
-		// If token is invalid / expired, treat as already logged out
-		clearAuthCookies(c)
-		return response.Success(c, http.StatusOK, "logged out", nil)
+	if refreshToken != "" {
+		if claims, err := auth.ParseRefreshToken(refreshToken, h.jwtSecret); err == nil {
+			userID, _ := strconv.ParseInt(claims.Subject, 10, 64)
+			hashedJTI := hashJTI(claims.ID)
+			_ = h.store.Del(c.Request().Context(), refreshKey(userID, hashedJTI))
+		}
 	}
 
-	userID, _ := strconv.ParseInt(claims.Subject, 10, 64)
-	hashedJTI := hashJTI(claims.ID)
-	_ = h.store.Del(c.Request().Context(), refreshKey(userID, hashedJTI))
-
-	// Expire the auth cookies on the client
+	// Expire the auth cookies on the client across all paths
 	clearAuthCookies(c)
 
 	return response.Success(c, http.StatusOK, "logged out", nil)
@@ -267,14 +283,16 @@ func setAuthCookies(c echo.Context, pair *auth.TokenPair) {
 func clearAuthCookies(c echo.Context) {
 	secure := requestIsTLS(c)
 	for _, name := range []string{auth.AccessTokenCookieName, auth.RefreshTokenCookieName} {
-		c.SetCookie(&http.Cookie{
-			Name:     name,
-			Value:    "",
-			Path:     "/",
-			HttpOnly: true,
-			SameSite: http.SameSiteLaxMode,
-			Secure:   secure,
-			MaxAge:   -1,
-		})
+		for _, path := range []string{"/", "/api/v1/auth"} {
+			c.SetCookie(&http.Cookie{
+				Name:     name,
+				Value:    "",
+				Path:     path,
+				HttpOnly: true,
+				SameSite: http.SameSiteLaxMode,
+				Secure:   secure,
+				MaxAge:   -1,
+			})
+		}
 	}
 }

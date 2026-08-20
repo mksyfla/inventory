@@ -72,9 +72,13 @@ describe('LoginPage Component', () => {
       );
     });
 
+    const usernameInput = screen.getByTestId('input-username');
+    const passwordInput = screen.getByTestId('input-password');
     const submitBtn = screen.getByTestId('btn-login-submit');
 
     await act(async () => {
+      fireEvent.change(usernameInput, { target: { value: 'dipo.inventory' } });
+      fireEvent.change(passwordInput, { target: { value: 'Dipo@123456' } });
       fireEvent.click(submitBtn);
     });
 

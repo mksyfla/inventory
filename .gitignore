@@ -1,4 +1,26 @@
-/.claude
-frontend/node_modules
-frontend/dist
-backend/build
+# Dependency and build directories
+node_modules/
+dist/
+build/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Environments and Secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# IDE / System files
+.claude/
+.idea/
+.vscode/
+*.tsbuildinfo
+.DS_Store
+Thumbs.db

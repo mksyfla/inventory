@@ -2,7 +2,6 @@ import { render, screen, act, fireEvent, waitFor } from '@testing-library/react'
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClientProvider } from '@tanstack/react-query';
-import React from 'react';
 import { PickingScanPage } from '../pages/outbound/PickingScanPage';
 import { outboundService } from '../api/services/outbound';
 import { documentService } from '../api/services/documents';
