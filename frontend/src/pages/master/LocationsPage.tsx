@@ -11,117 +11,88 @@ import {
   Col,
   Badge,
   Tooltip,
-  notification,
+  Modal,
+  Input,
+  InputNumber,
+  Form,
 } from 'antd';
-import {
-  PlusOutlined,
-  EditOutlined,
-  QrcodeOutlined,
-  LockOutlined,
-  FolderOpenOutlined,
-} from '@ant-design/icons';
-import { LocationNode, LocationType, MOCK_LOCATIONS_TREE, MOCK_WAREHOUSES } from '../../types/location';
-import { LocationFormModal } from '../../components/master/LocationFormModal';
+import { PlusOutlined, QrcodeOutlined, EnvironmentOutlined } from '@ant-design/icons';
+import { useQuery } from '@tanstack/react-query';
+import { LocationNode } from '../../types/location';
+import { useWarehouseStore } from '../../store/useWarehouseStore';
+import { useMutationWithToast } from '../../hooks/useMutationWithToast';
+import { locationService } from '../../api/services/locations';
+import { LocationDTO, LocationType as BackendLocationType } from '../../api/dto';
+import { mapLocationDTO } from '../../api/mappers';
 import { LocationBarcodeModal } from '../../components/master/LocationBarcodeModal';
 
 const { Title, Paragraph, Text } = Typography;
 
+const BACKEND_LOC_TYPES: BackendLocationType[] = [
+  'staging',
+  'pick',
+  'bulk',
+  'quarantine',
+  'damaged',
+  'transit',
+];
+
+const getLocationTypeTag = (type: string) => {
+  const map: Record<string, { color: string; label: string }> = {
+    staging: { color: 'green', label: 'Staging' },
+    pick: { color: 'cyan', label: 'Pick Face' },
+    bulk: { color: 'geekblue', label: 'Bulk' },
+    quarantine: { color: 'orange', label: 'Karantina / QC' },
+    damaged: { color: 'volcano', label: 'Barang Rusak' },
+    transit: { color: 'magenta', label: 'Transit' },
+  };
+  const item = map[type] || { color: 'default', label: type };
+  return <Tag color={item.color}>{item.label}</Tag>;
+};
+
 export const LocationsPage: React.FC = () => {
-  const [selectedWarehouseId, setSelectedWarehouseId] = useState<number>(1);
-  const [locationsTree, setLocationsTree] = useState<LocationNode[]>(MOCK_LOCATIONS_TREE);
-
-  // Modal States
-  const [formModalOpen, setFormModalOpen] = useState<boolean>(false);
-  const [editingLocation, setEditingLocation] = useState<LocationNode | null>(null);
-  const [parentLocation, setParentLocation] = useState<LocationNode | null>(null);
-
+  const { warehouses, activeWarehouseId, setActiveWarehouseId } = useWarehouseStore();
   const [barcodeModalOpen, setBarcodeModalOpen] = useState<boolean>(false);
   const [selectedBarcodeLoc, setSelectedBarcodeLoc] = useState<LocationNode | null>(null);
+  const [formModalOpen, setFormModalOpen] = useState<boolean>(false);
+  const [form] = Form.useForm();
 
-  const handleOpenAddSub = (parent: LocationNode) => {
-    setEditingLocation(null);
-    setParentLocation(parent);
-    setFormModalOpen(true);
-  };
+  const { data: locations = [], isLoading } = useQuery({
+    queryKey: ['locations', activeWarehouseId],
+    queryFn: () => locationService.listLocations(activeWarehouseId),
+  });
 
-  const handleOpenAddRoot = () => {
-    setEditingLocation(null);
-    setParentLocation(null);
-    setFormModalOpen(true);
-  };
+  const createMutation = useMutationWithToast({
+    mutationFn: (values: any) =>
+      locationService.createLocation({
+        warehouse_id: activeWarehouseId,
+        code: values.code,
+        zone: values.zone || null,
+        rack: values.rack || null,
+        level: values.level || null,
+        loc_type: values.loc_type,
+        pick_seq: values.pick_seq ?? null,
+        capacity: values.capacity ?? null,
+      }),
+    successTitle: 'Lokasi Berhasil Ditambahkan',
+    successMessage: 'Lokasi bin baru telah disimpan ke database master.',
+    invalidateKeys: [['locations']],
+  });
 
-  const handleOpenEdit = (loc: LocationNode) => {
-    setEditingLocation(loc);
-    setParentLocation(null);
-    setFormModalOpen(true);
-  };
-
-  const handleOpenBarcode = (loc: LocationNode) => {
-    setSelectedBarcodeLoc(loc);
+  const handleOpenBarcode = (loc: LocationDTO) => {
+    setSelectedBarcodeLoc(mapLocationDTO(loc));
     setBarcodeModalOpen(true);
   };
 
-  const handleSaveLocation = (values: any) => {
-    if (editingLocation) {
-      // Recursive update
-      const updateNode = (list: LocationNode[]): LocationNode[] =>
-        list.map((item) => {
-          if (item.id === editingLocation.id) {
-            return { ...item, ...values };
-          }
-          if (item.children) {
-            return { ...item, children: updateNode(item.children) };
-          }
-          return item;
-        });
-
-      setLocationsTree(updateNode(locationsTree));
-      notification.success({ message: 'Lokasi Berhasil Diperbarui' });
-    } else {
-      // Add new node
-      const newNode: LocationNode = {
-        id: Date.now(),
-        warehouseId: selectedWarehouseId,
-        ...values,
-      };
-
-      if (parentLocation) {
-        const addChildNode = (list: LocationNode[]): LocationNode[] =>
-          list.map((item) => {
-            if (item.id === parentLocation.id) {
-              return {
-                ...item,
-                children: [...(item.children || []), newNode],
-              };
-            }
-            if (item.children) {
-              return { ...item, children: addChildNode(item.children) };
-            }
-            return item;
-          });
-        setLocationsTree(addChildNode(locationsTree));
-      } else {
-        setLocationsTree((prev) => [...prev, newNode]);
-      }
-      notification.success({ message: 'Lokasi Baru Berhasil Ditambahkan' });
-    }
-    setFormModalOpen(false);
-  };
-
-  const getLocationTypeTag = (type: LocationType) => {
-    const map: Record<LocationType, { color: string; label: string }> = {
-      warehouse: { color: 'blue', label: 'Gudang' },
-      zone: { color: 'geekblue', label: 'Zona' },
-      rack: { color: 'cyan', label: 'Rak' },
-      bin: { color: 'purple', label: 'Bin Slot' },
-      staging_inbound: { color: 'green', label: 'Staging Inbound' },
-      staging_outbound: { color: 'magenta', label: 'Staging Outbound' },
-      quarantine: { color: 'orange', label: 'Karantina / QC' },
-      damaged: { color: 'volcano', label: 'Barang Rusak' },
-    };
-
-    const item = map[type] || { color: 'default', label: type };
-    return <Tag color={item.color}>{item.label}</Tag>;
+  const handleSubmitCreate = () => {
+    form.validateFields().then((values) => {
+      createMutation.mutate(values, {
+        onSuccess: () => {
+          setFormModalOpen(false);
+          form.resetFields();
+        },
+      });
+    });
   };
 
   const columns = [
@@ -129,51 +100,41 @@ export const LocationsPage: React.FC = () => {
       title: 'Kode Lokasi Bin',
       dataIndex: 'code',
       key: 'code',
-      width: 220,
-      render: (code: string, record: LocationNode) => (
+      width: 200,
+      render: (code: string) => (
         <Space>
-          <FolderOpenOutlined style={{ color: '#0052cc' }} />
+          <EnvironmentOutlined style={{ color: '#0052cc' }} />
           <Text strong style={{ letterSpacing: 0.5 }}>{code}</Text>
-          {record.isLocked && (
-            <Tooltip title="Lokasi Terkunci (Locked)">
-              <LockOutlined style={{ color: '#ff4d4f' }} />
-            </Tooltip>
-          )}
         </Space>
       ),
     },
     {
-      title: 'Nama Lokasi',
-      dataIndex: 'name',
-      key: 'name',
-      render: (name: string) => <Text>{name}</Text>,
+      title: 'Tipe Lokasi',
+      dataIndex: 'loc_type',
+      key: 'loc_type',
+      width: 170,
+      render: (type: string) => getLocationTypeTag(type),
     },
     {
-      title: 'Tipe Hierarki',
-      dataIndex: 'type',
-      key: 'type',
-      width: 150,
-      render: (type: LocationType) => getLocationTypeTag(type),
+      title: 'Zona / Rak / Level',
+      key: 'zone',
+      width: 200,
+      render: (_: any, record: LocationDTO) => (
+        <Text type="secondary">{record.zone || '-'} / {record.rack || '-'} / {record.level || '-'}</Text>
+      ),
     },
     {
-      title: 'Kapasitas (Vol / Berat)',
+      title: 'Kapasitas',
+      dataIndex: 'capacity',
       key: 'capacity',
-      width: 180,
-      render: (_: any, record: LocationNode) =>
-        record.capacityVolumeM3 || record.capacityWeightKg ? (
-          <Text type="secondary" style={{ fontSize: 13 }}>
-            {record.capacityVolumeM3 ? `${record.capacityVolumeM3} m³` : '-'} /{' '}
-            {record.capacityWeightKg ? `${record.capacityWeightKg} kg` : '-'}
-          </Text>
-        ) : (
-          <Text type="secondary" style={{ fontSize: 12 }}>-</Text>
-        ),
+      width: 120,
+      render: (cap: number | null) => (cap ? <Text>{cap}</Text> : <Text type="secondary">-</Text>),
     },
     {
       title: 'Status',
-      dataIndex: 'isActive',
-      key: 'isActive',
-      width: 100,
+      dataIndex: 'is_active',
+      key: 'is_active',
+      width: 110,
       render: (active: boolean) => (
         <Badge status={active ? 'success' : 'default'} text={active ? 'Aktif' : 'Nonaktif'} />
       ),
@@ -181,36 +142,16 @@ export const LocationsPage: React.FC = () => {
     {
       title: 'Aksi',
       key: 'action',
-      width: 150,
-      render: (_: any, record: LocationNode) => (
-        <Space size={4}>
-          <Tooltip title="Tambah Sub-Lokasi">
-            <Button
-              type="text"
-              icon={<PlusOutlined style={{ color: '#36b37e' }} />}
-              onClick={() => handleOpenAddSub(record)}
-              data-testid={`btn-add-subloc-${record.id}`}
-            />
-          </Tooltip>
-
-          <Tooltip title="Edit Lokasi">
-            <Button
-              type="text"
-              icon={<EditOutlined style={{ color: '#0052cc' }} />}
-              onClick={() => handleOpenEdit(record)}
-              data-testid={`btn-edit-loc-${record.id}`}
-            />
-          </Tooltip>
-
-          <Tooltip title="Cetak QR Code / Barcode Rak (FR-1.6)">
-            <Button
-              type="text"
-              icon={<QrcodeOutlined style={{ color: '#fa8c16' }} />}
-              onClick={() => handleOpenBarcode(record)}
-              data-testid={`btn-barcode-loc-${record.id}`}
-            />
-          </Tooltip>
-        </Space>
+      width: 90,
+      render: (_: any, record: LocationDTO) => (
+        <Tooltip title="Cetak QR Code / Barcode Rak (FR-1.6)">
+          <Button
+            type="text"
+            icon={<QrcodeOutlined style={{ color: '#fa8c16' }} />}
+            onClick={() => handleOpenBarcode(record)}
+            data-testid={`btn-barcode-loc-${record.id}`}
+          />
+        </Tooltip>
       ),
     },
   ];
@@ -221,20 +162,20 @@ export const LocationsPage: React.FC = () => {
         <Row justify="space-between" align="middle">
           <Col>
             <Title level={3} style={{ margin: 0 }}>
-              Master Hirarki Lokasi Bin (Warehouse Locations)
+              Master Lokasi Bin (Warehouse Locations)
             </Title>
             <Paragraph type="secondary" style={{ margin: 0 }}>
-              Struktur bertingkat Gudang → Zona → Rak → Bin Slot untuk penempatan stok presisi dan scanning barcode.
+              Daftar lokasi storage (staging, pick, bulk, quarantine, damaged, transit) per gudang.
             </Paragraph>
           </Col>
           <Col>
             <Button
               type="primary"
               icon={<PlusOutlined />}
-              onClick={handleOpenAddRoot}
+              onClick={() => setFormModalOpen(true)}
               data-testid="btn-add-root-location"
             >
-              Tambah Zona / Area Utama
+              Tambah Lokasi Bin
             </Button>
           </Col>
         </Row>
@@ -245,10 +186,10 @@ export const LocationsPage: React.FC = () => {
               <Space>
                 <Text strong>Pilih Gudang Aktif:</Text>
                 <Select
-                  value={selectedWarehouseId}
-                  onChange={(val) => setSelectedWarehouseId(val)}
+                  value={activeWarehouseId}
+                  onChange={(val) => setActiveWarehouseId(val)}
                   style={{ width: 280 }}
-                  options={MOCK_WAREHOUSES.map((w) => ({ value: w.id, label: `${w.code} - ${w.name}` }))}
+                  options={warehouses.map((w) => ({ value: w.id, label: `${w.code} - ${w.name}` }))}
                   data-testid="select-warehouse-filter"
                 />
               </Space>
@@ -258,25 +199,52 @@ export const LocationsPage: React.FC = () => {
           <Table
             rowKey="id"
             columns={columns}
-            dataSource={locationsTree}
-            expandable={{ defaultExpandAllRows: true }}
+            dataSource={locations}
+            loading={isLoading}
             pagination={false}
             data-testid="table-locations-tree"
           />
         </Card>
       </Space>
 
-      {/* Add / Edit Location Modal */}
-      <LocationFormModal
+      {/* Add Location Modal (maps to POST /locations) */}
+      <Modal
         open={formModalOpen}
-        editingLocation={editingLocation}
-        parentLocation={parentLocation}
-        warehouseId={selectedWarehouseId}
-        onClose={() => setFormModalOpen(false)}
-        onSubmit={handleSaveLocation}
-      />
+        title="Tambah Lokasi Bin Baru"
+        onCancel={() => setFormModalOpen(false)}
+        onOk={handleSubmitCreate}
+        confirmLoading={createMutation.isPending}
+        destroyOnHidden
+        data-testid="modal-location-form"
+      >
+        <Form form={form} layout="vertical" initialValues={{ loc_type: 'pick' }}>
+          <Form.Item name="code" label="Kode Lokasi" rules={[{ required: true, message: 'Kode lokasi wajib diisi' }]}>
+            <Input placeholder="Contoh: PK-01-03" style={{ textTransform: 'uppercase' }} data-testid="input-location-code" />
+          </Form.Item>
+          <Form.Item name="loc_type" label="Tipe Lokasi" rules={[{ required: true, message: 'Tipe lokasi wajib dipilih' }]}>
+            <Select
+              options={BACKEND_LOC_TYPES.map((t) => ({ value: t, label: t }))}
+              data-testid="select-location-type"
+            />
+          </Form.Item>
+          <Form.Item name="zone" label="Zona (Opsional)">
+            <Input maxLength={20} />
+          </Form.Item>
+          <Form.Item name="rack" label="Rak (Opsional)">
+            <Input maxLength={20} />
+          </Form.Item>
+          <Form.Item name="level" label="Level (Opsional)">
+            <Input maxLength={20} />
+          </Form.Item>
+          <Form.Item name="pick_seq" label="Urutan Picking (Opsional)">
+            <InputNumber min={0} style={{ width: '100%' }} />
+          </Form.Item>
+          <Form.Item name="capacity" label="Kapasitas (Opsional)">
+            <InputNumber min={0} style={{ width: '100%' }} />
+          </Form.Item>
+        </Form>
+      </Modal>
 
-      {/* Print Barcode Modal */}
       <LocationBarcodeModal
         open={barcodeModalOpen}
         location={selectedBarcodeLoc}

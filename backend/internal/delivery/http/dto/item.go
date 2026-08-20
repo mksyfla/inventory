@@ -63,6 +63,19 @@ type CreatePartnerRequest struct {
 	ContactPhone string `json:"contact_phone" validate:"omitempty,max=30"`
 }
 
+// UpdatePartnerRequest is the body for PATCH /partners/:id. The frontend
+// always submits the full partner form, so fields mirror CreatePartnerRequest
+// plus is_active (the edit modal lets the user toggle partner status).
+type UpdatePartnerRequest struct {
+	Code         string `json:"code" validate:"required,min=1,max=30"`
+	PartnerType  string `json:"partner_type" validate:"required,oneof=supplier customer internal_unit"`
+	Name         string `json:"name" validate:"required,min=1,max=150"`
+	Address      string `json:"address" validate:"omitempty,max=500"`
+	ContactName  string `json:"contact_name" validate:"omitempty,max=100"`
+	ContactPhone string `json:"contact_phone" validate:"omitempty,max=30"`
+	IsActive     bool   `json:"is_active"`
+}
+
 // ============ IMPORT DTOs ============
 
 type ImportJobResponse struct {

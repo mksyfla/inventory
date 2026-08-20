@@ -1,0 +1,4 @@
+# Enforce LF line endings for shell scripts regardless of core.autocrlf.
+# CRLF in a POSIX script (/bin/sh) breaks `set -e\r` and the docker migrate
+# one-shot container (BUG-03), so .sh files must always be checked out as LF.
+*.sh text eol=lf

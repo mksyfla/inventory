@@ -11,7 +11,11 @@ import (
 
 	"inventory/internal/delivery/http/response"
 	"inventory/internal/pkg/auth"
+	"inventory/internal/pkg/metrics"
 	redisclient "inventory/internal/pkg/redis"
+	countinguc "inventory/internal/usecase/counting"
+	outbounduc "inventory/internal/usecase/outbound"
+	transferuc "inventory/internal/usecase/transfer"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -168,6 +172,30 @@ func TestNewRouter_OpenAPIJSON(t *testing.T) {
 	assert.Contains(t, paths, "/items")
 	assert.Contains(t, paths, "/stock/movements")
 	assert.Contains(t, paths, "/auth/login")
+	// Fase 7 outbound endpoints
+	assert.Contains(t, paths, "/requests")
+	assert.Contains(t, paths, "/requests/{id}/submit")
+	assert.Contains(t, paths, "/requests/{id}/approve")
+	assert.Contains(t, paths, "/deliveries")
+	assert.Contains(t, paths, "/deliveries/{id}/submit")
+	assert.Contains(t, paths, "/deliveries/{id}/approve")
+	assert.Contains(t, paths, "/deliveries/{id}/allocate")
+	assert.Contains(t, paths, "/deliveries/{id}/allocate/override")
+	assert.Contains(t, paths, "/deliveries/{id}/picking-list")
+	assert.Contains(t, paths, "/deliveries/{id}/pick")
+	assert.Contains(t, paths, "/deliveries/{id}/ship")
+	assert.Contains(t, paths, "/deliveries/{id}/pod")
+	// Fase 8 transfer (M5) endpoints
+	assert.Contains(t, paths, "/transfers")
+	assert.Contains(t, paths, "/transfers/{id}/submit")
+	assert.Contains(t, paths, "/transfers/{id}/approve")
+	assert.Contains(t, paths, "/transfers/{id}/send")
+	assert.Contains(t, paths, "/transfers/{id}/receive")
+	// Fase 8 stock opname (M6) endpoints
+	assert.Contains(t, paths, "/counts")
+	assert.Contains(t, paths, "/counts/{id}/lines")
+	assert.Contains(t, paths, "/counts/{id}/post")
+	assert.Contains(t, paths, "/adjustments")
 }
 
 func TestNewRouter_SwaggerUI(t *testing.T) {
@@ -178,4 +206,103 @@ func TestNewRouter_SwaggerUI(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, rec.Code)
 	assert.Contains(t, rec.Body.String(), "swagger")
+}
+
+// TestNewRouter_Fase78RoutesRegistered proves every Fase 7 (outbound) and
+// Fase 8 (transfer + counting) route is wired into the Echo router: a
+// registered route answers 401 Unauthorized (JWT-protected), a missing one
+// would answer 404.
+func TestNewRouter_Fase78RoutesRegistered(t *testing.T) {
+	router := NewRouter(RouterConfig{
+		JWTSecret:       "test-secret",
+		Store:           redisclient.NewInMemoryStore(),
+		OutboundUsecase: &outbounduc.OutboundUsecase{},
+		TransferUsecase: &transferuc.TransferUsecase{},
+		CountingUsecase: &countinguc.CountingUsecase{},
+	})
+
+	routes := []struct{ method, path string }{
+		{"POST", "/api/v1/requests"},
+		{"POST", "/api/v1/requests/1/submit"},
+		{"POST", "/api/v1/requests/1/approve"},
+		{"POST", "/api/v1/deliveries"},
+		{"POST", "/api/v1/deliveries/1/submit"},
+		{"POST", "/api/v1/deliveries/1/approve"},
+		{"POST", "/api/v1/deliveries/1/allocate"},
+		{"POST", "/api/v1/deliveries/1/allocate/override"},
+		{"GET", "/api/v1/deliveries/1/picking-list"},
+		{"POST", "/api/v1/deliveries/1/pick"},
+		{"POST", "/api/v1/deliveries/1/ship"},
+		{"POST", "/api/v1/deliveries/1/pod"},
+		{"POST", "/api/v1/transfers"},
+		{"POST", "/api/v1/transfers/1/submit"},
+		{"POST", "/api/v1/transfers/1/approve"},
+		{"POST", "/api/v1/transfers/1/send"},
+		{"POST", "/api/v1/transfers/1/receive"},
+		{"POST", "/api/v1/counts"},
+		{"POST", "/api/v1/counts/1/lines"},
+		{"POST", "/api/v1/counts/1/post"},
+		{"POST", "/api/v1/adjustments"},
+	}
+	for _, rt := range routes {
+		t.Run(rt.method+" "+rt.path, func(t *testing.T) {
+			req := httptest.NewRequest(rt.method, rt.path, nil)
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+			assert.Equal(t, http.StatusUnauthorized, rec.Code,
+				"route must be registered and JWT-protected (401), not %d", rec.Code)
+		})
+	}
+}
+
+// TestNewRouter_ObservabilityRoutes (FSD 10.5) proves the health probes and
+// Prometheus endpoint are public (no auth) when configured.
+func TestNewRouter_ObservabilityRoutes(t *testing.T) {
+	router := NewRouter(RouterConfig{
+		JWTSecret: "test-secret",
+		Store:     redisclient.NewInMemoryStore(),
+		Metrics:   metrics.New(),
+	})
+
+	cases := []struct {
+		name       string
+		method     string
+		path       string
+		wantStatus int
+	}{
+		{"liveness", http.MethodGet, "/healthz", http.StatusOK},
+		{"readiness", http.MethodGet, "/readyz", http.StatusOK},
+		{"prometheus scrape", http.MethodGet, "/metrics", http.StatusOK},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(tc.method, tc.path, nil)
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+			assert.Equal(t, tc.wantStatus, rec.Code)
+		})
+	}
+
+	// The scrape endpoint must expose the request-latency p95 summary.
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	assert.Contains(t, rec.Body.String(), "http_request_duration_seconds")
+}
+
+// TestNewRouter_ObservabilityNotConfigured proves the probes still exist
+// (and answer OK) when Metrics is omitted — e.g. in older unit tests.
+func TestNewRouter_ObservabilityNotConfigured(t *testing.T) {
+	router := NewRouter()
+	for _, path := range []string{"/healthz", "/readyz"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusOK, rec.Code, "path %s", path)
+	}
+	// /metrics is only mounted when Metrics is configured.
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusNotFound, rec.Code)
 }

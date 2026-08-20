@@ -21,14 +21,16 @@ import (
 // ─── Mocks ──────────────────────────────────────────────────────────────────
 
 type mockDocs struct {
-	docs     map[int64]*document.Document
-	lines    map[int64][]*document.DocumentLine
-	nextID   int64
-	nextLine int64
-	byKey    map[string]int64
-	statuses []mockStatusUpdate
-	putaways []mockLinePutaway
-	created  []*document.Document
+	docs        map[int64]*document.Document
+	lines       map[int64][]*document.DocumentLine
+	nextID      int64
+	nextLine    int64
+	nextAtt     int64
+	byKey       map[string]int64
+	statuses    []mockStatusUpdate
+	putaways    []mockLinePutaway
+	created     []*document.Document
+	attachments map[int64]*document.Attachment
 }
 
 type mockStatusUpdate struct {
@@ -45,10 +47,11 @@ type mockLinePutaway struct {
 
 func newMockDocs() *mockDocs {
 	return &mockDocs{
-		docs:   map[int64]*document.Document{},
-		lines:  map[int64][]*document.DocumentLine{},
-		byKey:  map[string]int64{},
-		nextID: 1,
+		docs:        map[int64]*document.Document{},
+		lines:       map[int64][]*document.DocumentLine{},
+		byKey:       map[string]int64{},
+		nextID:      1,
+		attachments: map[int64]*document.Attachment{},
 	}
 }
 
@@ -107,6 +110,82 @@ func (m *mockDocs) UpdateLinePutaway(ctx context.Context, lineID int64, qtyProce
 		}
 	}
 	m.putaways = append(m.putaways, mockLinePutaway{lineID: lineID, processed: qtyProcessed, location: locationID})
+	return nil
+}
+
+// ─── Outbound-era additions (unused by inbound flows, harmless stubs) ──────
+
+func (m *mockDocs) UpdateLineProcessed(ctx context.Context, lineID int64, qtyProcessed float64) error {
+	for _, lines := range m.lines {
+		for _, ln := range lines {
+			if ln.ID == lineID {
+				ln.QtyProcessed = qtyProcessed
+			}
+		}
+	}
+	return nil
+}
+
+func (m *mockDocs) CreateAllocations(ctx context.Context, allocations []*document.Allocation) error {
+	return nil
+}
+
+func (m *mockDocs) ListAllocations(ctx context.Context, documentID int64) ([]*document.Allocation, error) {
+	return nil, nil
+}
+
+func (m *mockDocs) UpdateAllocationPicked(ctx context.Context, id int64, qtyPicked float64) error {
+	return nil
+}
+
+func (m *mockDocs) UpdateReasonCode(ctx context.Context, id int64, reasonCode string) error {
+	return nil
+}
+
+func (m *mockDocs) GetDelivery(ctx context.Context, documentID int64) (*document.Delivery, error) {
+	return nil, pgx.ErrNoRows
+}
+
+func (m *mockDocs) UpsertDelivery(ctx context.Context, d *document.Delivery) error {
+	return nil
+}
+
+// ── attachment support (lampiran GRN) ─────────────────────────────────────
+func (m *mockDocs) ListAttachments(ctx context.Context, documentID int64) ([]*document.Attachment, error) {
+	var out []*document.Attachment
+	for _, a := range m.attachments {
+		if a.DocumentID == documentID {
+			cp := *a
+			out = append(out, &cp)
+		}
+	}
+	return out, nil
+}
+
+func (m *mockDocs) CreateAttachment(ctx context.Context, a *document.Attachment) error {
+	if a.ID == 0 {
+		m.nextAtt++
+		a.ID = m.nextAtt
+	}
+	if a.CreatedAt.IsZero() {
+		a.CreatedAt = testNow
+	}
+	cp := *a
+	m.attachments[a.ID] = &cp
+	return nil
+}
+
+func (m *mockDocs) GetAttachmentByID(ctx context.Context, id int64) (*document.Attachment, error) {
+	a, ok := m.attachments[id]
+	if !ok {
+		return nil, pgx.ErrNoRows
+	}
+	cp := *a
+	return &cp, nil
+}
+
+func (m *mockDocs) DeleteAttachment(ctx context.Context, id int64) error {
+	delete(m.attachments, id)
 	return nil
 }
 

@@ -92,6 +92,9 @@ type StockRepository interface {
 	UpsertBalance(ctx context.Context, b *StockBalance) error
 	InsertMovement(ctx context.Context, m *StockMovement) error
 	GetMovements(ctx context.Context, filter MovementFilter) ([]*StockMovement, error)
+	// UpdateBalanceReserved atomically adds delta to qty_reserved on a balance
+	// that the caller has already locked (Fase 7.2 reserve, Fase 7.6 release).
+	UpdateBalanceReserved(ctx context.Context, id int64, delta float64) error
 }
 
 // TxRunner defines interface for running database transactions cleanly

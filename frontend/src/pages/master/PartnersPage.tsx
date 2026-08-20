@@ -11,34 +11,71 @@ import {
   Row,
   Col,
   Badge,
-  Popconfirm,
   Tooltip,
-  notification,
 } from 'antd';
 import {
   PlusOutlined,
   SearchOutlined,
   EditOutlined,
   ReloadOutlined,
-  CheckCircleOutlined,
-  StopOutlined,
   PhoneOutlined,
   MailOutlined,
 } from '@ant-design/icons';
-import { Partner, PartnerType, MOCK_PARTNERS } from '../../types/partner';
+import { useQuery } from '@tanstack/react-query';
+import { Partner, PartnerType } from '../../types/partner';
 import { useDebouncedSearch } from '../../hooks/useDebouncedSearch';
+import { useMutationWithToast } from '../../hooks/useMutationWithToast';
+import { partnerService } from '../../api/services/partners';
+import { mapPartnerDTO } from '../../api/mappers';
 import { PartnerFormModal } from '../../components/master/PartnerFormModal';
 
 const { Title, Paragraph, Text } = Typography;
 
 export const PartnersPage: React.FC = () => {
-  const [partners, setPartners] = useState<Partner[]>(MOCK_PARTNERS);
+  const { data: partners = [], isLoading, isFetching } = useQuery({
+    queryKey: ['partners'],
+    queryFn: async () => {
+      const dtos = await partnerService.listPartners();
+      return dtos.map(mapPartnerDTO);
+    },
+  });
   const { searchTerm, setSearchTerm, debouncedTerm } = useDebouncedSearch('', 300);
   const [selectedType, setSelectedType] = useState<PartnerType | null>(null);
   const [selectedStatus, setSelectedStatus] = useState<boolean | null>(null);
 
   const [modalOpen, setModalOpen] = useState<boolean>(false);
   const [editingPartner, setEditingPartner] = useState<Partner | null>(null);
+
+  const createMutation = useMutationWithToast({
+    mutationFn: (values: any) =>
+      partnerService.createPartner({
+        code: values.code,
+        partner_type: values.type,
+        name: values.name,
+        address: values.address || undefined,
+        contact_name: values.contactPerson || undefined,
+        contact_phone: values.phone || undefined,
+      }),
+    successTitle: 'Mitra Berhasil Ditambahkan',
+    successMessage: 'Mitra bisnis baru telah disimpan ke database master.',
+    invalidateKeys: [['partners']],
+  });
+
+  const updateMutation = useMutationWithToast({
+    mutationFn: (values: any) =>
+      partnerService.updatePartner(editingPartner!.id, {
+        code: values.code,
+        partner_type: values.type,
+        name: values.name,
+        address: values.address || undefined,
+        contact_name: values.contactPerson || undefined,
+        contact_phone: values.phone || undefined,
+        is_active: values.isActive,
+      }),
+    successTitle: 'Perubahan Mitra Berhasil Disimpan',
+    successMessage: 'Data mitra bisnis telah diperbarui di database master.',
+    invalidateKeys: [['partners']],
+  });
 
   const filteredPartners = useMemo(() => {
     return partners.filter((p) => {
@@ -72,32 +109,16 @@ export const PartnersPage: React.FC = () => {
     setModalOpen(true);
   };
 
-  const handleToggleStatus = (partner: Partner) => {
-    const nextStatus = !partner.isActive;
-    setPartners((prev) =>
-      prev.map((item) => (item.id === partner.id ? { ...item, isActive: nextStatus } : item))
-    );
-    notification.success({
-      message: `Status Mitra Berhasil Diubah`,
-      description: `Mitra ${partner.code} kini berstatus ${nextStatus ? 'Aktif' : 'Nonaktif'}.`,
-    });
-  };
-
   const handleSavePartner = (values: any) => {
     if (editingPartner) {
-      setPartners((prev) =>
-        prev.map((p) => (p.id === editingPartner.id ? { ...p, ...values } : p))
-      );
-      notification.success({ message: 'Data Mitra Berhasil Diperbarui' });
+      updateMutation.mutate(values, {
+        onSuccess: () => setModalOpen(false),
+      });
     } else {
-      const newPartner: Partner = {
-        id: Date.now(),
-        ...values,
-      };
-      setPartners((prev) => [...prev, newPartner]);
-      notification.success({ message: 'Mitra Bisnis Baru Berhasil Ditambahkan' });
+      createMutation.mutate(values, {
+        onSuccess: () => setModalOpen(false),
+      });
     }
-    setModalOpen(false);
   };
 
   const handleResetFilters = () => {
@@ -174,34 +195,16 @@ export const PartnersPage: React.FC = () => {
     {
       title: 'Aksi',
       key: 'action',
-      width: 110,
+      width: 60,
       render: (_: any, record: Partner) => (
-        <Space size={8}>
-          <Tooltip title="Edit Data Mitra">
-            <Button
-              type="text"
-              icon={<EditOutlined style={{ color: '#0052cc' }} />}
-              onClick={() => handleOpenEdit(record)}
-              data-testid={`btn-edit-partner-${record.id}`}
-            />
-          </Tooltip>
-          <Popconfirm
-            title={record.isActive ? 'Nonaktifkan Mitra?' : 'Aktifkan Mitra?'}
-            onConfirm={() => handleToggleStatus(record)}
-            okText="Ya"
-            cancelText="Batal"
-            data-testid={`popconfirm-toggle-partner-${record.id}`}
-          >
-            <Tooltip title={record.isActive ? 'Nonaktifkan' : 'Aktifkan'}>
-              <Button
-                type="text"
-                danger={record.isActive}
-                icon={record.isActive ? <StopOutlined /> : <CheckCircleOutlined style={{ color: '#52c41a' }} />}
-                data-testid={`btn-toggle-partner-${record.id}`}
-              />
-            </Tooltip>
-          </Popconfirm>
-        </Space>
+        <Tooltip title="Edit Data Mitra">
+          <Button
+            type="text"
+            icon={<EditOutlined style={{ color: '#0052cc' }} />}
+            onClick={() => handleOpenEdit(record)}
+            data-testid={`btn-edit-partner-${record.id}`}
+          />
+        </Tooltip>
       ),
     },
   ];
@@ -285,6 +288,7 @@ export const PartnersPage: React.FC = () => {
             rowKey="id"
             columns={columns}
             dataSource={filteredPartners}
+            loading={isLoading || isFetching}
             pagination={{ pageSize: 10, showTotal: (total) => `Total ${total} Mitra` }}
             data-testid="table-partners"
           />

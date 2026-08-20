@@ -12,80 +12,71 @@ import {
   Col,
   Tooltip,
 } from 'antd';
-import {
-  PlusOutlined,
-  SearchOutlined,
-  EyeOutlined,
-  EditOutlined,
-  ReloadOutlined,
-  FileTextOutlined,
-} from '@ant-design/icons';
+import { PlusOutlined, SearchOutlined, EyeOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
-import { DocStatus, GoodsReceiptNote, getDocStatusTagColor, MOCK_GRN_LIST } from '../../types/inbound';
-import { MOCK_PARTNERS } from '../../types/partner';
+import { useQuery } from '@tanstack/react-query';
+import { DocStatus, GoodsReceiptNote, getDocStatusTagColor } from '../../types/inbound';
+import { documentService } from '../../api/services/documents';
+import { mapDocumentToGoodsReceiptNote } from '../../api/mappers';
 import { useDebouncedSearch } from '../../hooks/useDebouncedSearch';
 
 const { Title, Paragraph, Text } = Typography;
 
 export const ReceiptsPage: React.FC = () => {
   const navigate = useNavigate();
-  const [grnList] = useState<GoodsReceiptNote[]>(MOCK_GRN_LIST);
+
+  // Live GRN list from the shared document store (doc_type = GRN).
+  const { data: receipts = [], isLoading } = useQuery({
+    queryKey: ['receipts'],
+    queryFn: async () => {
+      const dtos = await documentService.list({ doc_type: 'GRN' });
+      return dtos.map((dto) => mapDocumentToGoodsReceiptNote(dto));
+    },
+  });
+
   const { searchTerm, setSearchTerm, debouncedTerm } = useDebouncedSearch('', 300);
   const [selectedStatus, setSelectedStatus] = useState<DocStatus | null>(null);
-  const [selectedSupplierId, setSelectedSupplierId] = useState<number | null>(null);
 
-  const filteredGrnList = useMemo(() => {
-    return grnList.filter((item) => {
+  const filteredReceipts = useMemo(() => {
+    return receipts.filter((r) => {
       if (debouncedTerm) {
         const term = debouncedTerm.toLowerCase();
-        const matchDoc = item.documentNo.toLowerCase().includes(term);
-        const matchPo = item.poReference.toLowerCase().includes(term);
-        const matchSupplier = item.supplierName.toLowerCase().includes(term);
-        if (!matchDoc && !matchPo && !matchSupplier) return false;
+        const matchNo = r.documentNo.toLowerCase().includes(term);
+        const matchPo = r.poReference.toLowerCase().includes(term);
+        const matchSupplier = r.supplierName.toLowerCase().includes(term);
+        const matchItem = r.items.some((i) =>
+          i.sku.toLowerCase().includes(term) || i.itemName.toLowerCase().includes(term)
+        );
+        if (!matchNo && !matchPo && !matchSupplier && !matchItem) return false;
       }
 
-      if (selectedStatus !== null && item.status !== selectedStatus) {
-        return false;
-      }
-
-      if (selectedSupplierId !== null && item.supplierId !== selectedSupplierId) {
+      if (selectedStatus !== null && r.status !== selectedStatus) {
         return false;
       }
 
       return true;
     });
-  }, [grnList, debouncedTerm, selectedStatus, selectedSupplierId]);
+  }, [receipts, debouncedTerm, selectedStatus]);
 
   const handleResetFilters = () => {
     setSearchTerm('');
     setSelectedStatus(null);
-    setSelectedSupplierId(null);
   };
 
   const columns = [
     {
-      title: 'No. Dokumen GRN',
+      title: 'No. Dokumen',
       dataIndex: 'documentNo',
       key: 'documentNo',
-      render: (docNo: string, record: GoodsReceiptNote) => (
-        <Space>
-          <FileTextOutlined style={{ color: '#0052cc' }} />
-          <Button
-            type="link"
-            style={{ padding: 0, fontWeight: 600 }}
-            onClick={() => navigate(`/inbound/receipts/${record.id}`)}
-            data-testid={`link-grn-${record.id}`}
-          >
-            {docNo}
-          </Button>
-        </Space>
-      ),
+      width: 190,
+      render: (no: string) => <Text strong style={{ color: '#0052cc' }}>{no}</Text>,
     },
     {
-      title: 'Ref. PO',
+      title: 'Referensi PO',
       dataIndex: 'poReference',
       key: 'poReference',
-      render: (po: string) => <Text code>{po}</Text>,
+      width: 140,
+      render: (ref: string) => (ref ? <Text>{ref}</Text> : <Text type="secondary">-</Text>),
     },
     {
       title: 'Pemasok (Supplier)',
@@ -94,34 +85,43 @@ export const ReceiptsPage: React.FC = () => {
       render: (name: string) => <Text strong>{name}</Text>,
     },
     {
+      title: 'Gudang Tujuan',
+      dataIndex: 'warehouseName',
+      key: 'warehouseName',
+      width: 180,
+    },
+    {
       title: 'Tgl Penerimaan',
       dataIndex: 'receiptDate',
       key: 'receiptDate',
-      width: 140,
+      width: 130,
     },
     {
-      title: 'Jumlah Item',
-      key: 'totalItems',
-      width: 110,
-      render: (_: any, record: GoodsReceiptNote) => `${record.items.length} Line SKU`,
+      title: 'Total SKU Line',
+      key: 'itemsCount',
+      width: 120,
+      render: (_: any, record: GoodsReceiptNote) => {
+        const count = record.items.length > 0 ? record.items.length : (record.lineCount ?? 0);
+        return <Tag color="blue">{count} Barang</Tag>;
+      },
     },
     {
-      title: 'Status Dokumen',
+      title: 'Status',
       dataIndex: 'status',
       key: 'status',
-      width: 210,
+      width: 160,
       render: (status: DocStatus) => {
-        const { color, label } = getDocStatusTagColor(status);
-        return <Tag color={color}>{label}</Tag>;
+        const tag = getDocStatusTagColor(status);
+        return <Tag color={tag.color}>{tag.label}</Tag>;
       },
     },
     {
       title: 'Aksi',
       key: 'action',
-      width: 120,
+      width: 90,
       render: (_: any, record: GoodsReceiptNote) => (
         <Space size={4}>
-          <Tooltip title="Lihat Rincian Detail Dokumen GRN">
+          <Tooltip title="Lihat Detail Penerimaan">
             <Button
               type="text"
               icon={<EyeOutlined style={{ color: '#0052cc' }} />}
@@ -129,17 +129,6 @@ export const ReceiptsPage: React.FC = () => {
               data-testid={`btn-view-grn-${record.id}`}
             />
           </Tooltip>
-
-          {record.status === 'draft' && (
-            <Tooltip title="Edit Draft Dokumen">
-              <Button
-                type="text"
-                icon={<EditOutlined style={{ color: '#fa8c16' }} />}
-                onClick={() => navigate(`/inbound/receipts/${record.id}/edit`)}
-                data-testid={`btn-edit-grn-${record.id}`}
-              />
-            </Tooltip>
-          )}
         </Space>
       ),
     },
@@ -154,7 +143,7 @@ export const ReceiptsPage: React.FC = () => {
               Dokumen Penerimaan Barang (Goods Receipt Notes)
             </Title>
             <Paragraph type="secondary" style={{ margin: 0 }}>
-              Daftar seluruh transaksi penerimaan fisik barang (Inbound GRN), inspeksi QC, dan penempatan lokasi storage.
+              Daftar seluruh transaksi penerimaan fisik barang (Inbound GRN).
             </Paragraph>
           </Col>
           <Col>
@@ -171,9 +160,9 @@ export const ReceiptsPage: React.FC = () => {
 
         <Card variant="borderless">
           <Row gutter={[16, 16]} align="middle" style={{ marginBottom: 16 }}>
-            <Col xs={24} md={9}>
+            <Col xs={24} md={14}>
               <Input
-                placeholder="Cari No. GRN, Ref PO, atau nama Pemasok..."
+                placeholder="Cari No. Dokumen, Referensi PO, Pemasok, atau Kode/Nama SKU..."
                 prefix={<SearchOutlined style={{ color: '#bfbfbf' }} />}
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
@@ -184,41 +173,26 @@ export const ReceiptsPage: React.FC = () => {
 
             <Col xs={12} md={6}>
               <Select
-                placeholder="Filter Status Dokumen"
+                placeholder="Filter Status"
                 value={selectedStatus}
                 onChange={(val) => setSelectedStatus(val)}
                 allowClear
                 style={{ width: '100%' }}
                 options={[
                   { value: 'draft', label: 'Draft' },
-                  { value: 'submitted', label: 'Diajukan (Submitted)' },
-                  { value: 'approved', label: 'Disetujui (Approved)' },
-                  { value: 'in_progress', label: 'Sedang Putaway (In Progress)' },
-                  { value: 'completed', label: 'Selesai (Completed)' },
-                  { value: 'cancelled', label: 'Dibatalkan (Cancelled)' },
+                  { value: 'submitted', label: 'Diajukan' },
+                  { value: 'approved', label: 'Disetujui' },
+                  { value: 'in_progress', label: 'Sedang Putaway' },
+                  { value: 'completed', label: 'Selesai' },
+                  { value: 'cancelled', label: 'Dibatalkan' },
                 ]}
                 data-testid="select-filter-status"
               />
             </Col>
 
-            <Col xs={12} md={6}>
-              <Select
-                placeholder="Filter Pemasok (Supplier)"
-                value={selectedSupplierId}
-                onChange={(val) => setSelectedSupplierId(val)}
-                allowClear
-                style={{ width: '100%' }}
-                options={MOCK_PARTNERS.filter((p) => p.type === 'supplier').map((s) => ({
-                  value: s.id,
-                  label: s.name,
-                }))}
-                data-testid="select-filter-supplier"
-              />
-            </Col>
-
-            <Col xs={12} md={3}>
+            <Col xs={12} md={4}>
               <Button icon={<ReloadOutlined />} onClick={handleResetFilters} style={{ width: '100%' }}>
-                Reset
+                Reset Filter
               </Button>
             </Col>
           </Row>
@@ -226,8 +200,9 @@ export const ReceiptsPage: React.FC = () => {
           <Table
             rowKey="id"
             columns={columns}
-            dataSource={filteredGrnList}
-            pagination={{ pageSize: 10, showTotal: (total) => `Total ${total} Dokumen GRN` }}
+            dataSource={filteredReceipts}
+            loading={isLoading}
+            pagination={{ pageSize: 10, showTotal: (total) => `Total ${total} Dokumen` }}
             data-testid="table-receipts"
           />
         </Card>

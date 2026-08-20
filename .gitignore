@@ -1,0 +1,4 @@
+/.claude
+frontend/node_modules
+frontend/dist
+backend/build

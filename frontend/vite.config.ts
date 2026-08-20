@@ -14,6 +14,15 @@ export default defineConfig({
   optimizeDeps: {
     include: ['@hookform/resolvers/zod'],
   },
+  server: {
+    proxy: {
+      // Proxy API calls to the Go backend (default :8080, override with VITE_BACKEND_URL)
+      '/api': {
+        target: process.env.VITE_BACKEND_URL || 'http://localhost:8080',
+        changeOrigin: true,
+      },
+    },
+  },
   test: {
     globals: true,
     environment: 'jsdom',

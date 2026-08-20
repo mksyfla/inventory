@@ -32,6 +32,17 @@ type DocAllocations struct {
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 }
 
+type DocAttachments struct {
+	ID            int64              `json:"id"`
+	DocumentID    int64              `json:"document_id"`
+	Category      string             `json:"category"`
+	FileName      string             `json:"file_name"`
+	FileSizeBytes int64              `json:"file_size_bytes"`
+	FileUrl       string             `json:"file_url"`
+	UploadedBy    int64              `json:"uploaded_by"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+}
+
 type DocCountLines struct {
 	ID         int64              `json:"id"`
 	DocumentID int64              `json:"document_id"`
@@ -79,25 +90,39 @@ type DocDocumentNumbers struct {
 }
 
 type DocDocuments struct {
-	ID              int64              `json:"id"`
-	PublicID        pgtype.UUID        `json:"public_id"`
-	DocNo           string             `json:"doc_no"`
-	DocType         interface{}        `json:"doc_type"`
-	DocDate         pgtype.Date        `json:"doc_date"`
-	Status          interface{}        `json:"status"`
-	WarehouseID     int64              `json:"warehouse_id"`
-	DestWarehouseID pgtype.Int8        `json:"dest_warehouse_id"`
-	PartnerID       pgtype.Int8        `json:"partner_id"`
-	RefDocID        pgtype.Int8        `json:"ref_doc_id"`
-	ReasonCode      pgtype.Text        `json:"reason_code"`
-	Notes           pgtype.Text        `json:"notes"`
-	IdempotencyKey  pgtype.Text        `json:"idempotency_key"`
-	CreatedAt       pgtype.Timestamptz `json:"created_at"`
-	CreatedBy       int64              `json:"created_by"`
-	SubmittedAt     pgtype.Timestamptz `json:"submitted_at"`
-	ApprovedAt      pgtype.Timestamptz `json:"approved_at"`
-	ApprovedBy      pgtype.Int8        `json:"approved_by"`
-	CompletedAt     pgtype.Timestamptz `json:"completed_at"`
+	ID                int64              `json:"id"`
+	PublicID          pgtype.UUID        `json:"public_id"`
+	DocNo             string             `json:"doc_no"`
+	DocType           interface{}        `json:"doc_type"`
+	DocDate           pgtype.Date        `json:"doc_date"`
+	Status            interface{}        `json:"status"`
+	WarehouseID       int64              `json:"warehouse_id"`
+	DestWarehouseID   pgtype.Int8        `json:"dest_warehouse_id"`
+	PartnerID         pgtype.Int8        `json:"partner_id"`
+	RefDocID          pgtype.Int8        `json:"ref_doc_id"`
+	ReasonCode        pgtype.Text        `json:"reason_code"`
+	Notes             pgtype.Text        `json:"notes"`
+	IdempotencyKey    pgtype.Text        `json:"idempotency_key"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	CreatedBy         int64              `json:"created_by"`
+	SubmittedAt       pgtype.Timestamptz `json:"submitted_at"`
+	ApprovedAt        pgtype.Timestamptz `json:"approved_at"`
+	ApprovedBy        pgtype.Int8        `json:"approved_by"`
+	CompletedAt       pgtype.Timestamptz `json:"completed_at"`
+	ManagerApprovedBy pgtype.Int8        `json:"manager_approved_by"`
+	ManagerApprovedAt pgtype.Timestamptz `json:"manager_approved_at"`
+}
+
+type DocTransferReceipts struct {
+	ID          int64              `json:"id"`
+	DocumentID  int64              `json:"document_id"`
+	LineID      int64              `json:"line_id"`
+	QtySent     pgtype.Numeric     `json:"qty_sent"`
+	QtyReceived pgtype.Numeric     `json:"qty_received"`
+	Variance    pgtype.Numeric     `json:"variance"`
+	ReceivedBy  int64              `json:"received_by"`
+	ReceivedAt  pgtype.Timestamptz `json:"received_at"`
+	Notes       pgtype.Text        `json:"notes"`
 }
 
 type InvStockBalances struct {
@@ -122,7 +147,7 @@ type InvStockMovements struct {
 	Qty          pgtype.Numeric     `json:"qty"`
 	QtyAfter     pgtype.Numeric     `json:"qty_after"`
 	UnitCost     pgtype.Numeric     `json:"unit_cost"`
-	DocLineID    int64              `json:"doc_line_id"`
+	DocLineID    pgtype.Int8        `json:"doc_line_id"`
 	DocNo        string             `json:"doc_no"`
 	CreatedBy    int64              `json:"created_by"`
 }
@@ -138,7 +163,7 @@ type InvStockMovementsDefault struct {
 	Qty          pgtype.Numeric     `json:"qty"`
 	QtyAfter     pgtype.Numeric     `json:"qty_after"`
 	UnitCost     pgtype.Numeric     `json:"unit_cost"`
-	DocLineID    int64              `json:"doc_line_id"`
+	DocLineID    pgtype.Int8        `json:"doc_line_id"`
 	DocNo        string             `json:"doc_no"`
 	CreatedBy    int64              `json:"created_by"`
 }
@@ -231,9 +256,17 @@ type SecRolePermissions struct {
 }
 
 type SecRoles struct {
-	ID   int64       `json:"id"`
-	Code pgtype.Text `json:"code"`
-	Name pgtype.Text `json:"name"`
+	ID          int64       `json:"id"`
+	Code        pgtype.Text `json:"code"`
+	Name        pgtype.Text `json:"name"`
+	Description pgtype.Text `json:"description"`
+}
+
+type SecSettings struct {
+	Key       string             `json:"key"`
+	Value     []byte             `json:"value"`
+	UpdatedBy pgtype.Int8        `json:"updated_by"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
 }
 
 type SecUserRoles struct {
@@ -251,4 +284,5 @@ type SecUsers struct {
 	IsActive     bool               `json:"is_active"`
 	MfaSecret    pgtype.Text        `json:"mfa_secret"`
 	LastLoginAt  pgtype.Timestamptz `json:"last_login_at"`
+	Phone        pgtype.Text        `json:"phone"`
 }

@@ -13,11 +13,17 @@ import (
 	httpDelivery "inventory/internal/delivery/http"
 	"inventory/internal/pkg/auth"
 	"inventory/internal/pkg/logger"
+	"inventory/internal/pkg/metrics"
 	redisclient "inventory/internal/pkg/redis"
 	"inventory/internal/repository/postgres"
+	adminuc "inventory/internal/usecase/admin"
 	inbounduc "inventory/internal/usecase/inbound"
 	itemuc "inventory/internal/usecase/item"
+	outbounduc "inventory/internal/usecase/outbound"
 	stockuc "inventory/internal/usecase/stock"
+	countinguc "inventory/internal/usecase/counting"
+	transferuc "inventory/internal/usecase/transfer"
+	queryuc "inventory/internal/usecase/query"
 
 	"inventory/internal/pkg/docnum"
 
@@ -64,6 +70,41 @@ func main() {
 	}
 
 	queries := postgres.New(pool)
+
+	// 4b. Observability (FSD 10.5): Prometheus metrics wired to the live pool
+	// and the asynq queues, so /metrics always reflects runtime state.
+	metricsSvc := metrics.New()
+	metricsSvc.RegisterDBPool(func() metrics.DBPoolStats {
+		s := pool.Stat()
+		return metrics.DBPoolStats{
+			MaxConns:      s.MaxConns(),
+			TotalConns:    s.TotalConns(),
+			IdleConns:     s.IdleConns(),
+			AcquiredConns: s.AcquiredConns(),
+		}
+	})
+	queueInspector := asynq.NewInspector(asynq.RedisClientOpt{Addr: cfg.RedisAddr})
+	metricsSvc.RegisterQueueDepth(func() []metrics.QueueDepthStat {
+		queues, err := queueInspector.Queues()
+		if err != nil {
+			log.Warn("failed to list asynq queues", slog.Any("error", err))
+			return nil
+		}
+		stats := make([]metrics.QueueDepthStat, 0, len(queues))
+		for _, q := range queues {
+			info, err := queueInspector.GetQueueInfo(q)
+			if err != nil {
+				continue
+			}
+			stats = append(stats, metrics.QueueDepthStat{
+				Queue:    q,
+				Pending:  int64(info.Pending),
+				Active:   int64(info.Active),
+				Archived: int64(info.Archived),
+			})
+		}
+		return stats
+	})
 
 	// 5. Wire authentication user lookups (Fase 2)
 	// Login looks users up by username; the refresh flow looks them up by numeric user ID
@@ -112,8 +153,20 @@ func main() {
 	}
 
 	// 6. Wire user registration (Fase 2.1)
+	// New accounts are auto-assigned the seeded `requester` role bound to the
+	// `WH01` warehouse, so a freshly registered user can immediately log in and
+	// create requests. Runs in one transaction: if the role/warehouse lookup or
+	// assignment fails, the user row is rolled back (no orphan account).
 	createUser := func(ctx context.Context, username, email, fullName, passwordHash string) (int64, error) {
-		row, err := queries.CreateUser(ctx, postgres.CreateUserParams{
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			return 0, err
+		}
+		defer tx.Rollback(ctx) // no-op after Commit
+
+		txQueries := queries.WithTx(tx)
+
+		row, err := txQueries.CreateUser(ctx, postgres.CreateUserParams{
 			Username:     username,
 			Email:        pgtype.Text{String: email, Valid: true},
 			FullName:     fullName,
@@ -121,6 +174,26 @@ func main() {
 			IsActive:     true,
 		})
 		if err != nil {
+			return 0, err
+		}
+
+		role, err := txQueries.GetRoleByCode(ctx, pgtype.Text{String: "requester", Valid: true})
+		if err != nil {
+			return 0, fmt.Errorf("assign requester role: %w", err)
+		}
+		wh, err := txQueries.GetWarehouseByCode(ctx, "WH01")
+		if err != nil {
+			return 0, fmt.Errorf("assign WH01 warehouse: %w", err)
+		}
+		if _, err := txQueries.AssignUserRole(ctx, postgres.AssignUserRoleParams{
+			UserID:      row.ID,
+			RoleID:      role.ID,
+			WarehouseID: wh.ID,
+		}); err != nil {
+			return 0, err
+		}
+
+		if err := tx.Commit(ctx); err != nil {
 			return 0, err
 		}
 		return row.ID, nil
@@ -185,23 +258,88 @@ func main() {
 		docnum.NewGenerator(docRepo),
 	)
 
+	// 7c. Outbound module (Fase 7): DO/REQ + FEFO/FIFO allocation
+	outboundLookup := postgres.NewOutboundLookup(queries)
+	outboundUsecase := outbounduc.NewOutboundUsecase(
+		docRepo,
+		outboundLookup,
+		outboundLookup,
+		outboundLookup,
+		outboundLookup,
+		postgres.NewPostgresStockRepository(pool),
+		txRunner,
+		stockUsecase,
+		docnum.NewGenerator(docRepo),
+	)
+
+	// 7d. Transfer module (Fase 8.1 / M5): mutasi antar gudang
+	transferLookup := postgres.NewTransferLookup(queries)
+	transferUsecase := transferuc.NewTransferUsecase(
+		docRepo,
+		transferLookup,
+		transferLookup,
+		transferLookup,
+		transferLookup,
+		stockUsecase,
+		txRunner,
+		docnum.NewGenerator(docRepo),
+		transferLookup,
+	)
+
+	// 7e. Stock opname module (Fase 8.2 - 8.5 / M6)
+	countingLookup := postgres.NewCountingLookup(queries)
+	countingUsecase := countinguc.NewCountingUsecase(
+		docRepo,
+		countingLookup,
+		countingLookup,
+		countingLookup,
+		countingLookup,
+		stockUsecase,
+		txRunner,
+		docnum.NewGenerator(docRepo),
+	)
+
+	// 7f. Shared read module (Fase 10.4): documents, stock, admin, reports,
+	// dashboard — read-only, one repository over the sqlc queries.
+	queryUsecase := queryuc.NewReadUsecase(postgres.NewQueryRepository(queries))
+
+	// 7g. Admin write module (Fase 10.x): RBAC CRUD + system settings. The
+	// audit writer is the same lookup used by the transfer module (its
+	// InsertAuditLog method satisfies admin.AuditLogWriter structurally).
+	adminUsecase := adminuc.NewAdminUsecase(
+		postgres.NewPostgresAdminRepository(pool),
+		txRunner,
+		transferLookup,
+	)
+
 	// 8. Init asynq client for async jobs (Fase 3.4)
 	asynqClient := asynq.NewClient(asynq.RedisClientOpt{Addr: cfg.RedisAddr})
 	defer asynqClient.Close()
 
 	// 9. Init router with all dependencies
 	router := httpDelivery.NewRouter(httpDelivery.RouterConfig{
-		JWTSecret:      cfg.JWTSecret,
-		AppEnv:         cfg.AppEnv,
-		Enforcer:       enforcer,
-		Store:          store,
-		LookupUser:     lookupUserByUsername,
-		LookupUserByID: lookupUserByID,
-		CreateUser:     createUser,
-		ItemUsecase:    itemUsecase,
-		StockUsecase:   stockUsecase,
-		ReceiptUsecase: receiptUsecase,
-		AsynqClient:    asynqClient,
+		JWTSecret:       cfg.JWTSecret,
+		AppEnv:          cfg.AppEnv,
+		Enforcer:        enforcer,
+		Store:           store,
+		LookupUser:      lookupUserByUsername,
+		LookupUserByID:  lookupUserByID,
+		CreateUser:      createUser,
+		ItemUsecase:     itemUsecase,
+		StockUsecase:    stockUsecase,
+		ReceiptUsecase:  receiptUsecase,
+		OutboundUsecase: outboundUsecase,
+		TransferUsecase: transferUsecase,
+		CountingUsecase: countingUsecase,
+		QueryUsecase:    queryUsecase,
+		AdminUsecase:    adminUsecase,
+		AsynqClient:     asynqClient,
+		Metrics:         metricsSvc,
+		HealthCheckers: []httpDelivery.HealthChecker{
+			{Name: "postgres", Check: pool.Ping},
+			{Name: "redis", Check: store.Ping},
+		},
+		Logger: log,
 	})
 
 	// 10. Start HTTP Server with hardened timeouts and header limits

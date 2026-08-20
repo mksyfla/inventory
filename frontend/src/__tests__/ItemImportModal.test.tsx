@@ -1,9 +1,28 @@
 import { render, screen, act, fireEvent, waitFor } from '@testing-library/react';
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ItemImportModal } from '../components/master/ItemImportModal';
+import { itemService } from '../api/services/items';
+
+vi.mock('../api/services/items', () => ({
+  itemService: {
+    listItems: vi.fn(),
+    getItem: vi.fn(),
+    createItem: vi.fn(),
+    updateItem: vi.fn(),
+    softDeleteItem: vi.fn(),
+    importItems: vi.fn(),
+  },
+}));
 
 describe('ItemImportModal Component', () => {
   const handleClose = vi.fn();
+
+  beforeEach(() => {
+    (itemService.importItems as ReturnType<typeof vi.fn>).mockResolvedValue({
+      job_id: 'import-sku-123',
+      status: 'queued',
+    });
+  });
 
   it('renders import modal with template download button and drag-and-drop area', async () => {
     await act(async () => {
@@ -16,15 +35,14 @@ describe('ItemImportModal Component', () => {
     expect(screen.getByTestId('btn-process-import')).toBeDisabled();
   });
 
-  it('enables process import button when a valid spreadsheet file is selected and displays row errors log', async () => {
+  it('enables process import button and calls the import API with the selected file', async () => {
     await act(async () => {
       render(<ItemImportModal open={true} onClose={handleClose} />);
     });
 
-    const file = new File(['SKU,Nama\nSKU-001,Test'], 'master_items.csv', { type: 'text/csv' });
+    const file = new File(['sku,name,base_uom\nSKU-001,Tinta,BOX'], 'master_items.csv', { type: 'text/csv' });
     const draggerArea = screen.getByTestId('upload-dragger-area');
 
-    // Query input or trigger drop event
     const uploaderInput = document.querySelector('input[type="file"]');
     if (uploaderInput) {
       await act(async () => {
@@ -35,13 +53,7 @@ describe('ItemImportModal Component', () => {
         fireEvent.drop(draggerArea, {
           dataTransfer: {
             files: [file],
-            items: [
-              {
-                kind: 'file',
-                type: 'text/csv',
-                getAsFile: () => file,
-              },
-            ],
+            items: [{ kind: 'file', type: 'text/csv', getAsFile: () => file }],
             types: ['Files'],
           },
         });
@@ -49,17 +61,14 @@ describe('ItemImportModal Component', () => {
     }
 
     const processBtn = screen.getByTestId('btn-process-import');
-    // Click process button to trigger import simulation
     await act(async () => {
       fireEvent.click(processBtn);
     });
 
-    // Wait for step 2 (Laporan Hasil) with error table
     await waitFor(
       () => {
-        expect(screen.getByTestId('table-import-errors')).toBeInTheDocument();
-        expect(screen.getByText('Baris 4')).toBeInTheDocument();
-        expect(screen.getByText('Kode SKU sudah terdaftar di database master barang (Duplikat).')).toBeInTheDocument();
+        expect(itemService.importItems).toHaveBeenCalled();
+        expect(screen.getByText(/Job ID: import-sku-123/i)).toBeInTheDocument();
       },
       { timeout: 3000 }
     );

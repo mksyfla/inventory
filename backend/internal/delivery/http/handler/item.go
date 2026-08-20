@@ -292,6 +292,47 @@ func (h *ItemHandler) ListPartners(c echo.Context) error {
 	return response.Success(c, http.StatusOK, partners, nil)
 }
 
+// UpdatePartner handles PATCH /api/v1/partners/:id
+func (h *ItemHandler) UpdatePartner(c echo.Context) error {
+	id, ok := pathIDParam(c, "id")
+	if !ok {
+		return nil
+	}
+
+	var req dto.UpdatePartnerRequest
+	if !bindAndValidate(c, &req) {
+		return nil
+	}
+
+	in := itemuc.UpdatePartnerInput{
+		ID:           id,
+		Code:         req.Code,
+		PartnerType:  req.PartnerType,
+		Name:         req.Name,
+		Address:      req.Address,
+		ContactName:  req.ContactName,
+		ContactPhone: req.ContactPhone,
+		IsActive:     req.IsActive,
+	}
+
+	partner, err := h.uc.UpdatePartner(c.Request().Context(), in)
+	if err != nil {
+		return writeUsecaseError(c, err, "Failed to update partner")
+	}
+	return response.Success(c, http.StatusOK, partner, nil)
+}
+
+// ─── CATEGORY ENDPOINTS ─────────────────────────────────────────────────────
+
+// ListCategories handles GET /api/v1/categories
+func (h *ItemHandler) ListCategories(c echo.Context) error {
+	categories, err := h.uc.ListCategories(c.Request().Context())
+	if err != nil {
+		return writeUsecaseError(c, err, "Failed to list categories")
+	}
+	return response.Success(c, http.StatusOK, categories, nil)
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 func userIDFromCtx(c echo.Context) int64 {

@@ -12,6 +12,7 @@ import {
   Col,
   Popconfirm,
   notification,
+  Empty,
 } from 'antd';
 import {
   InboxOutlined,
@@ -21,7 +22,10 @@ import {
   FileImageOutlined,
   PaperClipOutlined,
 } from '@ant-design/icons';
-import { AttachmentType, ReceiptAttachment, MOCK_ATTACHMENTS } from '../../types/inbound';
+import { useQuery } from '@tanstack/react-query';
+import { receiptService } from '../../api/services/receipts';
+import { useMutationWithToast } from '../../hooks/useMutationWithToast';
+import { AddAttachmentRequestDTO, AttachmentCategory, AttachmentDTO } from '../../api/dto';
 
 const { Text } = Typography;
 
@@ -30,15 +34,74 @@ export interface ReceiptAttachmentTabProps {
   isLocked?: boolean;
 }
 
+const CATEGORY_LABELS: Record<AttachmentCategory, string> = {
+  delivery_note: 'Surat Jalan (Delivery Note / DO Supplier)',
+  qc_inspection: 'BAP Hasil Inspeksi QC Lab',
+  truck_photo: 'Foto Fisik Pembongkaran / Kondisi Truk',
+  other: 'Dokumen Pendukung Lainnya',
+};
+
+// The backend stores a metadata row per lampiran and expects the binary to be
+// uploaded separately; we keep a deterministic file_url so the row is usable
+// even before a file store/CDN is wired up.
+const attachmentFileUrl = (receiptId: number, fileName: string) =>
+  `/uploads/grn/${receiptId}/${encodeURIComponent(fileName)}`;
+
+const getAttachmentTypeTag = (type: AttachmentCategory) => {
+  switch (type) {
+    case 'delivery_note':
+      return <Tag color="blue">Surat Jalan (Delivery Note)</Tag>;
+    case 'qc_inspection':
+      return <Tag color="green">BAP Inspeksi QC Lab</Tag>;
+    case 'truck_photo':
+      return <Tag color="purple">Foto Fisik Pembongkaran Truk</Tag>;
+    case 'other':
+    default:
+      return <Tag color="default">Dokumen Lainnya</Tag>;
+  }
+};
+
+const getFileIcon = (fileName: string) => {
+  if (fileName.toLowerCase().endsWith('.pdf')) {
+    return <FilePdfOutlined style={{ color: '#ff4d4f', fontSize: 16 }} />;
+  }
+  return <FileImageOutlined style={{ color: '#52c41a', fontSize: 16 }} />;
+};
+
+const formatSize = (bytes: number) => {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${bytes} B`;
+};
+
 export const ReceiptAttachmentTab: React.FC<ReceiptAttachmentTabProps> = ({
   receiptId,
   isLocked = false,
 }) => {
-  const [attachments, setAttachments] = useState<ReceiptAttachment[]>(() =>
-    MOCK_ATTACHMENTS.filter((a) => a.receiptId === receiptId)
-  );
+  const [selectedCategory, setSelectedCategory] = useState<AttachmentCategory>('delivery_note');
 
-  const [selectedCategory, setSelectedCategory] = useState<AttachmentType>('delivery_note');
+  const attachmentKey = ['receipt-attachments', receiptId] as const;
+
+  const { data: attachments = [], isLoading } = useQuery<AttachmentDTO[]>({
+    queryKey: attachmentKey,
+    queryFn: () => receiptService.listAttachments(receiptId),
+    enabled: receiptId > 0,
+  });
+
+  const addMutation = useMutationWithToast({
+    mutationFn: (payload: AddAttachmentRequestDTO) =>
+      receiptService.createAttachment(receiptId, payload),
+    successTitle: 'Lampiran Berhasil Diunggah',
+    successMessage: 'Lampiran telah dicatat pada dokumen GRN.',
+    invalidateKeys: [attachmentKey],
+  });
+
+  const deleteMutation = useMutationWithToast({
+    mutationFn: (attachmentId: number) => receiptService.deleteAttachment(receiptId, attachmentId),
+    successTitle: 'Lampiran Berhasil Dihapus',
+    successMessage: 'Lampiran telah dihapus dari dokumen GRN.',
+    invalidateKeys: [attachmentKey],
+  });
 
   const handleBeforeUpload = (file: File) => {
     // Validate file type
@@ -64,65 +127,33 @@ export const ReceiptAttachmentTab: React.FC<ReceiptAttachmentTabProps> = ({
       return false;
     }
 
-    // Simulate upload success
-    const newAttachment: ReceiptAttachment = {
-      id: Date.now(),
-      receiptId,
-      fileName: file.name,
-      fileType: selectedCategory,
-      fileSizeKb: Math.round(file.size / 1024),
-      fileUrl: '#',
-      uploadedByName: 'Budi Santoso (Admin Gudang)',
-      uploadedAt: new Date().toISOString(),
-    };
-
-    setAttachments((prev) => [newAttachment, ...prev]);
-    notification.success({
-      message: 'Lampiran Berhasil Diunggah',
-      description: `Berkas ${file.name} telah dilampirkan pada dokumen GRN.`,
+    // Persist a metadata row to the backend (file_url is a deterministic path).
+    addMutation.mutate({
+      category: selectedCategory,
+      file_name: file.name,
+      file_size_bytes: file.size,
+      file_url: attachmentFileUrl(receiptId, file.name),
     });
 
     return false; // Prevent auto upload behavior
   };
 
   const handleDeleteAttachment = (id: number) => {
-    setAttachments((prev) => prev.filter((item) => item.id !== id));
-    notification.success({ message: 'Lampiran Berhasil Dihapus' });
-  };
-
-  const getAttachmentTypeTag = (type: AttachmentType) => {
-    switch (type) {
-      case 'delivery_note':
-        return <Tag color="blue">Surat Jalan (Delivery Note)</Tag>;
-      case 'qc_inspection':
-        return <Tag color="green">BAP Inspeksi QC Lab</Tag>;
-      case 'truck_photo':
-        return <Tag color="purple">Foto Fisik Pembongkaran Truk</Tag>;
-      case 'other':
-      default:
-        return <Tag color="default">Dokumen Lainnya</Tag>;
-    }
-  };
-
-  const getFileIcon = (fileName: string) => {
-    if (fileName.toLowerCase().endsWith('.pdf')) {
-      return <FilePdfOutlined style={{ color: '#ff4d4f', fontSize: 16 }} />;
-    }
-    return <FileImageOutlined style={{ color: '#52c41a', fontSize: 16 }} />;
+    deleteMutation.mutate(id);
   };
 
   const columns = [
     {
       title: 'Tipe Dokumen Lampiran',
-      dataIndex: 'fileType',
-      key: 'fileType',
+      dataIndex: 'category',
+      key: 'category',
       width: 220,
-      render: (type: AttachmentType) => getAttachmentTypeTag(type),
+      render: (type: AttachmentCategory) => getAttachmentTypeTag(type),
     },
     {
       title: 'Nama Berkas Fizik',
-      dataIndex: 'fileName',
-      key: 'fileName',
+      dataIndex: 'file_name',
+      key: 'file_name',
       render: (name: string) => (
         <Space>
           {getFileIcon(name)}
@@ -132,21 +163,20 @@ export const ReceiptAttachmentTab: React.FC<ReceiptAttachmentTabProps> = ({
     },
     {
       title: 'Ukuran',
-      dataIndex: 'fileSizeKb',
-      key: 'fileSizeKb',
+      dataIndex: 'file_size_bytes',
+      key: 'file_size_bytes',
       width: 110,
-      render: (kb: number) =>
-        kb > 1024 ? `${(kb / 1024).toFixed(2)} MB` : `${kb} KB`,
+      render: (bytes: number) => formatSize(bytes),
     },
     {
       title: 'Pengunggah & Waktu',
       key: 'uploaded',
       width: 220,
-      render: (_: any, record: ReceiptAttachment) => (
+      render: (_: unknown, record: AttachmentDTO) => (
         <div>
-          <Text style={{ fontSize: 12, display: 'block' }}>{record.uploadedByName}</Text>
+          <Text style={{ fontSize: 12, display: 'block' }}>Pengguna #{record.uploaded_by}</Text>
           <Text type="secondary" style={{ fontSize: 11 }}>
-            {new Date(record.uploadedAt).toLocaleString('id-ID')}
+            {new Date(record.created_at).toLocaleString('id-ID')}
           </Text>
         </div>
       ),
@@ -155,13 +185,13 @@ export const ReceiptAttachmentTab: React.FC<ReceiptAttachmentTabProps> = ({
       title: 'Aksi',
       key: 'action',
       width: 100,
-      render: (_: any, record: ReceiptAttachment) => (
+      render: (_: unknown, record: AttachmentDTO) => (
         <Space size={4}>
           <Button
             type="text"
             icon={<DownloadOutlined style={{ color: '#0052cc' }} />}
             onClick={() => {
-              notification.info({ message: `Mengunduh berkas: ${record.fileName}` });
+              notification.info({ message: `Mengunduh berkas: ${record.file_name}` });
             }}
             data-testid={`btn-download-att-${record.id}`}
           />
@@ -177,6 +207,7 @@ export const ReceiptAttachmentTab: React.FC<ReceiptAttachmentTabProps> = ({
                 type="text"
                 danger
                 icon={<DeleteOutlined />}
+                loading={deleteMutation.isPending && deleteMutation.variables === record.id}
                 data-testid={`btn-delete-att-${record.id}`}
               />
             </Popconfirm>
@@ -201,12 +232,10 @@ export const ReceiptAttachmentTab: React.FC<ReceiptAttachmentTabProps> = ({
                   value={selectedCategory}
                   onChange={(val) => setSelectedCategory(val)}
                   style={{ width: '100%' }}
-                  options={[
-                    { value: 'delivery_note', label: 'Surat Jalan (Delivery Note / DO Supplier)' },
-                    { value: 'qc_inspection', label: 'BAP Hasil Inspeksi QC Lab' },
-                    { value: 'truck_photo', label: 'Foto Fisik Pembongkaran / Kondisi Truk' },
-                    { value: 'other', label: 'Dokumen Pendukung Lainnya' },
-                  ]}
+                  options={(Object.keys(CATEGORY_LABELS) as AttachmentCategory[]).map((value) => ({
+                    value,
+                    label: CATEGORY_LABELS[value],
+                  }))}
                   data-testid="select-attachment-category"
                 />
               </Col>
@@ -243,7 +272,9 @@ export const ReceiptAttachmentTab: React.FC<ReceiptAttachmentTabProps> = ({
             rowKey="id"
             columns={columns}
             dataSource={attachments}
+            loading={isLoading}
             pagination={false}
+            locale={{ emptyText: <Empty description="Belum ada lampiran terunggah." /> }}
             data-testid="table-attachments"
           />
         </Card>

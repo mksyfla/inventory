@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 
+	"inventory/internal/pkg/logger"
+
 	"github.com/hibiken/asynq"
 )
 
@@ -26,7 +28,7 @@ func HandleImportSKUTask(ctx context.Context, t *asynq.Task) error {
 		return fmt.Errorf("worker: failed to unmarshal import payload: %w", err)
 	}
 
-	slog.Info("Processing SKU import job",
+	logger.Info(ctx, "Processing SKU import job",
 		slog.String("job_id", payload.JobID),
 		slog.String("filename", payload.Filename),
 	)
@@ -35,13 +37,6 @@ func HandleImportSKUTask(ctx context.Context, t *asynq.Task) error {
 	// validate against item schema, batch-insert into master.items,
 	// and record failed rows to an import_errors table.
 
-	slog.Info("SKU import job completed", slog.String("job_id", payload.JobID))
+	logger.Info(ctx, "SKU import job completed", slog.String("job_id", payload.JobID))
 	return nil
-}
-
-// NewServeMux wires all task handlers and returns a ready asynq.ServeMux.
-func NewServeMux() *asynq.ServeMux {
-	mux := asynq.NewServeMux()
-	mux.HandleFunc(TypeImportSKU, HandleImportSKUTask)
-	return mux
 }

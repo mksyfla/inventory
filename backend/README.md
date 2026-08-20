@@ -8,16 +8,16 @@ Spec docs: [PRD](PRD-Sistem-Inventori.md) · [FSD](FSD-Sistem-Inventori.md) · [
 
 ## 1. Stack
 
-| Layer | Technology |
-|---|---|
-| Language | Go 1.25+ |
-| HTTP | Echo v4.15 |
-| Database | PostgreSQL 16 (pgx/v5 + sqlc) |
-| Cache / rate limit / refresh tokens | Redis 8 |
-| Auth | JWT (15 min access + 7-day rotating refresh), Argon2id passwords |
-| RBAC | Casbin v2 — model `sub, dom(warehouse), obj, act`, policies loaded from DB |
-| Async jobs | hibiken/asynq (Redis) |
-| API docs | OpenAPI 3.1 + embedded Swagger UI (no CDN) |
+| Layer                               | Technology                                                                 |
+| ----------------------------------- | -------------------------------------------------------------------------- |
+| Language                            | Go 1.25+                                                                   |
+| HTTP                                | Echo v4.15                                                                 |
+| Database                            | PostgreSQL 16 (pgx/v5 + sqlc)                                              |
+| Cache / rate limit / refresh tokens | Redis 8                                                                    |
+| Auth                                | JWT (15 min access + 7-day rotating refresh), Argon2id passwords           |
+| RBAC                                | Casbin v2 — model `sub, dom(warehouse), obj, act`, policies loaded from DB |
+| Async jobs                          | hibiken/asynq (Redis)                                                      |
+| API docs                            | OpenAPI 3.1 + embedded Swagger UI (no CDN)                                 |
 
 ## 2. Prerequisites
 
@@ -38,11 +38,11 @@ docker compose up -d
 
 `docker compose up` automatically runs the pending [golang-migrate](https://github.com/golang-migrate/migrate) migrations in the `migrate` container once Postgres is healthy (it exits with code 0 when done). To apply migrations manually instead, see §3.2.
 
-| Container | Port | Credentials |
-|---|---|---|
+| Container            | Port | Credentials                       |
+| -------------------- | ---- | --------------------------------- |
 | `inventory_postgres` | 5432 | `user` / `password` / db `dbname` |
-| `inventory_redis` | 6379 | — |
-| `inventory_migrate` | — | runs `db/migrations` on startup |
+| `inventory_redis`    | 6379 | —                                 |
+| `inventory_migrate`  | —    | runs `db/migrations` on startup   |
 
 ### 3.2 Run migrations (manual / CLI)
 
@@ -54,11 +54,11 @@ migrate -path db/migrations \
   up
 ```
 
-| Migration | Contents |
-|---|---|
-| `000001_init` | Schemas (`master`, `inv`, `doc`, `sec`, `aud`), all tables, enums, ledger append-only rules |
-| `000002_seed_rbac` | Warehouse `WH01`, 9 roles, 26 permissions, role→permission mapping, bootstrap admin |
-| `000003_seed_data` | Full demo dataset covering every possible value (see §6) |
+| Migration          | Contents                                                                                    |
+| ------------------ | ------------------------------------------------------------------------------------------- |
+| `000001_init`      | Schemas (`master`, `inv`, `doc`, `sec`, `aud`), all tables, enums, ledger append-only rules |
+| `000002_seed_rbac` | Warehouse `WH01`, 9 roles, 26 permissions, role→permission mapping, bootstrap admin         |
+| `000003_seed_data` | Full demo dataset covering every possible value (see §6)                                    |
 
 > If a migration failed mid-run and left the version dirty, fix the SQL then reset with:
 > `migrate -path db/migrations -database "postgres://user:password@localhost:5432/dbname?sslmode=disable" force <previous_version>`
@@ -84,14 +84,14 @@ Swagger UI: **<http://localhost:8080/swagger>** — raw spec also at `/api/v1/op
 
 ## 4. Configuration (environment variables)
 
-| Variable | Default | Description |
-|---|---|---|
-| `APP_ENV` | `development` | `development` \| `production` (production requires secure JWT secret; enables HSTS) |
-| `PORT` | `8080` | HTTP listen port |
-| `DB_CONN_STRING` | `host=localhost user=user password=password dbname=dbname sslmode=disable` | pgx connection string |
-| `DB_POOL_MAX` | `10` | Max DB pool connections |
-| `REDIS_ADDR` | `localhost:6379` | Redis address |
-| `JWT_SECRET` | `super-secret-key` (dev only) | **≥ 32 chars in production** (startup fails otherwise). A warning is logged when the default is used |
+| Variable         | Default                                                                    | Description                                                                                          |
+| ---------------- | -------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `APP_ENV`        | `development`                                                              | `development` \| `production` (production requires secure JWT secret; enables HSTS)                  |
+| `PORT`           | `8080`                                                                     | HTTP listen port                                                                                     |
+| `DB_CONN_STRING` | `host=localhost user=user password=password dbname=dbname sslmode=disable` | pgx connection string                                                                                |
+| `DB_POOL_MAX`    | `10`                                                                       | Max DB pool connections                                                                              |
+| `REDIS_ADDR`     | `localhost:6379`                                                           | Redis address                                                                                        |
+| `JWT_SECRET`     | `super-secret-key` (dev only)                                              | **≥ 32 chars in production** (startup fails otherwise). A warning is logged when the default is used |
 
 Example: `PORT=8081 JWT_SECRET="$(openssl rand -base64 32)" go run ./cmd/api`
 
@@ -102,14 +102,15 @@ Example: `PORT=8081 JWT_SECRET="$(openssl rand -base64 32)" go run ./cmd/api`
 ### 5.1 Auth flow
 
 1. **Login** — `POST /api/v1/auth/login` with `{"username","password"}`.
-   - Returns `access_token` (15 min) + `refresh_token` (7 days) in the body,
-   - **and** sets HttpOnly cookies `access_token` (`Path=/`) + `refresh_token` (`Path=/api/v1/auth`) for browser clients. Cookies are `Secure` when the request is TLS or behind `X-Forwarded-Proto: https`.
+    - Returns `access_token` (15 min) + `refresh_token` (7 days) in the body,
+    - **and** sets HttpOnly cookies `access_token` (`Path=/`) + `refresh_token` (`Path=/api/v1/auth`) for browser clients. Cookies are `Secure` when the request is TLS or behind `X-Forwarded-Proto: https`.
 2. **Authenticate requests** — send the Bearer header **or** the `access_token` cookie (middleware falls back to the cookie):
 
-   ```
-   Authorization: Bearer <access_token>
-   X-Warehouse-Id: WH01        ← REQUIRED on every protected request
-   ```
+    ```
+    Authorization: Bearer <access_token>
+    X-Warehouse-Id: WH01        ← REQUIRED on every protected request
+    ```
+
 3. **Refresh** — `POST /api/v1/auth/refresh` with the refresh token (body or cookie). Rotates the pair, revokes the old one in Redis.
 4. **Logout** — `POST /api/v1/auth/logout` revokes the refresh token and clears both cookies.
 
@@ -126,50 +127,50 @@ curl -b cookies.txt http://localhost:8080/api/v1/items \
 
 ### 5.2 Demo accounts (seeded)
 
-| Username | Password | Roles / warehouse scope |
-|---|---|---|
-| `admin` | `Admin@123456` | sysadmin @ WH01, WH02 |
-| `imanager` | `Simbar@123456` | inventory_manager @ WH01, WH02 |
-| `supervisor` | `Simbar@123456` | warehouse_supervisor @ WH01 |
-| `receiving` | `Simbar@123456` | receiving_staff @ WH01 |
-| `picker` | `Simbar@123456` | picker_packer @ WH01 |
-| `masterdata` | `Simbar@123456` | master_data_admin @ WH01 |
-| `courier` | `Simbar@123456` | courier @ WH01 |
-| `requester` | `Simbar@123456` | requester @ WH01 |
-| `auditor` | `Simbar@123456` | auditor @ WH01, WH02 |
+| Username     | Password        | Roles / warehouse scope        |
+| ------------ | --------------- | ------------------------------ |
+| `admin`      | `Admin@123456`  | sysadmin @ WH01, WH02          |
+| `imanager`   | `Simbar@123456` | inventory_manager @ WH01, WH02 |
+| `supervisor` | `Simbar@123456` | warehouse_supervisor @ WH01    |
+| `receiving`  | `Simbar@123456` | receiving_staff @ WH01         |
+| `picker`     | `Simbar@123456` | picker_packer @ WH01           |
+| `masterdata` | `Simbar@123456` | master_data_admin @ WH01       |
+| `courier`    | `Simbar@123456` | courier @ WH01                 |
+| `requester`  | `Simbar@123456` | requester @ WH01               |
+| `auditor`    | `Simbar@123456` | auditor @ WH01, WH02           |
 
-**Change these passwords before any non-dev deployment** (`go run ./cmd/hashpass -password "<new>"`, see §7.3). Newly registered users have **no roles** until an admin assigns them via `sec.user_roles`.
+**Change these passwords before any non-dev deployment** (`go run ./cmd/hashpass -password "<new>"`, see §7.3). Newly registered users are **automatically assigned the `requester` role bound to warehouse `WH01`** via `sec.user_roles`, so they can log in and create requests immediately; further roles are assigned by an admin.
 
 ### 5.3 Endpoints
 
 Public:
 
-| Method | Path | Notes |
-|---|---|---|
-| GET | `/api/v1/ping` | Health |
-| POST | `/api/v1/auth/login` | Rate limited 5 / 15 min per IP |
-| POST | `/api/v1/auth/register` | Rate limited 10 / 15 min per IP; password ≥ 12 chars |
-| POST | `/api/v1/auth/refresh` | Rotates refresh token |
-| POST | `/api/v1/auth/logout` | Revokes + clears cookies |
-| GET | `/api/v1/openapi.yaml` / `.json` | OpenAPI 3.1 spec |
-| GET | `/swagger` | Embedded Swagger UI |
+| Method | Path                             | Notes                                                |
+| ------ | -------------------------------- | ---------------------------------------------------- |
+| GET    | `/api/v1/ping`                   | Health                                               |
+| POST   | `/api/v1/auth/login`             | Rate limited 5 / 15 min per IP                       |
+| POST   | `/api/v1/auth/register`          | Rate limited 10 / 15 min per IP; password ≥ 12 chars |
+| POST   | `/api/v1/auth/refresh`           | Rotates refresh token                                |
+| POST   | `/api/v1/auth/logout`            | Revokes + clears cookies                             |
+| GET    | `/api/v1/openapi.yaml` / `.json` | OpenAPI 3.1 spec                                     |
+| GET    | `/swagger`                       | Embedded Swagger UI                                  |
 
 Protected (JWT + `X-Warehouse-Id` + RBAC + user rate limit 100/min):
 
-| Method | Path | Permission | Notes |
-|---|---|---|---|
-| GET | `/api/v1/items` | `item.read` | Search with `q`, `category_id`, pagination |
-| GET | `/api/v1/items/:id` | `item.read` | |
-| POST | `/api/v1/items` | `item.write` | Body limit 1 MB |
-| PUT | `/api/v1/items/:id` | `item.write` | |
-| DELETE | `/api/v1/items/:id` | `item.write` | Soft delete (`is_active=false`) |
-| POST | `/api/v1/items/import` | `item.import` | CSV/Excel, async via asynq, body limit 10 MB |
-| GET | `/api/v1/locations` | `location.read` | Filter by `warehouse_id` |
-| POST | `/api/v1/locations` | `location.write` | |
-| GET | `/api/v1/partners` | `partner.read` | |
-| GET | `/api/v1/partners/:id` | `partner.read` | |
-| POST | `/api/v1/partners` | `partner.write` | |
-| GET | `/api/v1/stock/movements` | `stock.read` | Keyset pagination; requires RFC3339 `start_time`/`end_time` |
+| Method | Path                      | Permission       | Notes                                                       |
+| ------ | ------------------------- | ---------------- | ----------------------------------------------------------- |
+| GET    | `/api/v1/items`           | `item.read`      | Search with `q`, `category_id`, pagination                  |
+| GET    | `/api/v1/items/:id`       | `item.read`      |                                                             |
+| POST   | `/api/v1/items`           | `item.write`     | Body limit 1 MB                                             |
+| PUT    | `/api/v1/items/:id`       | `item.write`     |                                                             |
+| DELETE | `/api/v1/items/:id`       | `item.write`     | Soft delete (`is_active=false`)                             |
+| POST   | `/api/v1/items/import`    | `item.import`    | CSV/Excel, async via asynq, body limit 10 MB                |
+| GET    | `/api/v1/locations`       | `location.read`  | Filter by `warehouse_id`                                    |
+| POST   | `/api/v1/locations`       | `location.write` |                                                             |
+| GET    | `/api/v1/partners`        | `partner.read`   |                                                             |
+| GET    | `/api/v1/partners/:id`    | `partner.read`   |                                                             |
+| POST   | `/api/v1/partners`        | `partner.write`  |                                                             |
+| GET    | `/api/v1/stock/movements` | `stock.read`     | Keyset pagination; requires RFC3339 `start_time`/`end_time` |
 
 The `X-Warehouse-Id` value must be a warehouse **code** (`WH01`, `WH02`, …) the user is assigned to — otherwise `403 ERR_FORBIDDEN` (FR-10.2).
 
@@ -272,6 +273,46 @@ db/migrations/           schema + seed migrations
 db/queries/              sqlc sources
 api/openapi.yaml         OpenAPI 3.1 contract (embedded via go:embed)
 ```
+
+### 7.6 Logging
+
+Structured logging uses `log/slog` (`internal/pkg/logger`). Four levels are used:
+
+| Level   | `slog` call         | When to use                                                                                                                                           |
+| ------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DEBUG` | `slog.DebugContext` | Verbose detail: health probes, per-step worker progress, troubleshooting only. Shown in `development`/`test`; filtered out in `production`/`staging`. |
+| `INFO`  | `slog.InfoContext`  | Normal successful operations: every successful request, user login, job completed.                                                                    |
+| `WARN`  | `slog.WarnContext`  | Recoverable problems: 4xx (rejected request), skipped invalid rows, expired session. Action recommended but not urgent.                               |
+| `ERROR` | `slog.ErrorContext` | Failures needing attention: 5xx, DB errors, unexpected handler errors, cron/job failures.                                                             |
+
+> `slog` names the warning level `Warn` (not `Warning`) — they are the same level.
+
+**Per-request access log.** The `AccessLog` middleware (`internal/delivery/http/middleware/access_log.go`) writes one line for every HTTP request, choosing the level from the response status:
+
+| Status                | Level   | `msg`              |
+| --------------------- | ------- | ------------------ |
+| ≥ 500                 | `ERROR` | `request failed`   |
+| 400–499               | `WARN`  | `request rejected` |
+| `/healthz`, `/readyz` | `DEBUG` | `health probe`     |
+| 2xx / 3xx             | `INFO`  | `request`          |
+
+Each line carries `method`, `path`, `status`, `duration_ms`, `bytes_out`, `remote_ip`, plus `request_id` and `user_id` (added automatically by `logger.ContextHandler` from the request context).
+
+**Output format** is selected in `logger.Init(env)`: JSON in `production`/`staging`, human-readable text in `development`/`test`.
+
+**Logging from code** — use the explicit level helpers in `internal/pkg/logger` (`logger.Debug` / `logger.Info` / `logger.Warn` / `logger.Error`), passing the request context so `request_id`/`user_id` are attached automatically:
+
+```go
+import "inventory/internal/pkg/logger"
+
+logger.Info(c.Request().Context(), "item created",
+    slog.String("sku", req.Sku),
+    slog.Int64("id", item.ID),
+)
+logger.Error(c.Request().Context(), "failed to create item", slog.Any("error", err))
+```
+
+View logs live: `docker compose logs -f api` (or `worker` for the async jobs).
 
 ---
 

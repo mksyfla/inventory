@@ -2,11 +2,6 @@ import { z } from 'zod';
 
 export type ABCClass = 'A' | 'B' | 'C';
 
-export interface ItemCategory {
-  id: number;
-  name: string;
-}
-
 export interface Item {
   id: number;
   publicId: string;
@@ -27,14 +22,6 @@ export interface Item {
   createdAt: string;
   updatedAt?: string;
 }
-
-export const MOCK_CATEGORIES: ItemCategory[] = [
-  { id: 1, name: 'Bahan Baku Cetak' },
-  { id: 2, name: 'Tinta & Kimia Pemroses' },
-  { id: 3, name: 'Kertas Dokumen Sekuriti' },
-  { id: 4, name: 'Komponen Mesin & Sparepart' },
-  { id: 5, name: 'Perlengkapan Kemasan' },
-];
 
 export const MOCK_ITEMS: Item[] = [
   {
@@ -144,3 +131,21 @@ export const itemSchema = z
   );
 
 export type ItemFormValues = z.infer<typeof itemSchema>;
+
+export interface Category {
+  id: number;
+  code: string;
+  name: string;
+  is_active: boolean;
+}
+
+// Kategori master untuk dropdown filter di halaman laporan/stock.
+// Nilai `code` mengikuti konvensi backend (CAT-*), `name` disinkronkan
+// dengan `MOCK_ITEMS` di atas agar filter tetap relevan saat pakai mock data.
+export const MOCK_CATEGORIES: Category[] = [
+  { id: 1, code: 'CAT-RAW', name: 'Bahan Baku Logam', is_active: true },
+  { id: 2, code: 'CAT-INK', name: 'Tinta & Kimia Pemroses', is_active: true },
+  { id: 3, code: 'CAT-PPR', name: 'Kertas Dokumen Sekuriti', is_active: true },
+  { id: 4, code: 'CAT-ELK', name: 'Bahan Elektronik & Komponen', is_active: true },
+  { id: 5, code: 'CAT-PKG', name: 'Perlengkapan Kemasan', is_active: true },
+];

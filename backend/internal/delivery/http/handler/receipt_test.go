@@ -30,16 +30,18 @@ import (
 // ─── by internal/usecase/inbound tests) ────────────────────────────────────
 
 type hDocRepo struct {
-	docs       map[int64]*document.Document
-	lines      map[int64][]*document.DocumentLine
-	byKey      map[string]int64
-	nextID     int64
-	nextLn     int64
-	lastStatus document.Status
+	docs        map[int64]*document.Document
+	lines       map[int64][]*document.DocumentLine
+	byKey       map[string]int64
+	nextID      int64
+	nextLn      int64
+	nextAtt     int64
+	lastStatus  document.Status
+	attachments map[int64]*document.Attachment
 }
 
 func newHDocRepo() *hDocRepo {
-	return &hDocRepo{docs: map[int64]*document.Document{}, lines: map[int64][]*document.DocumentLine{}, byKey: map[string]int64{}, nextID: 1}
+	return &hDocRepo{docs: map[int64]*document.Document{}, lines: map[int64][]*document.DocumentLine{}, byKey: map[string]int64{}, nextID: 1, attachments: map[int64]*document.Attachment{}}
 }
 
 func (m *hDocRepo) Create(ctx context.Context, doc *document.Document, lines []*document.DocumentLine) error {
@@ -89,6 +91,70 @@ func (m *hDocRepo) UpdateLinePutaway(ctx context.Context, lineID int64, qtyProce
 			}
 		}
 	}
+	return nil
+}
+
+// ─── Outbound-era additions (unused by receipt flows, harmless stubs) ──────
+
+func (m *hDocRepo) UpdateLineProcessed(ctx context.Context, lineID int64, qtyProcessed float64) error {
+	return nil
+}
+
+func (m *hDocRepo) CreateAllocations(ctx context.Context, allocations []*document.Allocation) error {
+	return nil
+}
+
+func (m *hDocRepo) ListAllocations(ctx context.Context, documentID int64) ([]*document.Allocation, error) {
+	return nil, nil
+}
+
+func (m *hDocRepo) UpdateAllocationPicked(ctx context.Context, id int64, qtyPicked float64) error {
+	return nil
+}
+
+func (m *hDocRepo) UpdateReasonCode(ctx context.Context, id int64, reasonCode string) error {
+	return nil
+}
+
+func (m *hDocRepo) GetDelivery(ctx context.Context, documentID int64) (*document.Delivery, error) {
+	return nil, pgx.ErrNoRows
+}
+
+func (m *hDocRepo) UpsertDelivery(ctx context.Context, d *document.Delivery) error {
+	return nil
+}
+
+// ── attachment support (lampiran GRN) ─────────────────────────────────────
+func (m *hDocRepo) ListAttachments(ctx context.Context, documentID int64) ([]*document.Attachment, error) {
+	var out []*document.Attachment
+	for _, a := range m.attachments {
+		if a.DocumentID == documentID {
+			cp := *a
+			out = append(out, &cp)
+		}
+	}
+	return out, nil
+}
+
+func (m *hDocRepo) CreateAttachment(ctx context.Context, a *document.Attachment) error {
+	m.nextAtt++
+	a.ID = m.nextAtt
+	cp := *a
+	m.attachments[a.ID] = &cp
+	return nil
+}
+
+func (m *hDocRepo) GetAttachmentByID(ctx context.Context, id int64) (*document.Attachment, error) {
+	a, ok := m.attachments[id]
+	if !ok {
+		return nil, pgx.ErrNoRows
+	}
+	cp := *a
+	return &cp, nil
+}
+
+func (m *hDocRepo) DeleteAttachment(ctx context.Context, id int64) error {
+	delete(m.attachments, id)
 	return nil
 }
 

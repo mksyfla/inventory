@@ -7,6 +7,7 @@ import (
 
 	"inventory/internal/delivery/http/response"
 	"inventory/internal/pkg/auth"
+	"inventory/internal/pkg/logger"
 
 	"github.com/casbin/casbin/v2"
 	"github.com/labstack/echo/v4"
@@ -52,7 +53,9 @@ func JWTAuthMiddleware(jwtSecret string) echo.MiddlewareFunc {
 			c.Set(string(ClaimsKey), claims)
 			c.Set(string(UserIDKey), claims.UserID)
 
-			ctx := context.WithValue(c.Request().Context(), ClaimsKey, claims)
+			ctx := c.Request().Context()
+			ctx = context.WithValue(ctx, ClaimsKey, claims)
+			ctx = context.WithValue(ctx, logger.UserIDKey, claims.UserID)
 			c.SetRequest(c.Request().WithContext(ctx))
 
 			return next(c)

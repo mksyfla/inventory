@@ -13,7 +13,6 @@ import {
   Row,
   Col,
   Tooltip,
-  notification,
 } from 'antd';
 import {
   PlusOutlined,
@@ -26,8 +25,13 @@ import {
   BarcodeOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
-import { Item, MOCK_ITEMS, MOCK_CATEGORIES, ABCClass } from '../../types/item';
+import { useQuery } from '@tanstack/react-query';
+import { Item, ABCClass } from '../../types/item';
+import { CategoryDTO } from '../../api/dto';
 import { useDebouncedSearch } from '../../hooks/useDebouncedSearch';
+import { useMutationWithToast } from '../../hooks/useMutationWithToast';
+import { itemService } from '../../api/services/items';
+import { mapItemDTO } from '../../api/mappers';
 import { ItemImportModal } from '../../components/master/ItemImportModal';
 import { BarcodePrintModal } from '../../components/master/BarcodePrintModal';
 
@@ -36,8 +40,25 @@ const { Title, Text, Paragraph } = Typography;
 export const ItemsPage: React.FC = () => {
   const navigate = useNavigate();
 
+  const { data: items = [], isLoading, isFetching } = useQuery({
+    queryKey: ['items'],
+    queryFn: async () => {
+      const dtos = await itemService.listItems();
+      return dtos.map(mapItemDTO);
+    },
+  });
+
+  // Real categories from the API (shared cache key with ItemFormPage).
+  const { data: categories = [] } = useQuery({
+    queryKey: ['categories'],
+    queryFn: () => itemService.listCategories(),
+  });
+  const categoryNameById = useMemo(
+    () => new Map<number, string>(categories.map((c) => [c.id, c.name])),
+    [categories],
+  );
+
   // State management
-  const [items, setItems] = useState<Item[]>(MOCK_ITEMS);
   const [importModalOpen, setImportModalOpen] = useState<boolean>(false);
   const [printModalOpen, setPrintModalOpen] = useState<boolean>(false);
   const [selectedPrintItem, setSelectedPrintItem] = useState<Item | null>(null);
@@ -46,10 +67,42 @@ export const ItemsPage: React.FC = () => {
   const [selectedAbcClass, setSelectedAbcClass] = useState<ABCClass | null>(null);
   const [selectedStatus, setSelectedStatus] = useState<boolean | null>(null);
 
+  // Soft Delete / Reactivate (FR-1.5)
+  const toggleMutation = useMutationWithToast({
+    mutationFn: async (item: Item) => {
+      if (item.isActive) {
+        await itemService.softDeleteItem(item.id);
+        return { ...item, isActive: false };
+      }
+      // Reactivation = PATCH with is_active=true (spec: PATCH /items/{id})
+      const updated = await itemService.updateItem(item.id, {
+        name: item.name,
+        base_uom: item.baseUom,
+        category_id: item.categoryId || null,
+        is_batch: item.isBatch,
+        is_expiry: item.isExpiry,
+        is_serial: item.isSerial,
+        min_qty: item.minQty,
+        max_qty: item.maxQty ?? null,
+        safety_stock: item.safetyStock,
+        lead_time_days: item.leadTimeDays,
+        abc_class: item.abcClass ?? null,
+        is_active: true,
+      });
+      return mapItemDTO(updated);
+    },
+    successTitle: 'Status Berhasil Diubah',
+    successMessage: 'Status SKU telah diperbarui di database.',
+    invalidateKeys: [['items']],
+  });
+
+  const handleToggleSoftDelete = (item: Item) => {
+    toggleMutation.mutate(item);
+  };
+
   // Filtered dataset calculation
   const filteredItems = useMemo(() => {
     return items.filter((item) => {
-      // Search term matching (SKU or Name)
       if (debouncedTerm) {
         const term = debouncedTerm.toLowerCase();
         const matchSku = item.sku.toLowerCase().includes(term);
@@ -57,17 +110,14 @@ export const ItemsPage: React.FC = () => {
         if (!matchSku && !matchName) return false;
       }
 
-      // Category filter
       if (selectedCategory !== null && item.categoryId !== selectedCategory) {
         return false;
       }
 
-      // ABC Class filter
       if (selectedAbcClass !== null && item.abcClass !== selectedAbcClass) {
         return false;
       }
 
-      // Status filter
       if (selectedStatus !== null && item.isActive !== selectedStatus) {
         return false;
       }
@@ -75,20 +125,6 @@ export const ItemsPage: React.FC = () => {
       return true;
     });
   }, [items, debouncedTerm, selectedCategory, selectedAbcClass, selectedStatus]);
-
-  // Soft Delete Handler (FR-1.5)
-  const handleToggleSoftDelete = (item: Item) => {
-    const nextStatus = !item.isActive;
-    setItems((prev) =>
-      prev.map((i) => (i.id === item.id ? { ...i, isActive: nextStatus } : i))
-    );
-
-    notification.success({
-      message: nextStatus ? 'SKU Berhasil Diaktifkan' : 'SKU Berhasil Dinonaktifkan (Soft Delete)',
-      description: `Barang ${item.sku} kini berstatus ${nextStatus ? 'Aktif' : 'Nonaktif (Soft Delete)'}.`,
-      placement: 'topRight',
-    });
-  };
 
   const handleResetFilters = () => {
     setSearchTerm('');
@@ -114,7 +150,7 @@ export const ItemsPage: React.FC = () => {
       title: 'Kategori',
       dataIndex: 'categoryName',
       key: 'categoryName',
-      render: (cat: string) => cat || '-',
+      render: (_: any, record: Item) => categoryNameById.get(record.categoryId) ?? '-',
     },
     {
       title: 'Base UoM',
@@ -273,7 +309,7 @@ export const ItemsPage: React.FC = () => {
                 onChange={(val) => setSelectedCategory(val)}
                 allowClear
                 style={{ width: '100%' }}
-                options={MOCK_CATEGORIES.map((c) => ({ value: c.id, label: c.name }))}
+                options={categories.map((c: CategoryDTO) => ({ value: c.id, label: c.name }))}
                 data-testid="select-filter-category"
               />
             </Col>
@@ -322,6 +358,7 @@ export const ItemsPage: React.FC = () => {
           rowKey="id"
           columns={columns}
           dataSource={filteredItems}
+          loading={isLoading || isFetching}
           pagination={{ pageSize: 10, showSizeChanger: true, showTotal: (total) => `Total ${total} SKU` }}
           data-testid="table-items"
         />
@@ -330,6 +367,7 @@ export const ItemsPage: React.FC = () => {
       <ItemImportModal
         open={importModalOpen}
         onClose={() => setImportModalOpen(false)}
+        onSuccess={() => navigate(0)}
       />
 
       <BarcodePrintModal
