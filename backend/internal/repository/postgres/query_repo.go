@@ -72,8 +72,14 @@ func (r *QueryRepository) ListDocuments(ctx context.Context, f query.DocumentFil
 	return out, nil
 }
 
-func (r *QueryRepository) GetDocumentDetail(ctx context.Context, id int64) (*query.DocumentDetail, error) {
-	doc, err := r.queries.GetDocumentByID(ctx, id)
+func (r *QueryRepository) GetDocumentDetail(ctx context.Context, id, warehouseID int64) (*query.DocumentDetail, error) {
+	// C-03: the warehouse predicate lives in the SQL (id + source-or-dest
+	// warehouse), so a caller outside the document's warehouse gets ErrNoRows
+	// and the handler maps it to 404 — existence is never confirmed.
+	doc, err := r.queries.GetDocumentByIDInWarehouse(ctx, GetDocumentByIDInWarehouseParams{
+		ID:          id,
+		WarehouseID: warehouseID,
+	})
 	if err != nil {
 		return nil, err // pgx.ErrNoRows mapped to 404 by the handler
 	}
@@ -176,9 +182,13 @@ func (r *QueryRepository) GetDocumentDetail(ctx context.Context, id int64) (*que
 
 // GetCountDocumentDetail returns a CNT document header + its snapshot/result
 // lines joined with item/location/batch. Non-CNT documents answer pgx.ErrNoRows
-// so the handler maps them to 404.
-func (r *QueryRepository) GetCountDocumentDetail(ctx context.Context, id int64, blind bool) (*query.CountDocumentDetail, error) {
-	doc, err := r.queries.GetDocumentByID(ctx, id)
+// so the handler maps them to 404. Scoped to the caller's warehouse (C-03):
+// a CNT in another warehouse answers ErrNoRows, never a row.
+func (r *QueryRepository) GetCountDocumentDetail(ctx context.Context, id, warehouseID int64, blind bool) (*query.CountDocumentDetail, error) {
+	doc, err := r.queries.GetDocumentByIDInWarehouse(ctx, GetDocumentByIDInWarehouseParams{
+		ID:          id,
+		WarehouseID: warehouseID,
+	})
 	if err != nil {
 		return nil, err
 	}

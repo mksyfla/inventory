@@ -109,6 +109,24 @@ func (r *PostgresDocumentRepository) UpdateStatus(ctx context.Context, id int64,
 	return nil
 }
 
+// TransitionStatus is the compare-and-set status write (H-04): the UPDATE is
+// guarded by `AND status = expected`, so a concurrent transition that already
+// committed wins and this one returns ok=false. Callers that post stock must
+// treat ok=false as a conflict and roll back the whole transaction — the loser
+// of the race never double-posts.
+func (r *PostgresDocumentRepository) TransitionStatus(ctx context.Context, id int64, expected, next document.Status, approvedBy *int64) (bool, error) {
+	n, err := r.querier(ctx).TransitionDocumentStatus(ctx, TransitionDocumentStatusParams{
+		ID:         id,
+		Column2:    expected.String(),
+		Column3:    next.String(),
+		ApprovedBy: int8Param(approvedBy),
+	})
+	if err != nil {
+		return false, fmt.Errorf("postgres: failed to transition document status: %w", err)
+	}
+	return n > 0, nil
+}
+
 // NextSequence implements docnum.NextSeqStore (FSD 4.3): atomically bumps
 // the (doc_type, period) counter and returns the new sequence. Runs inside
 // the caller's transaction so the sequence and the document commit together.

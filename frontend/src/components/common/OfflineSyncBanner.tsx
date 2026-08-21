@@ -1,15 +1,98 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Alert, Badge, Button, Space, Typography, notification } from 'antd';
 import { WifiOutlined, DisconnectOutlined, SyncOutlined } from '@ant-design/icons';
+import { offlineDb, SyncQueueItem } from '../../db/offlineDb';
+import { apiClient } from '../../api/client';
 
 const { Text } = Typography;
 
 export const OfflineSyncBanner: React.FC = () => {
-  const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
+  const [isOnline, setIsOnline] = useState<boolean>(
+    typeof navigator !== 'undefined' ? navigator.onLine : true
+  );
   const [pendingQueueCount, setPendingQueueCount] = useState<number>(0);
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
 
+  const refreshPendingCount = useCallback(async () => {
+    try {
+      const count = await offlineDb.syncQueue.where('status').equals('pending').count();
+      setPendingQueueCount(count);
+    } catch {
+      // IndexedDB might not be available
+    }
+  }, []);
+
+  const triggerSync = useCallback(async () => {
+    if (isSyncing) return;
+    setIsSyncing(true);
+
+    try {
+      const pendingItems: SyncQueueItem[] = await offlineDb.syncQueue
+        .where('status')
+        .equals('pending')
+        .toArray();
+
+      if (pendingItems.length === 0) {
+        setIsSyncing(false);
+        setPendingQueueCount(0);
+        return;
+      }
+
+      let successCount = 0;
+      let failCount = 0;
+
+      for (const item of pendingItems) {
+        if (!item.id) continue;
+        await offlineDb.syncQueue.update(item.id, { status: 'syncing' });
+
+        try {
+          await apiClient.request({
+            url: item.endpoint,
+            method: item.method,
+            data: item.payload,
+            headers: {
+              'Idempotency-Key': item.idempotencyKey,
+            },
+          });
+
+          await offlineDb.syncQueue.update(item.id, { status: 'completed' });
+          successCount++;
+        } catch {
+          const retries = (item.retryCount || 0) + 1;
+          await offlineDb.syncQueue.update(item.id, {
+            status: retries >= 3 ? 'failed' : 'pending',
+            retryCount: retries,
+          });
+          failCount++;
+        }
+      }
+
+      await refreshPendingCount();
+
+      if (successCount > 0 && failCount === 0) {
+        notification.success({
+          message: 'Sinkronisasi Data Selesai (FE-902)',
+          description: `Sebanyak ${successCount} draf transaksi offline berhasil disinkronkan ke server.`,
+        });
+      } else if (failCount > 0) {
+        notification.warning({
+          message: 'Sinkronisasi Sebagian Berhasil',
+          description: `${successCount} draf terkirim, ${failCount} draf gagal dan akan dicoba kembali.`,
+        });
+      }
+    } catch (err) {
+      notification.error({
+        message: 'Gagal Menyinkronkan Data',
+        description: 'Terjadi kesalahan saat memproses antrean draf offline.',
+      });
+    } finally {
+      setIsSyncing(false);
+    }
+  }, [isSyncing, refreshPendingCount]);
+
   useEffect(() => {
+    refreshPendingCount();
+
     const handleOnline = () => {
       setIsOnline(true);
       notification.success({
@@ -25,28 +108,21 @@ export const OfflineSyncBanner: React.FC = () => {
         message: 'Koneksi Terputus (Offline)',
         description: 'Sistem beralih ke mode penyimpanan lokal IndexedDB Dexie.js.',
       });
+      refreshPendingCount();
     };
 
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
 
+    // Periodic check for offline queue changes
+    const interval = setInterval(refreshPendingCount, 10000);
+
     return () => {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
+      clearInterval(interval);
     };
-  }, []);
-
-  const triggerSync = () => {
-    setIsSyncing(true);
-    setTimeout(() => {
-      setPendingQueueCount(0);
-      setIsSyncing(false);
-      notification.success({
-        message: 'Sinkronisasi Data Selesai (FE-902)',
-        description: 'Seluruh draf transaksi offline berhasil terkirim ke server.',
-      });
-    }, 1500);
-  };
+  }, [refreshPendingCount, triggerSync]);
 
   if (isOnline && pendingQueueCount === 0 && !isSyncing) {
     return null;

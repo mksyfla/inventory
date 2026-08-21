@@ -3,6 +3,7 @@ package item
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"inventory/internal/pkg/apperr"
 	"inventory/internal/pkg/crypto"
@@ -11,17 +12,54 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-// AESKey is the AES-256 key used to encrypt sensitive partner contact fields
-// (contact_name, contact_phone) at rest per UU PDP. NOTE: this should live in
-// the environment/secret manager — see security findings in QA_REPORT.md.
-var AESKey = []byte("this-is-a-very-secret-32byte-key") // 32 bytes AES-256 key
+// redactedValue replaces a contact field whose ciphertext could not be
+// decrypted. Raw ciphertext must never reach a client (M-11): a key rotation or
+// corrupted row would otherwise leak encrypted bytes as if they were the value.
+const redactedValue = "***"
 
-type Usecase struct {
-	repo postgres.Querier
+// decryptText decrypts an encrypted contact field, logging at ERROR and
+// returning a redacted placeholder on failure instead of leaking ciphertext.
+func decryptText(enc, key string, field string, id int64) string {
+	dec, err := crypto.Decrypt(enc, []byte(key))
+	if err != nil {
+		slog.Error("partner field decrypt failed",
+			slog.Int64("partner_id", id),
+			slog.String("field", field),
+			slog.Any("error", err))
+		return redactedValue
+	}
+	return dec
 }
 
-func NewUsecase(repo postgres.Querier) *Usecase {
-	return &Usecase{repo: repo}
+// defaultAESKey is a dev/test-only fallback (C-05). Production MUST inject the
+// key from the environment via WithAESKey: config.Load hard-fails when
+// AES_ENCRYPTION_KEY is absent, so a production process can never run on this
+// constant. It is deliberately unexported and must not be treated as a real
+// secret — anything encrypted with it is only suitable for throwaway data.
+var defaultAESKey = []byte("this-is-a-very-secret-32byte-key")
+
+type Usecase struct {
+	repo   postgres.Querier
+	aesKey []byte
+}
+
+func NewUsecase(repo postgres.Querier, opts ...func(*Usecase)) *Usecase {
+	u := &Usecase{
+		repo:   repo,
+		aesKey: defaultAESKey,
+	}
+	for _, opt := range opts {
+		opt(u)
+	}
+	return u
+}
+
+func WithAESKey(key []byte) func(*Usecase) {
+	return func(u *Usecase) {
+		if len(key) >= 16 {
+			u.aesKey = key
+		}
+	}
 }
 
 // ============ ITEM WORKFLOWS ============
@@ -274,12 +312,12 @@ type CreatePartnerInput struct {
 
 func (u *Usecase) CreatePartner(ctx context.Context, in CreatePartnerInput) (postgres.MasterPartners, error) {
 	// Encrypt sensitive fields before database insertion (UU PDP standard)
-	encName, err := crypto.Encrypt(in.ContactName, AESKey)
+	encName, err := crypto.Encrypt(in.ContactName, u.aesKey)
 	if err != nil {
 		return postgres.MasterPartners{}, fmt.Errorf("failed to encrypt contact name: %w", err)
 	}
 
-	encPhone, err := crypto.Encrypt(in.ContactPhone, AESKey)
+	encPhone, err := crypto.Encrypt(in.ContactPhone, u.aesKey)
 	if err != nil {
 		return postgres.MasterPartners{}, fmt.Errorf("failed to encrypt contact phone: %w", err)
 	}
@@ -321,12 +359,12 @@ type UpdatePartnerInput struct {
 // fields are encrypted at rest and decrypted before being returned, matching
 // CreatePartner.
 func (u *Usecase) UpdatePartner(ctx context.Context, in UpdatePartnerInput) (postgres.MasterPartners, error) {
-	encName, err := crypto.Encrypt(in.ContactName, AESKey)
+	encName, err := crypto.Encrypt(in.ContactName, u.aesKey)
 	if err != nil {
 		return postgres.MasterPartners{}, fmt.Errorf("failed to encrypt contact name: %w", err)
 	}
 
-	encPhone, err := crypto.Encrypt(in.ContactPhone, AESKey)
+	encPhone, err := crypto.Encrypt(in.ContactPhone, u.aesKey)
 	if err != nil {
 		return postgres.MasterPartners{}, fmt.Errorf("failed to encrypt contact phone: %w", err)
 	}
@@ -360,19 +398,13 @@ func (u *Usecase) GetPartner(ctx context.Context, id int64) (postgres.MasterPart
 		return postgres.MasterPartners{}, err
 	}
 
-	// Decrypt sensitive contact fields
+	// Decrypt sensitive contact fields (redacting on failure, M-11).
 	if partner.ContactName.Valid && partner.ContactName.String != "" {
-		decName, err := crypto.Decrypt(partner.ContactName.String, AESKey)
-		if err == nil {
-			partner.ContactName.String = decName
-		}
+		partner.ContactName.String = decryptText(partner.ContactName.String, string(u.aesKey), "contact_name", partner.ID)
 	}
 
 	if partner.ContactPhone.Valid && partner.ContactPhone.String != "" {
-		decPhone, err := crypto.Decrypt(partner.ContactPhone.String, AESKey)
-		if err == nil {
-			partner.ContactPhone.String = decPhone
-		}
+		partner.ContactPhone.String = decryptText(partner.ContactPhone.String, string(u.aesKey), "contact_phone", partner.ID)
 	}
 
 	return partner, nil
@@ -386,14 +418,10 @@ func (u *Usecase) ListPartners(ctx context.Context) ([]postgres.MasterPartners, 
 
 	for i := range partners {
 		if partners[i].ContactName.Valid && partners[i].ContactName.String != "" {
-			if decName, err := crypto.Decrypt(partners[i].ContactName.String, AESKey); err == nil {
-				partners[i].ContactName.String = decName
-			}
+			partners[i].ContactName.String = decryptText(partners[i].ContactName.String, string(u.aesKey), "contact_name", partners[i].ID)
 		}
 		if partners[i].ContactPhone.Valid && partners[i].ContactPhone.String != "" {
-			if decPhone, err := crypto.Decrypt(partners[i].ContactPhone.String, AESKey); err == nil {
-				partners[i].ContactPhone.String = decPhone
-			}
+			partners[i].ContactPhone.String = decryptText(partners[i].ContactPhone.String, string(u.aesKey), "contact_phone", partners[i].ID)
 		}
 	}
 

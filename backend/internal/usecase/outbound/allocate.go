@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"inventory/internal/domain/document"
 	"inventory/internal/pkg/apperr"
+	"inventory/internal/pkg/authz"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -63,6 +65,10 @@ func (u *OutboundUsecase) Allocate(ctx context.Context, id int64, in AllocateInp
 	if err != nil {
 		return nil, err
 	}
+	// C-02: the caller's warehouse must own the document before reserving stock.
+	if err := authz.AssertDocInWarehouse(ctx, doc.WarehouseID); err != nil {
+		return nil, err
+	}
 	if doc.DocType != document.DocTypeDO {
 		return nil, apperr.New("ERR_NOT_FOUND", "delivery order not found")
 	}
@@ -87,6 +93,7 @@ func (u *OutboundUsecase) Allocate(ctx context.Context, id int64, in AllocateInp
 	type resolved struct {
 		line    *document.DocumentLine
 		qtyBase float64
+		idx     int // request-line index (kept for error details after sorting)
 	}
 	items := make([]resolved, 0, len(in.Lines))
 	for i, li := range in.Lines {
@@ -101,13 +108,24 @@ func (u *OutboundUsecase) Allocate(ctx context.Context, id int64, in AllocateInp
 		if qtyBase > ln.QtyRequest*ln.ConvFactor-allocatedByLine[ln.ID] {
 			return nil, validationErr(fmt.Sprintf("lines[%d].qty", i), "exceeds the line's remaining unallocated quantity")
 		}
-		items = append(items, resolved{line: ln, qtyBase: qtyBase})
+		items = append(items, resolved{line: ln, qtyBase: qtyBase, idx: i})
 	}
+	// H-10: acquire the candidate-balance row locks in a deterministic global
+	// order (ItemID, then line ID) so two concurrent allocations whose lines
+	// reference overlapping items can never deadlock — every tx takes its locks
+	// in the same order. The per-item ORDER BY is already in
+	// ListAllocationCandidates; this sorts the cross-item order.
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].line.ItemID != items[j].line.ItemID {
+			return items[i].line.ItemID < items[j].line.ItemID
+		}
+		return items[i].line.ID < items[j].line.ID
+	})
 
 	var results []AllocationResult
 	var shortages []ShortageDetail
 	err = u.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
-		for i, it := range items {
+		for _, it := range items {
 			candidates, err := u.cands.LockAllocationCandidates(txCtx, it.line.ItemID, doc.WarehouseID)
 			if err != nil {
 				return err
@@ -149,7 +167,7 @@ func (u *OutboundUsecase) Allocate(ctx context.Context, id int64, in AllocateInp
 			}
 			if need > 0 {
 				shortages = append(shortages, ShortageDetail{
-					Field:     fmt.Sprintf("lines[%d].qty", i),
+					Field:     fmt.Sprintf("lines[%d].qty", it.idx),
 					SKU:       fmt.Sprintf("ITEM-%d", it.line.ItemID),
 					Requested: it.qtyBase,
 					Available: it.qtyBase - need,
@@ -185,6 +203,10 @@ func (u *OutboundUsecase) AllocateOverride(ctx context.Context, id int64, in Ove
 	if err != nil {
 		return nil, err
 	}
+	// C-02: the caller's warehouse must own the document before reserving stock.
+	if err := authz.AssertDocInWarehouse(ctx, doc.WarehouseID); err != nil {
+		return nil, err
+	}
 	if doc.DocType != document.DocTypeDO {
 		return nil, apperr.New("ERR_NOT_FOUND", "delivery order not found")
 	}
@@ -210,6 +232,7 @@ func (u *OutboundUsecase) AllocateOverride(ctx context.Context, id int64, in Ove
 		line      *document.DocumentLine
 		qtyBase   float64
 		balanceID int64
+		idx       int // request-line index (kept for error details after sorting)
 	}
 	items := make([]resolved, 0, len(in.Lines))
 	for i, li := range in.Lines {
@@ -227,26 +250,35 @@ func (u *OutboundUsecase) AllocateOverride(ctx context.Context, id int64, in Ove
 		if qtyBase > ln.QtyRequest*ln.ConvFactor-allocatedByLine[ln.ID] {
 			return nil, validationErr(fmt.Sprintf("lines[%d].qty", i), "exceeds the line's remaining unallocated quantity")
 		}
-		items = append(items, resolved{line: ln, qtyBase: qtyBase, balanceID: li.BalanceID})
+		items = append(items, resolved{line: ln, qtyBase: qtyBase, balanceID: li.BalanceID, idx: i})
 	}
+	// H-10: lock the override-target balances in a deterministic global order
+	// (balanceID, then line ID) so concurrent overrides over overlapping
+	// balances never deadlock (same rationale as Allocate above).
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].balanceID != items[j].balanceID {
+			return items[i].balanceID < items[j].balanceID
+		}
+		return items[i].line.ID < items[j].line.ID
+	})
 
 	var results []AllocationResult
 	var shortages []ShortageDetail
 	err = u.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
-		for i, it := range items {
+		for _, it := range items {
 			cand, err := u.cands.GetCandidateByBalanceID(txCtx, it.balanceID, doc.WarehouseID)
 			if err != nil {
 				if errors.Is(err, pgx.ErrNoRows) {
-					return validationErr(fmt.Sprintf("lines[%d].balance_id", i), "balance is not allocatable in this warehouse")
+					return validationErr(fmt.Sprintf("lines[%d].balance_id", it.idx), "balance is not allocatable in this warehouse")
 				}
 				return err
 			}
 			if cand.ItemID != it.line.ItemID {
-				return validationErr(fmt.Sprintf("lines[%d].balance_id", i), "balance item does not match the line item")
+				return validationErr(fmt.Sprintf("lines[%d].balance_id", it.idx), "balance item does not match the line item")
 			}
 			if it.qtyBase > cand.QtyFree {
 				shortages = append(shortages, ShortageDetail{
-					Field:     fmt.Sprintf("lines[%d].qty", i),
+					Field:     fmt.Sprintf("lines[%d].qty", it.idx),
 					SKU:       fmt.Sprintf("ITEM-%d", it.line.ItemID),
 					Requested: it.qtyBase,
 					Available: cand.QtyFree,

@@ -362,8 +362,11 @@ type DashboardSummary struct {
 // Repository is the read-only store backing the shared GET endpoints.
 type Repository interface {
 	ListDocuments(ctx context.Context, f DocumentFilter) ([]DocumentSummary, error)
-	GetDocumentDetail(ctx context.Context, id int64) (*DocumentDetail, error)
-	GetCountDocumentDetail(ctx context.Context, id int64, blind bool) (*CountDocumentDetail, error)
+	// GetDocumentDetail returns one document, scoped to the caller's warehouse
+	// (source OR destination, so transfers stay visible to both ends). Returns
+	// pgx.ErrNoRows when the document exists in another warehouse (C-03).
+	GetDocumentDetail(ctx context.Context, id, warehouseID int64) (*DocumentDetail, error)
+	GetCountDocumentDetail(ctx context.Context, id, warehouseID int64, blind bool) (*CountDocumentDetail, error)
 	ListStockBalances(ctx context.Context, f StockBalanceFilter) ([]StockBalance, error)
 	ListBatchTrace(ctx context.Context, search string) ([]BatchTrace, error)
 	ListStockLedger(ctx context.Context, f StockLedgerFilter) ([]StockLedgerRow, error)

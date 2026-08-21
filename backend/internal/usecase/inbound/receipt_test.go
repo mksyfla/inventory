@@ -10,6 +10,7 @@ import (
 	"inventory/internal/domain/document"
 	"inventory/internal/domain/stock"
 	"inventory/internal/pkg/apperr"
+	"inventory/internal/pkg/authz"
 	"inventory/internal/pkg/docnum"
 	stockuc "inventory/internal/usecase/stock"
 
@@ -98,6 +99,19 @@ func (m *mockDocs) UpdateStatus(ctx context.Context, id int64, status document.S
 	}
 	m.statuses = append(m.statuses, mockStatusUpdate{id: id, status: status, approvedBy: approvedBy})
 	return nil
+}
+
+func (m *mockDocs) TransitionStatus(ctx context.Context, id int64, expected, next document.Status, approvedBy *int64) (bool, error) {
+	doc := m.docs[id]
+	if doc.Status != expected {
+		return false, nil
+	}
+	doc.Status = next
+	if approvedBy != nil {
+		doc.ApprovedBy = approvedBy
+	}
+	m.statuses = append(m.statuses, mockStatusUpdate{id: id, status: next, approvedBy: approvedBy})
+	return true, nil
 }
 
 func (m *mockDocs) UpdateLinePutaway(ctx context.Context, lineID int64, qtyProcessed float64, locationID int64) error {
@@ -407,7 +421,7 @@ func TestCreate_ValidDraft(t *testing.T) {
 		{ItemID: 3, Qty: 50, Status: "quarantine"},
 	}
 
-	doc, createdLines, err := h.uc.Create(context.Background(), CreateInput{
+	doc, createdLines, err := h.uc.Create(whCtx(10), CreateInput{
 		WarehouseID: 10,
 		Notes:       "receiving batch 1",
 		CreatedBy:   7,
@@ -432,7 +446,7 @@ func TestCreate_NewBatchCreatedAndLinked(t *testing.T) {
 	stdItems(h)
 	expiry := time.Date(2027, 3, 1, 0, 0, 0, 0, time.UTC)
 
-	_, lines, err := h.uc.Create(context.Background(), CreateInput{
+	_, lines, err := h.uc.Create(whCtx(10), CreateInput{
 		WarehouseID: 10, CreatedBy: 7,
 		Lines: []CreateLineInput{{ItemID: 1, Qty: 10, BatchNo: "FRESH-01", ExpiryDate: &expiry}},
 	})
@@ -449,7 +463,7 @@ func TestCreate_ExistingBatchReused(t *testing.T) {
 	expiry := time.Date(2027, 2, 1, 0, 0, 0, 0, time.UTC)
 	h.batches.batches["1/B-2026-001"] = &BatchInfo{ID: 9, ItemID: 1, BatchNo: "B-2026-001"}
 
-	_, lines, err := h.uc.Create(context.Background(), CreateInput{
+	_, lines, err := h.uc.Create(whCtx(10), CreateInput{
 		WarehouseID: 10, CreatedBy: 7,
 		Lines: []CreateLineInput{{ItemID: 1, Qty: 10, BatchNo: "B-2026-001", ExpiryDate: &expiry}},
 	})
@@ -480,7 +494,7 @@ func TestCreate_ValidationMatrix(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newHarness(t)
 			stdItems(h)
-			_, _, err := h.uc.Create(context.Background(), CreateInput{WarehouseID: 10, CreatedBy: 1, Lines: tc.lines})
+			_, _, err := h.uc.Create(whCtx(10), CreateInput{WarehouseID: 10, CreatedBy: 1, Lines: tc.lines})
 			assertAppErr(t, err, "ERR_VALIDATION")
 			var ae *apperr.AppError
 			require.ErrorAs(t, err, &ae)
@@ -498,7 +512,7 @@ func TestCreate_InactiveItemRejected(t *testing.T) {
 	expiry := time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
 	h.items.items[1].IsActive = false
 
-	_, _, err := h.uc.Create(context.Background(), CreateInput{
+	_, _, err := h.uc.Create(whCtx(10), CreateInput{
 		WarehouseID: 10, CreatedBy: 1,
 		Lines: []CreateLineInput{{ItemID: 1, Qty: 1, BatchNo: "X", ExpiryDate: &expiry}},
 	})
@@ -515,7 +529,7 @@ func TestCreate_InactiveWarehouseRejected(t *testing.T) {
 	stdItems(h)
 	h.wh.warehouses[10].IsActive = false
 
-	_, _, err := h.uc.Create(context.Background(), CreateInput{
+	_, _, err := h.uc.Create(whCtx(10), CreateInput{
 		WarehouseID: 10, CreatedBy: 1,
 		Lines: []CreateLineInput{{ItemID: 3, Qty: 1}},
 	})
@@ -531,9 +545,9 @@ func TestCreate_IdempotentReplay(t *testing.T) {
 		Lines: []CreateLineInput{{ItemID: 3, Qty: 10}},
 	}
 
-	first, _, err := h.uc.Create(context.Background(), in)
+	first, _, err := h.uc.Create(whCtx(10), in)
 	require.NoError(t, err)
-	second, _, err := h.uc.Create(context.Background(), in)
+	second, _, err := h.uc.Create(whCtx(10), in)
 	require.NoError(t, err)
 
 	assert.Equal(t, first.ID, second.ID, "repeated key must return the same document (FSD 4.5)")
@@ -545,11 +559,11 @@ func TestCreate_IdempotentReplay(t *testing.T) {
 func TestSubmit_DraftToSubmitted(t *testing.T) {
 	h := newHarness(t)
 	stdItems(h)
-	doc, _, _ := h.uc.Create(context.Background(), CreateInput{
+	doc, _, _ := h.uc.Create(whCtx(10), CreateInput{
 		WarehouseID: 10, CreatedBy: 7, Lines: []CreateLineInput{{ItemID: 3, Qty: 10}},
 	})
 
-	err := h.uc.Submit(context.Background(), doc.ID)
+	err := h.uc.Submit(whCtx(10), doc.ID)
 	require.NoError(t, err)
 	require.Len(t, h.docs.statuses, 1)
 	assert.Equal(t, document.StatusSubmitted, h.docs.statuses[0].status)
@@ -559,18 +573,18 @@ func TestSubmit_DraftToSubmitted(t *testing.T) {
 func TestSubmit_InvalidState(t *testing.T) {
 	h := newHarness(t)
 	stdItems(h)
-	doc, _, _ := h.uc.Create(context.Background(), CreateInput{
+	doc, _, _ := h.uc.Create(whCtx(10), CreateInput{
 		WarehouseID: 10, CreatedBy: 7, Lines: []CreateLineInput{{ItemID: 3, Qty: 10}},
 	})
-	require.NoError(t, h.uc.Submit(context.Background(), doc.ID))
+	require.NoError(t, h.uc.Submit(whCtx(10), doc.ID))
 
-	err := h.uc.Submit(context.Background(), doc.ID)
+	err := h.uc.Submit(whCtx(10), doc.ID)
 	assertAppErr(t, err, "ERR_INVALID_STATE")
 }
 
 func TestSubmit_NotFound(t *testing.T) {
 	h := newHarness(t)
-	err := h.uc.Submit(context.Background(), 424242)
+	err := h.uc.Submit(whCtx(10), 424242)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, pgx.ErrNoRows)
 }
@@ -581,16 +595,16 @@ func TestApprove_PostsReceiptToStaging(t *testing.T) {
 	h := newHarness(t)
 	stdItems(h)
 	expiry := time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
-	doc, lines, _ := h.uc.Create(context.Background(), CreateInput{
+	doc, lines, _ := h.uc.Create(whCtx(10), CreateInput{
 		WarehouseID: 10, CreatedBy: 7,
 		Lines: []CreateLineInput{
 			{ItemID: 1, Qty: 2, Uom: "BOX", BatchNo: "B1", ExpiryDate: &expiry}, // 2 BOX × 24 = 48 PCS
 			{ItemID: 3, Qty: 5},
 		},
 	})
-	require.NoError(t, h.uc.Submit(context.Background(), doc.ID))
+	require.NoError(t, h.uc.Submit(whCtx(10), doc.ID))
 
-	err := h.uc.Approve(context.Background(), doc.ID, 8)
+	err := h.uc.Approve(whCtx(10), doc.ID, 8)
 	require.NoError(t, err)
 
 	require.Len(t, h.stock.movements, 2, "one receipt movement per line")
@@ -612,12 +626,12 @@ func TestApprove_PostsReceiptToStaging(t *testing.T) {
 func TestApprove_SelfApprovalRejected(t *testing.T) {
 	h := newHarness(t)
 	stdItems(h)
-	doc, _, _ := h.uc.Create(context.Background(), CreateInput{
+	doc, _, _ := h.uc.Create(whCtx(10), CreateInput{
 		WarehouseID: 10, CreatedBy: 7, Lines: []CreateLineInput{{ItemID: 3, Qty: 10}},
 	})
-	require.NoError(t, h.uc.Submit(context.Background(), doc.ID))
+	require.NoError(t, h.uc.Submit(whCtx(10), doc.ID))
 
-	err := h.uc.Approve(context.Background(), doc.ID, 7) // same as creator
+	err := h.uc.Approve(whCtx(10), doc.ID, 7) // same as creator
 	assertAppErr(t, err, "ERR_SELF_APPROVAL")
 	assert.Empty(t, h.stock.movements, "no posting may occur on rejected approval")
 }
@@ -625,24 +639,24 @@ func TestApprove_SelfApprovalRejected(t *testing.T) {
 func TestApprove_InvalidState(t *testing.T) {
 	h := newHarness(t)
 	stdItems(h)
-	doc, _, _ := h.uc.Create(context.Background(), CreateInput{
+	doc, _, _ := h.uc.Create(whCtx(10), CreateInput{
 		WarehouseID: 10, CreatedBy: 7, Lines: []CreateLineInput{{ItemID: 3, Qty: 10}},
 	})
 
-	err := h.uc.Approve(context.Background(), doc.ID, 8) // still draft
+	err := h.uc.Approve(whCtx(10), doc.ID, 8) // still draft
 	assertAppErr(t, err, "ERR_INVALID_STATE")
 }
 
 func TestApprove_NoStagingLocation(t *testing.T) {
 	h := newHarness(t)
 	stdItems(h)
-	doc, _, _ := h.uc.Create(context.Background(), CreateInput{
+	doc, _, _ := h.uc.Create(whCtx(10), CreateInput{
 		WarehouseID: 10, CreatedBy: 7, Lines: []CreateLineInput{{ItemID: 3, Qty: 10}},
 	})
-	require.NoError(t, h.uc.Submit(context.Background(), doc.ID))
+	require.NoError(t, h.uc.Submit(whCtx(10), doc.ID))
 
 	delete(h.locs.staging, 10)
-	err := h.uc.Approve(context.Background(), doc.ID, 8)
+	err := h.uc.Approve(whCtx(10), doc.ID, 8)
 	assertAppErr(t, err, "ERR_NOT_FOUND")
 }
 
@@ -652,12 +666,12 @@ func TestSuggestPutaway_ABCPrefersPickFace(t *testing.T) {
 	h := newHarness(t)
 	stdItems(h)
 	expiry := time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
-	doc, lines, _ := h.uc.Create(context.Background(), CreateInput{
+	doc, lines, _ := h.uc.Create(whCtx(10), CreateInput{
 		WarehouseID: 10, CreatedBy: 7,
 		Lines: []CreateLineInput{{ItemID: 1, Qty: 100, BatchNo: "B1", ExpiryDate: &expiry}},
 	})
-	require.NoError(t, h.uc.Submit(context.Background(), doc.ID))
-	require.NoError(t, h.uc.Approve(context.Background(), doc.ID, 8))
+	require.NoError(t, h.uc.Submit(whCtx(10), doc.ID))
+	require.NoError(t, h.uc.Approve(whCtx(10), doc.ID, 8))
 
 	h.locs.candidates = []*PutawayCandidate{
 		{Location: LocationInfo{ID: 200, Code: "BLK-01-01", LocType: "bulk", PickSeq: nil}, UsedQty: 0},
@@ -665,7 +679,7 @@ func TestSuggestPutaway_ABCPrefersPickFace(t *testing.T) {
 		{Location: LocationInfo{ID: 202, Code: "PK-01-01", LocType: "pick", PickSeq: intPtr(1)}, UsedQty: 0},
 	}
 
-	sugg, err := h.uc.SuggestPutaway(context.Background(), doc.ID)
+	sugg, err := h.uc.SuggestPutaway(whCtx(10), doc.ID)
 	require.NoError(t, err)
 	require.Len(t, sugg, 1, "one suggestion per line with remaining qty")
 	assert.Equal(t, lines[0].ID, sugg[0].LineID)
@@ -680,11 +694,11 @@ func TestSuggestPutaway_ABCPrefersPickFace(t *testing.T) {
 func TestSuggestPutaway_CapacityFilterAndLimit(t *testing.T) {
 	h := newHarness(t)
 	stdItems(h)
-	doc, _, _ := h.uc.Create(context.Background(), CreateInput{
+	doc, _, _ := h.uc.Create(whCtx(10), CreateInput{
 		WarehouseID: 10, CreatedBy: 7, Lines: []CreateLineInput{{ItemID: 3, Qty: 200}},
 	})
-	require.NoError(t, h.uc.Submit(context.Background(), doc.ID))
-	require.NoError(t, h.uc.Approve(context.Background(), doc.ID, 8))
+	require.NoError(t, h.uc.Submit(whCtx(10), doc.ID))
+	require.NoError(t, h.uc.Approve(whCtx(10), doc.ID, 8))
 
 	cap100 := 100.0
 	h.locs.candidates = []*PutawayCandidate{
@@ -694,7 +708,7 @@ func TestSuggestPutaway_CapacityFilterAndLimit(t *testing.T) {
 		{Location: LocationInfo{ID: 204, Code: "BLK-01-02", LocType: "bulk"}, UsedQty: 0},
 	}
 
-	sugg, err := h.uc.SuggestPutaway(context.Background(), doc.ID)
+	sugg, err := h.uc.SuggestPutaway(whCtx(10), doc.ID)
 	require.NoError(t, err)
 	require.Len(t, sugg[0].Locations, 3, "top-3 limit, capacity-infeasible excluded")
 	assert.Equal(t, "PK-01-02", sugg[0].Locations[0].Code)
@@ -705,11 +719,11 @@ func TestSuggestPutaway_CapacityFilterAndLimit(t *testing.T) {
 func TestSuggestPutaway_SkipsFullyPutAwayLines(t *testing.T) {
 	h := newHarness(t)
 	stdItems(h)
-	doc, _, _ := h.uc.Create(context.Background(), CreateInput{
+	doc, _, _ := h.uc.Create(whCtx(10), CreateInput{
 		WarehouseID: 10, CreatedBy: 7, Lines: []CreateLineInput{{ItemID: 3, Qty: 10}},
 	})
-	require.NoError(t, h.uc.Submit(context.Background(), doc.ID))
-	require.NoError(t, h.uc.Approve(context.Background(), doc.ID, 8))
+	require.NoError(t, h.uc.Submit(whCtx(10), doc.ID))
+	require.NoError(t, h.uc.Approve(whCtx(10), doc.ID, 8))
 	h.locs.candidates = []*PutawayCandidate{{Location: LocationInfo{ID: 202, Code: "PK-01-01", LocType: "pick"}}}
 
 	// Mark the line fully processed as if a previous putaway finished it.
@@ -717,7 +731,7 @@ func TestSuggestPutaway_SkipsFullyPutAwayLines(t *testing.T) {
 	docLines := h.docs.lines[doc.ID]
 	docLines[0].QtyProcessed = done
 
-	sugg, err := h.uc.SuggestPutaway(context.Background(), doc.ID)
+	sugg, err := h.uc.SuggestPutaway(whCtx(10), doc.ID)
 	require.NoError(t, err)
 	assert.Empty(t, sugg, "no suggestion when nothing remains")
 }
@@ -725,11 +739,11 @@ func TestSuggestPutaway_SkipsFullyPutAwayLines(t *testing.T) {
 func TestSuggestPutaway_InvalidState(t *testing.T) {
 	h := newHarness(t)
 	stdItems(h)
-	doc, _, _ := h.uc.Create(context.Background(), CreateInput{
+	doc, _, _ := h.uc.Create(whCtx(10), CreateInput{
 		WarehouseID: 10, CreatedBy: 7, Lines: []CreateLineInput{{ItemID: 3, Qty: 10}},
 	})
 
-	_, err := h.uc.SuggestPutaway(context.Background(), doc.ID) // draft
+	_, err := h.uc.SuggestPutaway(whCtx(10), doc.ID) // draft
 	assertAppErr(t, err, "ERR_INVALID_STATE")
 }
 
@@ -738,15 +752,15 @@ func TestSuggestPutaway_InvalidState(t *testing.T) {
 func TestPutaway_FullScanCompletesDocument(t *testing.T) {
 	h := newHarness(t)
 	stdItems(h)
-	doc, lines, _ := h.uc.Create(context.Background(), CreateInput{
+	doc, lines, _ := h.uc.Create(whCtx(10), CreateInput{
 		WarehouseID: 10, CreatedBy: 7, Lines: []CreateLineInput{{ItemID: 3, Qty: 10}},
 	})
-	require.NoError(t, h.uc.Submit(context.Background(), doc.ID))
-	require.NoError(t, h.uc.Approve(context.Background(), doc.ID, 8))
+	require.NoError(t, h.uc.Submit(whCtx(10), doc.ID))
+	require.NoError(t, h.uc.Approve(whCtx(10), doc.ID, 8))
 	h.addStaging(10, &LocationInfo{ID: 100, Code: "STG-01-01", LocType: "staging"})
 	h.locs.byCode[10]["PK-01-01"] = &LocationInfo{ID: 202, Code: "PK-01-01", LocType: "pick"}
 
-	status, err := h.uc.Putaway(context.Background(), doc.ID, 8, []PutawayScan{
+	status, err := h.uc.Putaway(whCtx(10), doc.ID, 8, []PutawayScan{
 		{LineID: lines[0].ID, Qty: 10, LocationCode: "PK-01-01"},
 	})
 	require.NoError(t, err)
@@ -774,14 +788,14 @@ func TestPutaway_FullScanCompletesDocument(t *testing.T) {
 func TestPutaway_PartialScanMovesToInProgress(t *testing.T) {
 	h := newHarness(t)
 	stdItems(h)
-	doc, lines, _ := h.uc.Create(context.Background(), CreateInput{
+	doc, lines, _ := h.uc.Create(whCtx(10), CreateInput{
 		WarehouseID: 10, CreatedBy: 7, Lines: []CreateLineInput{{ItemID: 3, Qty: 100}},
 	})
-	require.NoError(t, h.uc.Submit(context.Background(), doc.ID))
-	require.NoError(t, h.uc.Approve(context.Background(), doc.ID, 8))
+	require.NoError(t, h.uc.Submit(whCtx(10), doc.ID))
+	require.NoError(t, h.uc.Approve(whCtx(10), doc.ID, 8))
 	h.locs.byCode[10]["BLK-01-01"] = &LocationInfo{ID: 300, Code: "BLK-01-01", LocType: "bulk"}
 
-	status, err := h.uc.Putaway(context.Background(), doc.ID, 8, []PutawayScan{
+	status, err := h.uc.Putaway(whCtx(10), doc.ID, 8, []PutawayScan{
 		{LineID: lines[0].ID, Qty: 40, LocationCode: "BLK-01-01"},
 	})
 	require.NoError(t, err)
@@ -798,20 +812,20 @@ func TestPutaway_PartialScanMovesToInProgress(t *testing.T) {
 func TestPutaway_TwoStepCompletion(t *testing.T) {
 	h := newHarness(t)
 	stdItems(h)
-	doc, lines, _ := h.uc.Create(context.Background(), CreateInput{
+	doc, lines, _ := h.uc.Create(whCtx(10), CreateInput{
 		WarehouseID: 10, CreatedBy: 7, Lines: []CreateLineInput{{ItemID: 3, Qty: 10}},
 	})
-	require.NoError(t, h.uc.Submit(context.Background(), doc.ID))
-	require.NoError(t, h.uc.Approve(context.Background(), doc.ID, 8))
+	require.NoError(t, h.uc.Submit(whCtx(10), doc.ID))
+	require.NoError(t, h.uc.Approve(whCtx(10), doc.ID, 8))
 	h.locs.byCode[10]["PK-01-01"] = &LocationInfo{ID: 202, Code: "PK-01-01", LocType: "pick"}
 
-	status, err := h.uc.Putaway(context.Background(), doc.ID, 8, []PutawayScan{
+	status, err := h.uc.Putaway(whCtx(10), doc.ID, 8, []PutawayScan{
 		{LineID: lines[0].ID, Qty: 4, LocationCode: "PK-01-01"},
 	})
 	require.NoError(t, err)
 	assert.Equal(t, document.StatusInProgress, status)
 
-	status, err = h.uc.Putaway(context.Background(), doc.ID, 8, []PutawayScan{
+	status, err = h.uc.Putaway(whCtx(10), doc.ID, 8, []PutawayScan{
 		{LineID: lines[0].ID, Qty: 6, LocationCode: "PK-01-01"},
 	})
 	require.NoError(t, err)
@@ -821,39 +835,39 @@ func TestPutaway_TwoStepCompletion(t *testing.T) {
 func TestPutaway_ValidationMatrix(t *testing.T) {
 	h := newHarness(t)
 	stdItems(h)
-	doc, lines, _ := h.uc.Create(context.Background(), CreateInput{
+	doc, lines, _ := h.uc.Create(whCtx(10), CreateInput{
 		WarehouseID: 10, CreatedBy: 7, Lines: []CreateLineInput{{ItemID: 3, Qty: 10}},
 	})
-	require.NoError(t, h.uc.Submit(context.Background(), doc.ID))
-	require.NoError(t, h.uc.Approve(context.Background(), doc.ID, 8))
+	require.NoError(t, h.uc.Submit(whCtx(10), doc.ID))
+	require.NoError(t, h.uc.Approve(whCtx(10), doc.ID, 8))
 
 	t.Run("no scans", func(t *testing.T) {
-		_, err := h.uc.Putaway(context.Background(), doc.ID, 8, nil)
+		_, err := h.uc.Putaway(whCtx(10), doc.ID, 8, nil)
 		assertAppErr(t, err, "ERR_VALIDATION")
 	})
 	t.Run("qty exceeds remaining", func(t *testing.T) {
-		_, err := h.uc.Putaway(context.Background(), doc.ID, 8, []PutawayScan{
+		_, err := h.uc.Putaway(whCtx(10), doc.ID, 8, []PutawayScan{
 			{LineID: lines[0].ID, Qty: 11, LocationCode: "PK-01-01"},
 		})
 		assertAppErr(t, err, "ERR_VALIDATION")
 	})
 	t.Run("line not in document", func(t *testing.T) {
-		_, err := h.uc.Putaway(context.Background(), doc.ID, 8, []PutawayScan{
+		_, err := h.uc.Putaway(whCtx(10), doc.ID, 8, []PutawayScan{
 			{LineID: 99999, Qty: 1, LocationCode: "PK-01-01"},
 		})
 		assertAppErr(t, err, "ERR_VALIDATION")
 	})
 	t.Run("location not found", func(t *testing.T) {
-		_, err := h.uc.Putaway(context.Background(), doc.ID, 8, []PutawayScan{
+		_, err := h.uc.Putaway(whCtx(10), doc.ID, 8, []PutawayScan{
 			{LineID: lines[0].ID, Qty: 1, LocationCode: "NOPE"},
 		})
 		assertAppErr(t, err, "ERR_VALIDATION")
 	})
 	t.Run("wrong state", func(t *testing.T) {
-		doc2, _, _ := h.uc.Create(context.Background(), CreateInput{
+		doc2, _, _ := h.uc.Create(whCtx(10), CreateInput{
 			WarehouseID: 10, CreatedBy: 7, Lines: []CreateLineInput{{ItemID: 3, Qty: 5}},
 		})
-		_, err := h.uc.Putaway(context.Background(), doc2.ID, 8, []PutawayScan{
+		_, err := h.uc.Putaway(whCtx(10), doc2.ID, 8, []PutawayScan{
 			{LineID: lines[0].ID, Qty: 1, LocationCode: "PK-01-01"},
 		})
 		assertAppErr(t, err, "ERR_INVALID_STATE")
@@ -913,4 +927,11 @@ func TestPickBestPutaway_CodeTiebreak(t *testing.T) {
 	}
 	best := pickBestPutaway(cands, "C", 1, 2)
 	assert.Equal(t, "B-01", best[0].Location.Code)
+}
+
+// whCtx attaches a warehouse scope to a bare context so transition methods
+// pass the C-02 cross-warehouse guard (authz.AssertDocInWarehouse). Every doc
+// seeded by these tests lives in warehouse 10.
+func whCtx(whID int64) context.Context {
+	return authz.WithWarehouseID(context.Background(), whID)
 }

@@ -271,7 +271,11 @@ func TestCreateLocation_Handler(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
-	err := h.CreateLocation(e.NewContext(req, rec))
+	c := e.NewContext(req, rec)
+	// RBACMiddleware normally injects the authenticated warehouse (C-01);
+	// harness bypasses middleware, so seed the matching warehouse_id.
+	c.Set("warehouse_id", int64(1))
+	err := h.CreateLocation(c)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusCreated, rec.Code)
 }
@@ -282,10 +286,29 @@ func TestListLocations_Handler(t *testing.T) {
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 	c.QueryParams().Set("warehouse_id", "1")
+	// RBACMiddleware normally injects the authenticated warehouse (C-04);
+	// harness bypasses middleware, so seed the matching warehouse_id.
+	c.Set("warehouse_id", int64(1))
 
 	err := h.ListLocations(c)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestListLocations_CrossWarehouseRejected(t *testing.T) {
+	// C-04: a query param pointing at a different warehouse must not widen the
+	// scope — it is rejected instead of returning another warehouse's locations.
+	h, e, _ := newItemHandler()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/locations?warehouse_id=20", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.QueryParams().Set("warehouse_id", "20")
+	c.Set("warehouse_id", int64(1))
+
+	err := h.ListLocations(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+	assert.Contains(t, rec.Body.String(), "ERR_WAREHOUSE_MISMATCH")
 }
 
 func TestListLocations_MissingWarehouseID(t *testing.T) {

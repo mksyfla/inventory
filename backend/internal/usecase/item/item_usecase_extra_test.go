@@ -211,16 +211,16 @@ func TestListItems_Error(t *testing.T) {
 
 // ─── Partner (PDP decrypt) ─────────────────────────────────────────────────────
 
-func TestGetPartner_DecryptFailureKeepsValue(t *testing.T) {
-	// Data yang tidak terenkripsi dengan benar → dikembalikan apa adanya
-	// (decrypt gagal tidak mematikan request).
+func TestGetPartner_DecryptFailureRedacts(t *testing.T) {
+	// Data yang tidak terenkripsi dengan benar → ditandai redacted, bukan
+	// ciphertext mentah yang bocor ke klien (M-11).
 	mq := &MockQuerier{partnersMap: map[int64]postgres.MasterPartners{
 		5: {ID: 5, Code: "P-5", ContactName: pgtype.Text{String: "not-encrypted", Valid: true}},
 	}}
 	uc := NewUsecase(mq)
 	p, err := uc.GetPartner(context.Background(), 5)
 	require.NoError(t, err)
-	assert.Equal(t, "not-encrypted", p.ContactName.String) // decrypt gagal → ciphertext tetap
+	assert.Equal(t, redactedValue, p.ContactName.String)
 }
 
 // ─── Category / Warehouse ──────────────────────────────────────────────────────

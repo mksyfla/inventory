@@ -10,6 +10,7 @@ import (
 	"inventory/internal/domain/document"
 	"inventory/internal/domain/stock"
 	"inventory/internal/pkg/apperr"
+	"inventory/internal/pkg/authz"
 	"inventory/internal/pkg/docnum"
 	stockuc "inventory/internal/usecase/stock"
 
@@ -243,6 +244,10 @@ func (u *ReceiptUsecase) Submit(ctx context.Context, id int64) error {
 	if err != nil {
 		return err
 	}
+	// C-02: the caller's warehouse must own the document before any state change.
+	if err := authz.AssertDocInWarehouse(ctx, doc.WarehouseID); err != nil {
+		return err
+	}
 	next, err := doc.Status.Transition(document.StatusSubmitted)
 	if err != nil {
 		return err
@@ -257,6 +262,10 @@ func (u *ReceiptUsecase) Submit(ctx context.Context, id int64) error {
 func (u *ReceiptUsecase) Approve(ctx context.Context, id, approverID int64) error {
 	doc, lines, err := u.docs.GetByID(ctx, id)
 	if err != nil {
+		return err
+	}
+	// C-02: the caller's warehouse must own the document before posting to stock.
+	if err := authz.AssertDocInWarehouse(ctx, doc.WarehouseID); err != nil {
 		return err
 	}
 	if err := document.ValidateApprover(doc.CreatedBy, approverID); err != nil {
@@ -294,7 +303,16 @@ func (u *ReceiptUsecase) Approve(ctx context.Context, id, approverID int64) erro
 		if err := u.posting.PostStockMovementInTx(txCtx, doc.DocNo, inputs); err != nil {
 			return err
 		}
-		return u.docs.UpdateStatus(txCtx, id, next, &approverID)
+		// H-04: compare-and-set the status against what we read. A concurrent
+		// approve that already posted wins; the loser rolls back its posting.
+		ok, err := u.docs.TransitionStatus(txCtx, id, doc.Status, next, &approverID)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return apperr.New("ERR_CONFLICT", "document was already approved")
+		}
+		return nil
 	})
 }
 
@@ -324,6 +342,11 @@ type PutawaySuggestion struct {
 func (u *ReceiptUsecase) SuggestPutaway(ctx context.Context, id int64) ([]PutawaySuggestion, error) {
 	doc, lines, err := u.docs.GetByID(ctx, id)
 	if err != nil {
+		return nil, err
+	}
+	// C-02: putaway layout is warehouse-scoped — never reveal another
+	// warehouse's locations (C-04).
+	if err := authz.AssertDocInWarehouse(ctx, doc.WarehouseID); err != nil {
 		return nil, err
 	}
 	if doc.Status != document.StatusApproved && doc.Status != document.StatusInProgress {
@@ -443,6 +466,10 @@ func (u *ReceiptUsecase) Putaway(ctx context.Context, id, userID int64, scans []
 
 	doc, lines, err := u.docs.GetByID(ctx, id)
 	if err != nil {
+		return "", err
+	}
+	// C-02: the caller's warehouse must own the document before moving stock.
+	if err := authz.AssertDocInWarehouse(ctx, doc.WarehouseID); err != nil {
 		return "", err
 	}
 	if doc.Status != document.StatusApproved && doc.Status != document.StatusInProgress {

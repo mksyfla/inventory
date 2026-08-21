@@ -340,6 +340,7 @@ func (q *Queries) CreateDocumentLine(ctx context.Context, arg CreateDocumentLine
 
 const createItem = `-- name: CreateItem :one
 
+
 INSERT INTO master.items (
     sku, name, category_id, base_uom, is_batch, is_expiry, is_serial,
     min_qty, max_qty, safety_stock, lead_time_days, abc_class, is_active, created_by
@@ -385,6 +386,7 @@ type CreateItemRow struct {
 	CreatedBy    int64              `json:"created_by"`
 }
 
+// H-08: server-side cap for unbounded list endpoints
 // ============ ITEMS & UOMS ============
 func (q *Queries) CreateItem(ctx context.Context, arg CreateItemParams) (CreateItemRow, error) {
 	row := q.db.QueryRow(ctx, createItem,
@@ -742,6 +744,7 @@ func (q *Queries) CreateUserFull(ctx context.Context, arg CreateUserFullParams) 
 }
 
 const createWarehouse = `-- name: CreateWarehouse :one
+
 INSERT INTO master.warehouses (code, name, address, is_active)
 VALUES ($1, $2, $3, $4)
 RETURNING id, code, name, address, is_active
@@ -754,6 +757,7 @@ type CreateWarehouseParams struct {
 	IsActive bool        `json:"is_active"`
 }
 
+// H-08: server-side cap for unbounded list endpoints
 func (q *Queries) CreateWarehouse(ctx context.Context, arg CreateWarehouseParams) (MasterWarehouses, error) {
 	row := q.db.QueryRow(ctx, createWarehouse,
 		arg.Code,
@@ -1148,6 +1152,47 @@ func (q *Queries) GetDocumentByID(ctx context.Context, id int64) (DocDocuments, 
 	return i, err
 }
 
+const getDocumentByIDInWarehouse = `-- name: GetDocumentByIDInWarehouse :one
+SELECT id, public_id, doc_no, doc_type, doc_date, status, warehouse_id, dest_warehouse_id, partner_id, ref_doc_id, reason_code, notes, idempotency_key, created_at, created_by, submitted_at, approved_at, approved_by, completed_at, manager_approved_by, manager_approved_at
+FROM doc.documents
+WHERE id = $1
+  AND (warehouse_id = $2 OR dest_warehouse_id = $2)
+`
+
+type GetDocumentByIDInWarehouseParams struct {
+	ID          int64 `json:"id"`
+	WarehouseID int64 `json:"warehouse_id"`
+}
+
+func (q *Queries) GetDocumentByIDInWarehouse(ctx context.Context, arg GetDocumentByIDInWarehouseParams) (DocDocuments, error) {
+	row := q.db.QueryRow(ctx, getDocumentByIDInWarehouse, arg.ID, arg.WarehouseID)
+	var i DocDocuments
+	err := row.Scan(
+		&i.ID,
+		&i.PublicID,
+		&i.DocNo,
+		&i.DocType,
+		&i.DocDate,
+		&i.Status,
+		&i.WarehouseID,
+		&i.DestWarehouseID,
+		&i.PartnerID,
+		&i.RefDocID,
+		&i.ReasonCode,
+		&i.Notes,
+		&i.IdempotencyKey,
+		&i.CreatedAt,
+		&i.CreatedBy,
+		&i.SubmittedAt,
+		&i.ApprovedAt,
+		&i.ApprovedBy,
+		&i.CompletedAt,
+		&i.ManagerApprovedBy,
+		&i.ManagerApprovedAt,
+	)
+	return i, err
+}
+
 const getDocumentByIDempotencyKey = `-- name: GetDocumentByIDempotencyKey :one
 SELECT id, public_id, doc_no, doc_type, doc_date, status, warehouse_id, dest_warehouse_id, partner_id, ref_doc_id, reason_code, notes, idempotency_key, created_at, created_by, submitted_at, approved_at, approved_by, completed_at, manager_approved_by, manager_approved_at
 FROM doc.documents
@@ -1299,6 +1344,7 @@ func (q *Queries) GetDocumentWarehouse(ctx context.Context, id int64) (GetDocume
 
 const getFsnReport = `-- name: GetFsnReport :many
 
+
 WITH item_mov AS (
     SELECT m.item_id,
            MAX(m.moved_at) AS last_moved,
@@ -1352,6 +1398,7 @@ type GetFsnReportRow struct {
 	TotalValuation   float64            `json:"total_valuation"`
 }
 
+// H-08: server-side cap for unbounded list endpoints
 // ============ REPORTS ============
 // Classifies items by velocity from the movement ledger (Fase 10.x):
 //
@@ -2249,6 +2296,7 @@ func (q *Queries) ListAttachmentsByDocument(ctx context.Context, documentID int6
 }
 
 const listAuditLogs = `-- name: ListAuditLogs :many
+
 SELECT al.id, al.occurred_at, al.user_id, u.username AS actor_username,
        al.action, al.entity, al.entity_id, al.old_value, al.new_value,
        al.ip_address::text, al.request_id
@@ -2277,6 +2325,7 @@ type ListAuditLogsRow struct {
 	RequestID     pgtype.UUID        `json:"request_id"`
 }
 
+// H-08: server-side cap for unbounded list endpoints
 func (q *Queries) ListAuditLogs(ctx context.Context, arg ListAuditLogsParams) ([]ListAuditLogsRow, error) {
 	rows, err := q.db.Query(ctx, listAuditLogs, arg.Limit, arg.Offset)
 	if err != nil {
@@ -2395,6 +2444,7 @@ SELECT id, code, name, is_active
 FROM master.categories
 WHERE is_active = TRUE
 ORDER BY name
+LIMIT 1000
 `
 
 func (q *Queries) ListCategories(ctx context.Context) ([]MasterCategories, error) {
@@ -2713,6 +2763,7 @@ const listItems = `-- name: ListItems :many
 SELECT id, public_id, sku, name, category_id, base_uom, is_batch, is_expiry, is_serial, min_qty, max_qty, safety_stock, lead_time_days, abc_class, is_active
 FROM master.items
 ORDER BY sku
+LIMIT 1000
 `
 
 type ListItemsRow struct {
@@ -2774,6 +2825,7 @@ SELECT id, warehouse_id, code, zone, rack, level, loc_type, pick_seq, capacity, 
 FROM master.locations
 WHERE warehouse_id = $1
 ORDER BY code
+LIMIT 1000
 `
 
 func (q *Queries) ListLocations(ctx context.Context, warehouseID int64) ([]MasterLocations, error) {
@@ -2811,6 +2863,7 @@ const listPartners = `-- name: ListPartners :many
 SELECT id, code, partner_type, name, address, contact_name, contact_phone, is_active
 FROM master.partners
 ORDER BY code
+LIMIT 1000
 `
 
 func (q *Queries) ListPartners(ctx context.Context) ([]MasterPartners, error) {
@@ -2844,6 +2897,7 @@ func (q *Queries) ListPartners(ctx context.Context) ([]MasterPartners, error) {
 
 const listPermissions = `-- name: ListPermissions :many
 SELECT id, code FROM sec.permissions ORDER BY code
+LIMIT 1000
 `
 
 func (q *Queries) ListPermissions(ctx context.Context) ([]SecPermissions, error) {
@@ -2956,6 +3010,7 @@ func (q *Queries) ListRolePermissions(ctx context.Context) ([]ListRolePermission
 }
 
 const listRoles = `-- name: ListRoles :many
+
 SELECT r.id, r.code, r.name, r.description,
        COALESCE(array_agg(DISTINCT p.code) FILTER (WHERE p.code IS NOT NULL), '{}')::text[] AS permissions
 FROM sec.roles r
@@ -2963,6 +3018,7 @@ LEFT JOIN sec.role_permissions rp ON rp.role_id = r.id
 LEFT JOIN sec.permissions p ON p.id = rp.permission_id
 GROUP BY r.id
 ORDER BY r.code
+LIMIT 1000
 `
 
 type ListRolesRow struct {
@@ -2973,6 +3029,7 @@ type ListRolesRow struct {
 	Permissions []string    `json:"permissions"`
 }
 
+// H-08: server-side cap for unbounded list endpoints
 func (q *Queries) ListRoles(ctx context.Context) ([]ListRolesRow, error) {
 	rows, err := q.db.Query(ctx, listRoles)
 	if err != nil {
@@ -3001,6 +3058,7 @@ func (q *Queries) ListRoles(ctx context.Context) ([]ListRolesRow, error) {
 
 const listSettings = `-- name: ListSettings :many
 SELECT key, value, updated_by, updated_at FROM sec.settings ORDER BY key
+LIMIT 1000
 `
 
 func (q *Queries) ListSettings(ctx context.Context) ([]SecSettings, error) {
@@ -3450,6 +3508,7 @@ LEFT JOIN sec.roles r ON r.id = ur.role_id
 LEFT JOIN master.warehouses w ON w.id = ur.warehouse_id
 GROUP BY u.id
 ORDER BY u.id
+LIMIT 1000
 `
 
 type ListUsersRow struct {
@@ -3524,6 +3583,7 @@ func (q *Queries) ListWarehouseCodes(ctx context.Context) ([]string, error) {
 const listWarehouses = `-- name: ListWarehouses :many
 SELECT id, code, name, address, is_active FROM master.warehouses
 ORDER BY code
+LIMIT 1000
 `
 
 func (q *Queries) ListWarehouses(ctx context.Context) ([]MasterWarehouses, error) {
@@ -3553,6 +3613,7 @@ func (q *Queries) ListWarehouses(ctx context.Context) ([]MasterWarehouses, error
 }
 
 const softDeleteItem = `-- name: SoftDeleteItem :one
+
 UPDATE master.items
 SET is_active = FALSE, updated_at = NOW(), updated_by = $2
 WHERE id = $1
@@ -3569,11 +3630,42 @@ type SoftDeleteItemRow struct {
 	IsActive bool  `json:"is_active"`
 }
 
+// H-08: server-side cap for unbounded list endpoints
 func (q *Queries) SoftDeleteItem(ctx context.Context, arg SoftDeleteItemParams) (SoftDeleteItemRow, error) {
 	row := q.db.QueryRow(ctx, softDeleteItem, arg.ID, arg.UpdatedBy)
 	var i SoftDeleteItemRow
 	err := row.Scan(&i.ID, &i.IsActive)
 	return i, err
+}
+
+const transitionDocumentStatus = `-- name: TransitionDocumentStatus :execrows
+UPDATE doc.documents
+SET status = $3::doc.doc_status,
+    submitted_at = CASE WHEN $3::doc.doc_status = 'submitted' THEN NOW() ELSE submitted_at END,
+    approved_at  = CASE WHEN $3::doc.doc_status = 'approved' THEN NOW() ELSE approved_at END,
+    approved_by  = CASE WHEN $3::doc.doc_status = 'approved' THEN $4 ELSE approved_by END,
+    completed_at = CASE WHEN $3::doc.doc_status = 'completed' THEN NOW() ELSE completed_at END
+WHERE id = $1 AND status = $2::doc.doc_status
+`
+
+type TransitionDocumentStatusParams struct {
+	ID         int64       `json:"id"`
+	Column2    interface{} `json:"column_2"`
+	Column3    interface{} `json:"column_3"`
+	ApprovedBy pgtype.Int8 `json:"approved_by"`
+}
+
+func (q *Queries) TransitionDocumentStatus(ctx context.Context, arg TransitionDocumentStatusParams) (int64, error) {
+	result, err := q.db.Exec(ctx, transitionDocumentStatus,
+		arg.ID,
+		arg.Column2,
+		arg.Column3,
+		arg.ApprovedBy,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const updateAllocationPicked = `-- name: UpdateAllocationPicked :exec
@@ -3804,6 +3896,7 @@ func (q *Queries) UpdateItem(ctx context.Context, arg UpdateItemParams) (UpdateI
 }
 
 const updateLocation = `-- name: UpdateLocation :one
+
 UPDATE master.locations
 SET code = $2, zone = $3, rack = $4, level = $5, loc_type = $6, pick_seq = $7, capacity = $8, is_active = $9
 WHERE id = $1
@@ -3822,6 +3915,7 @@ type UpdateLocationParams struct {
 	IsActive bool           `json:"is_active"`
 }
 
+// H-08: server-side cap for unbounded list endpoints
 func (q *Queries) UpdateLocation(ctx context.Context, arg UpdateLocationParams) (MasterLocations, error) {
 	row := q.db.QueryRow(ctx, updateLocation,
 		arg.ID,
@@ -3851,6 +3945,7 @@ func (q *Queries) UpdateLocation(ctx context.Context, arg UpdateLocationParams) 
 }
 
 const updatePartner = `-- name: UpdatePartner :one
+
 UPDATE master.partners
 SET code = $2, partner_type = $3, name = $4, address = $5, contact_name = $6, contact_phone = $7, is_active = $8
 WHERE id = $1
@@ -3868,6 +3963,7 @@ type UpdatePartnerParams struct {
 	IsActive     bool        `json:"is_active"`
 }
 
+// H-08: server-side cap for unbounded list endpoints
 func (q *Queries) UpdatePartner(ctx context.Context, arg UpdatePartnerParams) (MasterPartners, error) {
 	row := q.db.QueryRow(ctx, updatePartner,
 		arg.ID,
@@ -4073,6 +4169,7 @@ func (q *Queries) UpsertDocumentNumber(ctx context.Context, arg UpsertDocumentNu
 }
 
 const upsertSetting = `-- name: UpsertSetting :one
+
 INSERT INTO sec.settings (key, value, updated_by, updated_at)
 VALUES ($1, $2, $3, now())
 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_by = EXCLUDED.updated_by, updated_at = now()
@@ -4085,6 +4182,7 @@ type UpsertSettingParams struct {
 	UpdatedBy pgtype.Int8 `json:"updated_by"`
 }
 
+// H-08: server-side cap for unbounded list endpoints
 func (q *Queries) UpsertSetting(ctx context.Context, arg UpsertSettingParams) (SecSettings, error) {
 	row := q.db.QueryRow(ctx, upsertSetting, arg.Key, arg.Value, arg.UpdatedBy)
 	var i SecSettings

@@ -208,8 +208,14 @@ func (h *ItemHandler) CreateLocation(c echo.Context) error {
 		return nil
 	}
 
+	// C-01: body warehouse_id must match the authenticated warehouse.
+	whID, ok := warehouseIDFromCtx(c)
+	if !ok || req.WarehouseID != whID {
+		return warehouseMismatch(c)
+	}
+
 	in := itemuc.CreateLocationInput{
-		WarehouseID: req.WarehouseID,
+		WarehouseID: whID,
 		Code:        req.Code,
 		Zone:        req.Zone,
 		Rack:        req.Rack,
@@ -235,6 +241,12 @@ func (h *ItemHandler) ListLocations(c echo.Context) error {
 	warehouseID, err := strconv.ParseInt(warehouseIDStr, 10, 64)
 	if err != nil || warehouseID <= 0 {
 		return queryValidationError(c, "warehouse_id", "must be a positive integer")
+	}
+
+	// C-04: the query param may only select the authenticated warehouse — it
+	// must never widen to locations in another warehouse.
+	if whID, ok := warehouseIDFromCtx(c); !ok || warehouseID != whID {
+		return warehouseMismatch(c)
 	}
 
 	locations, err := h.uc.ListLocations(c.Request().Context(), warehouseID)
@@ -338,4 +350,21 @@ func (h *ItemHandler) ListCategories(c echo.Context) error {
 func userIDFromCtx(c echo.Context) int64 {
 	id, _ := c.Get("user_id").(int64)
 	return id
+}
+
+// warehouseIDFromCtx returns the numeric warehouse ID resolved by the RBAC
+// middleware from the X-Warehouse-Id header. This is the authoritative
+// warehouse scope (C-01) — handlers must use it instead of a client-supplied
+// body/query warehouse_id. ok is false when the middleware did not set it
+// (e.g. unit tests that call handlers directly).
+func warehouseIDFromCtx(c echo.Context) (int64, bool) {
+	id, ok := c.Get("warehouse_id").(int64)
+	return id, ok
+}
+
+// warehouseMismatch is the shared 403 for when a request body/query warehouse
+// contradicts the authenticated warehouse.
+func warehouseMismatch(c echo.Context) error {
+	return response.Error(c, http.StatusForbidden, "ERR_WAREHOUSE_MISMATCH",
+		"warehouse_id does not match the authenticated warehouse", nil, reqID(c))
 }

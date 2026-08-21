@@ -84,6 +84,12 @@ type DocumentRepository interface {
 	// UpdateStatus moves the header to status; approvedBy must be set only
 	// when status == StatusApproved (writes approved_by/approved_at).
 	UpdateStatus(ctx context.Context, id int64, status Status, approvedBy *int64) error
+	// TransitionStatus is the compare-and-set status write (H-04): the UPDATE
+	// is guarded by `AND status = expected`, so a concurrent transition that
+	// already committed wins and this one returns ok=false. Transitions that
+	// post stock must treat ok=false as a conflict and roll back, so the loser
+	// of the race never double-posts.
+	TransitionStatus(ctx context.Context, id int64, expected, next Status, approvedBy *int64) (bool, error)
 	// UpdateLinePutaway records the newly put-away quantity and the target
 	// location on a line.
 	UpdateLinePutaway(ctx context.Context, lineID int64, qtyProcessed float64, locationID int64) error

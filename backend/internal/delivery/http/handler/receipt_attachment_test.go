@@ -12,6 +12,7 @@ import (
 	"inventory/internal/delivery/http/dto"
 	"inventory/internal/delivery/http/response"
 	"inventory/internal/domain/document"
+	"inventory/internal/pkg/authz"
 	"inventory/internal/pkg/validation"
 
 	"github.com/labstack/echo/v4"
@@ -45,6 +46,12 @@ func serveReceiptAttachment(t *testing.T, h *ReceiptHandler, method, path string
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 	c.Set("user_id", userID)
+	// RBACMiddleware normally injects the authenticated warehouse here (C-01
+	// handler check + C-02 usecase guards). The harness bypasses middleware, so
+	// seed warehouse 10 — every document these tests touch lives there.
+	c.Set("warehouse_id", int64(10))
+	ctx := authz.WithWarehouseID(c.Request().Context(), 10)
+	c.SetRequest(c.Request().WithContext(ctx))
 
 	rest := strings.TrimPrefix(path, "/api/v1/receipts")
 	rest = strings.TrimPrefix(rest, "/")

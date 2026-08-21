@@ -6,6 +6,7 @@ import (
 
 	"inventory/internal/domain/document"
 	"inventory/internal/pkg/apperr"
+	"inventory/internal/pkg/authz"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -107,6 +108,10 @@ func (u *OutboundUsecase) SubmitDelivery(ctx context.Context, id int64) error {
 	if err != nil {
 		return err
 	}
+	// C-02: the caller's warehouse must own the document before any state change.
+	if err := authz.AssertDocInWarehouse(ctx, doc.WarehouseID); err != nil {
+		return err
+	}
 	if doc.DocType != document.DocTypeDO {
 		return apperr.New("ERR_NOT_FOUND", "delivery order not found")
 	}
@@ -123,6 +128,10 @@ func (u *OutboundUsecase) SubmitDelivery(ctx context.Context, id int64) error {
 func (u *OutboundUsecase) ApproveDelivery(ctx context.Context, id, approverID int64) error {
 	doc, _, err := u.docs.GetByID(ctx, id)
 	if err != nil {
+		return err
+	}
+	// C-02: the caller's warehouse must own the document before any state change.
+	if err := authz.AssertDocInWarehouse(ctx, doc.WarehouseID); err != nil {
 		return err
 	}
 	if doc.DocType != document.DocTypeDO {

@@ -19,9 +19,10 @@ import {
   FieldTimeOutlined,
 } from '@ant-design/icons';
 import { FsnItem, FsnCategory, getFsnCategoryTagColor } from '../../types/report';
-import { MOCK_CATEGORIES } from '../../types/item';
 import { useQuery } from '@tanstack/react-query';
 import { reportService } from '../../api/services/reports';
+import { itemService } from '../../api/services/items';
+import { CategoryDTO } from '../../api/dto';
 import { mapFsnReportDTO } from '../../api/mappers';
 
 const { Title, Paragraph, Text } = Typography;
@@ -38,6 +39,11 @@ export const FsnAnalysisPage: React.FC = () => {
       const dtos = await reportService.fsn();
       return dtos.map(mapFsnReportDTO);
     },
+  });
+
+  const { data: categories = [] } = useQuery<CategoryDTO[]>({
+    queryKey: ['categories'],
+    queryFn: () => itemService.listCategories(),
   });
 
   const filteredFsn = fsnReports.filter((item) => {
@@ -229,8 +235,8 @@ export const FsnAnalysisPage: React.FC = () => {
                 style={{ width: '100%' }}
                 data-testid="select-item-category"
                 options={[
-                  { value: 'all', label: 'Semua Kategori Barang' },
-                  ...MOCK_CATEGORIES.map((c) => ({ value: c.name, label: c.name })),
+                  { value: 'all', label: 'Semua Kategori' },
+                  ...categories.map((c) => ({ value: c.name, label: c.name })),
                 ]}
               />
             </Col>

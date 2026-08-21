@@ -1,7 +1,9 @@
 package middleware
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -135,7 +137,7 @@ func TestRBACMiddleware_Allowed(t *testing.T) {
 	token := makeTokenFor(t, 1, []string{"staff"}, []string{"WH01"})
 	c, rec := setupRBACContext(t, e, token, "WH01")
 
-	handler := RBACMiddleware(enforcer, "receipts", "create")(func(c echo.Context) error {
+	handler := RBACMiddleware(enforcer, "receipts", "create", nil)(func(c echo.Context) error {
 		return c.NoContent(http.StatusOK)
 	})
 
@@ -152,7 +154,7 @@ func TestRBACMiddleware_Forbidden_WrongWarehouse(t *testing.T) {
 	token := makeTokenFor(t, 1, []string{"staff"}, []string{"WH01"})
 	c, rec := setupRBACContext(t, e, token, "WH99") // wrong warehouse
 
-	handler := RBACMiddleware(enforcer, "receipts", "create")(func(c echo.Context) error {
+	handler := RBACMiddleware(enforcer, "receipts", "create", nil)(func(c echo.Context) error {
 		return c.NoContent(http.StatusOK)
 	})
 	_ = handler(c)
@@ -171,7 +173,7 @@ func TestRBACMiddleware_MissingWarehouseHeader(t *testing.T) {
 	claims, _ := auth.ParseAccessToken(token, testSecret)
 	c.Set(string(ClaimsKey), claims)
 
-	handler := RBACMiddleware(enforcer, "receipts", "create")(func(c echo.Context) error {
+	handler := RBACMiddleware(enforcer, "receipts", "create", nil)(func(c echo.Context) error {
 		return c.NoContent(http.StatusOK)
 	})
 	_ = handler(c)
@@ -248,7 +250,7 @@ func TestRBACMiddleware_WarehouseNotAssigned(t *testing.T) {
 	token := makeTokenFor(t, 1, []string{"staff"}, []string{"WH01"})
 	c, rec := setupRBACContext(t, e, token, "WH02")
 
-	handler := RBACMiddleware(enforcer, "receipts", "create")(func(c echo.Context) error {
+	handler := RBACMiddleware(enforcer, "receipts", "create", nil)(func(c echo.Context) error {
 		return c.NoContent(http.StatusOK)
 	})
 	_ = handler(c)
@@ -267,7 +269,7 @@ func TestRBACMiddleware_NoPolicyButAssigned(t *testing.T) {
 	token := makeTokenFor(t, 1, []string{"staff"}, []string{"WH01"})
 	c, rec := setupRBACContext(t, e, token, "WH01")
 
-	handler := RBACMiddleware(enforcer, "receipts", "create")(func(c echo.Context) error {
+	handler := RBACMiddleware(enforcer, "receipts", "create", nil)(func(c echo.Context) error {
 		return c.NoContent(http.StatusOK)
 	})
 	_ = handler(c)
@@ -298,7 +300,11 @@ func TestRateLimitMiddleware_WindowExpires(t *testing.T) {
 	require.NoError(t, req())
 }
 
-func TestRateLimitMiddleware_WindowRefreshedByActivity(t *testing.T) {
+// TestRateLimitMiddleware_WindowNotRefreshedByActivity pins the H-02 fixed-window
+// semantics: the TTL is armed once per window (on the first request), NOT re-armed
+// on every request. A blocked client therefore recovers `window` after the burst
+// began instead of being locked out permanently.
+func TestRateLimitMiddleware_WindowNotRefreshedByActivity(t *testing.T) {
 	store := redisclient.NewInMemoryStore()
 	e := echo.New()
 
@@ -311,11 +317,11 @@ func TestRateLimitMiddleware_WindowRefreshedByActivity(t *testing.T) {
 		return handler(e.NewContext(r, rec))
 	}
 
-	require.NoError(t, req())          // count=1
+	require.NoError(t, req())          // count=1, window armed (expires ~100ms)
 	time.Sleep(60 * time.Millisecond)
-	require.NoError(t, req())          // count=2, window refreshed by this request
-	time.Sleep(60 * time.Millisecond)  // 120ms since first, but only 60ms since last
-	require.Error(t, req())            // still limited — TTL was re-armed on request 2
+	require.NoError(t, req())          // count=2, window NOT re-armed by activity
+	time.Sleep(60 * time.Millisecond)  // ~120ms since first request → window expired
+	require.NoError(t, req())          // fresh window (count=1 again) → allowed; no permanent lockout
 }
 
 func TestJWTAuthMiddleware_AcceptTokenFromCookie(t *testing.T) {
@@ -350,4 +356,74 @@ func TestJWTAuthMiddleware_NoTokenAnywhere(t *testing.T) {
 	})
 	_ = handler(c)
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+}
+
+// ─── Access-Token Revocation (H-03) ──────────────────────────────────────────
+
+func TestRevokedTokenMiddleware_AllowsValidToken(t *testing.T) {
+	e := echo.New()
+	token := makeTokenFor(t, 1, []string{"staff"}, []string{"WH01"})
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	// JWTAuthMiddleware populates the claims the revocation middleware reads.
+	_ = JWTAuthMiddleware(testSecret)(func(c echo.Context) error {
+		store := redisclient.NewInMemoryStore()
+		called := false
+		_ = RevokedTokenMiddleware(store)(func(c echo.Context) error {
+			called = true
+			return c.NoContent(http.StatusOK)
+		})(c)
+		assert.True(t, called)
+		assert.Equal(t, http.StatusOK, rec.Code)
+		return nil
+	})(c)
+}
+
+func TestRevokedTokenMiddleware_RejectsDenylistedToken(t *testing.T) {
+	e := echo.New()
+	store := redisclient.NewInMemoryStore()
+	token := makeTokenFor(t, 1, []string{"staff"}, []string{"WH01"})
+	claims, err := auth.ParseAccessToken(token, testSecret)
+	require.NoError(t, err)
+	require.NoError(t, DenyAccessToken(context.Background(), store, claims.UserID, claims.ID, time.Minute))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	_ = JWTAuthMiddleware(testSecret)(func(c echo.Context) error {
+		return RevokedTokenMiddleware(store)(func(c echo.Context) error {
+			return c.NoContent(http.StatusOK)
+		})(c)
+	})(c)
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+}
+
+// errExistsStore fails Exists so the fail-closed revocation path is testable.
+type errExistsStore struct {
+	*redisclient.InMemoryStore
+}
+
+func (errExistsStore) Exists(context.Context, string) (bool, error) {
+	return false, errors.New("redis down")
+}
+
+func TestRevokedTokenMiddleware_FailClosedOnStoreError(t *testing.T) {
+	e := echo.New()
+	token := makeTokenFor(t, 1, []string{"staff"}, []string{"WH01"})
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	_ = JWTAuthMiddleware(testSecret)(func(c echo.Context) error {
+		return RevokedTokenMiddleware(errExistsStore{redisclient.NewInMemoryStore()})(func(c echo.Context) error {
+			return c.NoContent(http.StatusOK)
+		})(c)
+	})(c)
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
 }

@@ -11,8 +11,8 @@ import { authService } from "../api/services/auth";
 const { Title, Text } = Typography;
 
 const loginSchema = z.object({
-    username: z.string().min(3, "Username minimal 3 karakter"),
-    password: z.string().min(6, "Kata sandi minimal 6 karakter"),
+    username: z.string().min(1, "Username wajib diisi"),
+    password: z.string().min(1, "Kata sandi wajib diisi"),
     mfaCode: z.string().optional(),
     rememberMe: z.boolean().optional(),
 });
@@ -37,9 +37,9 @@ export const LoginPage: React.FC = () => {
     } = useForm<LoginFormValues>({
         resolver: zodResolver(loginSchema),
         defaultValues: {
-            username: "admin",
-            password: "Admin@123456",
-            rememberMe: true,
+            username: "",
+            password: "",
+            rememberMe: false,
         },
     });
 

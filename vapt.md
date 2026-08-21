@@ -249,3 +249,35 @@ docker run --rm aquasec/trivy:latest image \
 | SEC-06 | No TLS / HSTS                        | **LOW**      | §2-E1, §3.1      | QA_REPORT.md §10.3 |
 
 Positive controls (RBAC, `alg=none`/wrong-secret rejection, rate limiting, security headers, SQLi/XSS resistance, Argon2id) are catalogued in `QA_REPORT.md` §10.4.
+
+---
+
+## 5. Post-remediation verification (2026-08-20)
+
+After the `BACKEND-AUDIT.md` findings were fixed, the API image was rebuilt
+(`docker compose build api`) and recreated, and a **live black-box pentest**
+was re-run against the fixed stack to prove the mitigations hold at runtime.
+Script: `backend/vapt/live_pentest.sh`.
+
+| Check | Target finding | Request | Result |
+| ----- | -------------- | ------- | ------ |
+| Cross-warehouse write | **C-01** | `POST /receipts` as WH01-only user, body `warehouse_id: 2` | 403 `ERR_WAREHOUSE_MISMATCH` ✅ |
+| Legit create control | C-01 | same user, body `warehouse_id: 1` (own WH) | 201 Created ✅ |
+| IDOR document detail | **C-03** | WH01-only user `GET /documents/2` (a WH02 doc) | 404 (SQL-scoped, never confirms existence) ✅ |
+| Query narrowing | **C-04** | WH01 header + `?warehouse_id=2` | 403 — param may only repeat the enforced value ✅ |
+| Query narrowing control | C-04 | WH01 header + `?warehouse_id=1` | 200, only WH01 rows returned ✅ |
+| Access-token revocation | **H-03** | logout, then replay the same access token | 401 (JTI denylist) ✅ |
+| Refresh-reuse family revoke | **M-03** | refresh session A, replay A, then use sibling B | A→401, B→401 (whole family purged) ✅ |
+| Login rate limit | **H-02** | brute-force burst on unknown username | 429 after budget exhausted ✅ |
+| Registration gate | **C-07** | `POST /auth/register` (APP_ENV=development) | 201 — works in dev; 403 in staging/prod is enforced by `config.go`/router gating (unit-tested) ✅ |
+
+**Result: 12/12 checks passed, 0 failed.**
+
+Notes:
+- The pentest user session (`receiving`, WH01-only) was used as the cross-warehouse
+  actor; `admin` (WH01+WH02) fetched the WH02 document id as the control.
+- Rate-limiter state (Redis `rate:*`, `login-user:*` keys) was reset between
+  runs; a 429 mid-run is the limiter working, not a fault.
+- Registration C-07: the running stack is `APP_ENV=development`, so the live
+  gate is "allow". The production 403 path is exercised by the unit test
+  (`TestRegister_BlockedInProduction`) and the router gating of the public route.

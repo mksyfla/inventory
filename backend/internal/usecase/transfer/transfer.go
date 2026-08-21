@@ -11,6 +11,7 @@ import (
 	"inventory/internal/domain/document"
 	"inventory/internal/domain/stock"
 	"inventory/internal/pkg/apperr"
+	"inventory/internal/pkg/authz"
 	"inventory/internal/pkg/docnum"
 	stockuc "inventory/internal/usecase/stock"
 
@@ -22,6 +23,7 @@ type docStore interface {
 	GetByID(ctx context.Context, id int64) (*document.Document, []*document.DocumentLine, error)
 	Create(ctx context.Context, doc *document.Document, lines []*document.DocumentLine) error
 	UpdateStatus(ctx context.Context, id int64, status document.Status, approvedBy *int64) error
+	TransitionStatus(ctx context.Context, id int64, expected, next document.Status, approvedBy *int64) (bool, error)
 	GetByIDempotencyKey(ctx context.Context, key string) (*document.Document, error)
 	NextSequence(ctx context.Context, docType, period string) (int64, error)
 	CreateTransferReceipt(ctx context.Context, rec *document.TransferReceipt) error
@@ -241,6 +243,10 @@ func (u *TransferUsecase) SubmitTransfer(ctx context.Context, id int64) error {
 	if err != nil {
 		return err
 	}
+	// C-02: only the SOURCE warehouse may submit/approve/send a transfer.
+	if err := authz.AssertDocInWarehouse(ctx, doc.WarehouseID); err != nil {
+		return err
+	}
 	if doc.DocType != document.DocTypeTransfer {
 		return apperr.New("ERR_NOT_FOUND", "transfer not found")
 	}
@@ -257,6 +263,10 @@ func (u *TransferUsecase) SubmitTransfer(ctx context.Context, id int64) error {
 func (u *TransferUsecase) ApproveTransfer(ctx context.Context, id, approverID int64) error {
 	doc, _, err := u.docs.GetByID(ctx, id)
 	if err != nil {
+		return err
+	}
+	// C-02: only the SOURCE warehouse may submit/approve/send a transfer.
+	if err := authz.AssertDocInWarehouse(ctx, doc.WarehouseID); err != nil {
 		return err
 	}
 	if doc.DocType != document.DocTypeTransfer {
@@ -281,6 +291,10 @@ func (u *TransferUsecase) ApproveTransfer(ctx context.Context, id, approverID in
 func (u *TransferUsecase) SendTransfer(ctx context.Context, id, userID int64) (document.Status, error) {
 	doc, lines, err := u.docs.GetByID(ctx, id)
 	if err != nil {
+		return "", err
+	}
+	// C-02: only the SOURCE warehouse may submit/approve/send a transfer.
+	if err := authz.AssertDocInWarehouse(ctx, doc.WarehouseID); err != nil {
 		return "", err
 	}
 	if doc.DocType != document.DocTypeTransfer {
@@ -395,7 +409,16 @@ func (u *TransferUsecase) SendTransfer(ctx context.Context, id, userID int64) (d
 		if err != nil {
 			return err
 		}
-		return u.docs.UpdateStatus(txCtx, id, next, nil)
+		// H-04: only one sender may issue the stock — a concurrent send that
+		// already moved the doc to in_progress wins; the loser rolls back.
+		ok, err := u.docs.TransitionStatus(txCtx, id, doc.Status, next, nil)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return apperr.New("ERR_CONFLICT", "transfer was already sent")
+		}
+		return nil
 	})
 	if err != nil {
 		return "", err
@@ -435,6 +458,13 @@ func (u *TransferUsecase) ReceiveTransfer(ctx context.Context, id int64, in Rece
 	doc, lines, err := u.docs.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
+	}
+	// C-02: receiving is done by the DESTINATION warehouse (a transfer spans two
+	// warehouses by design). A nil destination is invalid downstream.
+	if doc.DestWarehouseID != nil {
+		if err := authz.AssertDocInWarehouse(ctx, *doc.DestWarehouseID); err != nil {
+			return nil, err
+		}
 	}
 	if doc.DocType != document.DocTypeTransfer {
 		return nil, apperr.New("ERR_NOT_FOUND", "transfer not found")
@@ -565,8 +595,14 @@ func (u *TransferUsecase) ReceiveTransfer(ctx context.Context, id int64, in Rece
 		if err != nil {
 			return err
 		}
-		if err := u.docs.UpdateStatus(txCtx, id, next, nil); err != nil {
+		// H-04: only one receive may complete the transfer — a concurrent
+		// receive that already moved the doc wins; the loser rolls back.
+		ok, err := u.docs.TransitionStatus(txCtx, id, doc.Status, next, nil)
+		if err != nil {
 			return err
+		}
+		if !ok {
+			return apperr.New("ERR_CONFLICT", "transfer was already received")
 		}
 		// Selisih (barang kurang dari yang dikirim) → log audit severity
 		// critical sebagai pemicu notifikasi darurat (FR-5.1).

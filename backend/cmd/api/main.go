@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"inventory/internal/config"
@@ -47,17 +49,45 @@ func main() {
 		slog.String("port", cfg.Port),
 	)
 
-	if cfg.JWTSecret == "super-secret-key" {
-		log.Warn("using default JWT secret — set JWT_SECRET before any non-development deployment")
-	}
+	// C-06: config.Load now hard-fails when secrets are absent or known
+	// constants, so no default-secret warning is needed here.
 
 	ctx := context.Background()
 
-	// 3. Init Redis store
-	store := redisclient.New(cfg.RedisAddr)
+	// 3. Init Redis store. Redis holds refresh sessions and rate-limit state,
+	// so auth, DB select and pool sizing are wired from config (M-05), not a
+	// bare address. TLS is intentionally left nil: use `rediss://` in the
+	// REDIS_ADDR for TLS-terminated connections.
+	store := redisclient.NewWithOptions(redisclient.Options{
+		Addr:        cfg.RedisAddr,
+		Username:    cfg.RedisUser,
+		Password:    cfg.RedisPassword,
+		DB:          cfg.RedisDB,
+		PoolSize:    cfg.RedisPoolSize,
+		DialTimeout: 5 * time.Second,
+		ReadTimeout: 3 * time.Second,
+		WriteTimeout: 3 * time.Second,
+	})
 
-	// 4. Init PostgreSQL connection pool and sqlc queries
-	pool, err := pgxpool.New(ctx, cfg.DBConnString)
+	// 4. Init PostgreSQL connection pool with capacity knobs and sqlc queries
+	poolCfg, err := pgxpool.ParseConfig(cfg.DBConnString)
+	if err != nil {
+		log.Error("failed to parse database config", slog.Any("error", err))
+		os.Exit(1)
+	}
+	poolCfg.MaxConns = int32(cfg.DBPoolMax)
+	if poolCfg.MaxConns <= 0 {
+		poolCfg.MaxConns = 10
+	}
+	poolCfg.MinConns = int32(cfg.DBPoolMin)
+	if poolCfg.MinConns <= 0 {
+		poolCfg.MinConns = 2
+	}
+	poolCfg.MaxConnLifetime = 30 * time.Minute
+	poolCfg.MaxConnIdleTime = 5 * time.Minute
+	poolCfg.HealthCheckPeriod = 1 * time.Minute
+
+	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {
 		log.Error("failed to create database pool", slog.Any("error", err))
 		os.Exit(1)
@@ -237,7 +267,7 @@ func main() {
 	)
 
 	// 7. Init domain usecases (Fase 3)
-	itemUsecase := itemuc.NewUsecase(queries)
+	itemUsecase := itemuc.NewUsecase(queries, itemuc.WithAESKey([]byte(cfg.AESKey)))
 	txRunner := postgres.NewPostgresTxRunner(pool)
 	stockUsecase := stockuc.NewPostingUsecase(
 		postgres.NewPostgresStockRepository(pool),
@@ -322,8 +352,18 @@ func main() {
 		AppEnv:          cfg.AppEnv,
 		Enforcer:        enforcer,
 		Store:           store,
-		LookupUser:      lookupUserByUsername,
-		LookupUserByID:  lookupUserByID,
+		LookupUser: lookupUserByUsername,
+		// Resolve the active warehouse code (header) to its numeric ID once per
+		// request so handlers can scope writes by the authoritative warehouse
+		// instead of trusting a client-supplied body/query warehouse_id (C-01).
+		ResolveWarehouseID: func(ctx context.Context, code string) (int64, error) {
+			wh, err := queries.GetWarehouseByCode(ctx, code)
+			if err != nil {
+				return 0, err
+			}
+			return wh.ID, nil
+		},
+		LookupUserByID: lookupUserByID,
 		CreateUser:      createUser,
 		ItemUsecase:     itemUsecase,
 		StockUsecase:    stockUsecase,
@@ -352,9 +392,25 @@ func main() {
 		IdleTimeout:       60 * time.Second,
 		MaxHeaderBytes:    1 << 20, // 1 MiB
 	}
-	log.Info("Starting HTTP API Server...", slog.String("addr", srv.Addr))
-	if err := router.StartServer(srv); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Error("API server stopped", slog.Any("error", err))
-		os.Exit(1)
+
+	go func() {
+		log.Info("Starting HTTP API Server...", slog.String("addr", srv.Addr))
+		if err := router.StartServer(srv); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Error("API server error", slog.Any("error", err))
+		}
+	}()
+
+	// Graceful shutdown on SIGINT / SIGTERM (H-07)
+	quit, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	<-quit.Done()
+
+	log.Info("Shutting down API server gracefully...")
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Error("Server forced to shutdown", slog.Any("error", err))
+	} else {
+		log.Info("API server gracefully stopped")
 	}
 }

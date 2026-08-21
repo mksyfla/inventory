@@ -11,6 +11,7 @@ import (
 	"inventory/internal/domain/document"
 	"inventory/internal/domain/stock"
 	"inventory/internal/pkg/apperr"
+	"inventory/internal/pkg/authz"
 	"inventory/internal/pkg/docnum"
 	stockuc "inventory/internal/usecase/stock"
 
@@ -98,6 +99,19 @@ func (m *mockDocs) UpdateStatus(ctx context.Context, id int64, status document.S
 	}
 	m.statuses = append(m.statuses, mockStatusUpdate{id: id, status: status, approvedBy: approvedBy})
 	return nil
+}
+
+func (m *mockDocs) TransitionStatus(ctx context.Context, id int64, expected, next document.Status, approvedBy *int64) (bool, error) {
+	doc := m.docs[id]
+	if doc.Status != expected {
+		return false, nil
+	}
+	doc.Status = next
+	if approvedBy != nil {
+		doc.ApprovedBy = approvedBy
+	}
+	m.statuses = append(m.statuses, mockStatusUpdate{id: id, status: next, approvedBy: approvedBy})
+	return true, nil
 }
 
 func (m *mockDocs) NextSequence(ctx context.Context, docType, period string) (int64, error) {
@@ -412,7 +426,7 @@ func TestCreateCount_Snapshot(t *testing.T) {
 		{ItemID: 2, LocationID: 102, QtyOnhand: 30},
 	}
 
-	doc, lines, err := h.uc.CreateCount(context.Background(), CreateCountInput{
+	doc, lines, err := h.uc.CreateCount(whCtx(10), CreateCountInput{
 		WarehouseID: 10,
 		CreatedBy:   5,
 		Notes:       "opname zona A",
@@ -436,7 +450,7 @@ func TestCreateCount_ItemScope(t *testing.T) {
 		{ItemID: 1, LocationID: 101, QtyOnhand: 50},
 		{ItemID: 2, LocationID: 102, QtyOnhand: 30},
 	}
-	_, lines, err := h.uc.CreateCount(context.Background(), CreateCountInput{
+	_, lines, err := h.uc.CreateCount(whCtx(10), CreateCountInput{
 		WarehouseID: 10,
 		CreatedBy:   5,
 		ItemIDs:     []int64{2},
@@ -449,7 +463,7 @@ func TestCreateCount_ItemScope(t *testing.T) {
 func TestCreateCount_ValidationAndIdempotency(t *testing.T) {
 	h := newHarness(t)
 	h.stdMaster()
-	ctx := context.Background()
+	ctx := whCtx(10)
 
 	t.Run("inactive warehouse", func(t *testing.T) {
 		h.wh.warehouses[99] = &WarehouseInfo{ID: 99, Code: "WHX", IsActive: false}
@@ -475,7 +489,7 @@ func TestInputCountLines_ComputesVariance(t *testing.T) {
 	h.stdMaster()
 	h.seedCount(document.StatusDraft, 5, map[int64]float64{1: 100, 2: 50})
 
-	lines, err := h.uc.InputCountLines(context.Background(), 1, InputCountInput{
+	lines, err := h.uc.InputCountLines(whCtx(10), 1, InputCountInput{
 		UserID: 7,
 		Lines: []InputCountLineInput{
 			{CountLineID: 1, QtyCounted: 95, ReasonCode: "hilang"},
@@ -498,7 +512,7 @@ func TestInputCountLines_ComputesVariance(t *testing.T) {
 func TestInputCountLines_Validation(t *testing.T) {
 	h := newHarness(t)
 	h.stdMaster()
-	ctx := context.Background()
+	ctx := whCtx(10)
 
 	t.Run("unknown count line", func(t *testing.T) {
 		h.seedCount(document.StatusDraft, 5, map[int64]float64{1: 100})
@@ -525,7 +539,7 @@ func TestInputCountLines_Validation(t *testing.T) {
 		isAppErr(t, err, "ERR_INVALID_STATE")
 	})
 	t.Run("wrong doc type", func(t *testing.T) {
-		doc := &document.Document{DocType: document.DocTypeAdjust, Status: document.StatusDraft, CreatedBy: 5}
+		doc := &document.Document{DocType: document.DocTypeAdjust, Status: document.StatusDraft, WarehouseID: 10, CreatedBy: 5}
 		h.docs.seed(doc, nil)
 		_, err := h.uc.InputCountLines(ctx, doc.ID, InputCountInput{UserID: 7, Lines: []InputCountLineInput{{CountLineID: 1, QtyCounted: 1}}})
 		isAppErr(t, err, "ERR_NOT_FOUND")
@@ -543,7 +557,7 @@ func TestPostCount_LowValue(t *testing.T) {
 	h.docs.lines[1][0].QtyCounted = f64Ptr(95)
 	h.docs.lines[1][0].Variance = f64Ptr(-5)
 
-	result, err := h.uc.PostCount(context.Background(), 1, PostCountInput{ApproverID: 9})
+	result, err := h.uc.PostCount(whCtx(10), 1, PostCountInput{ApproverID: 9})
 	require.NoError(t, err)
 	assert.Equal(t, document.StatusCompleted, result.Status)
 	assert.False(t, result.NeedsManagerApproval)
@@ -560,7 +574,7 @@ func TestPostCount_LowValue(t *testing.T) {
 	assert.Equal(t, "CNT/WH01/2608/00001", mv.DocNo)
 
 	// approved_by recorded (maker 5, approver 9)
-	doc, _, _ := h.docs.GetByID(context.Background(), 1)
+	doc, _, _ := h.docs.GetByID(whCtx(10), 1)
 	assert.Equal(t, document.StatusCompleted, doc.Status)
 	require.NotNil(t, doc.ApprovedBy)
 	assert.Equal(t, int64(9), *doc.ApprovedBy)
@@ -569,7 +583,7 @@ func TestPostCount_LowValue(t *testing.T) {
 func TestPostCount_HighValueNeedsManager(t *testing.T) {
 	h := newHarness(t)
 	h.stdMaster()
-	ctx := context.Background()
+	ctx := whCtx(10)
 
 	setup := func() int64 {
 		h.seedCount(document.StatusDraft, 5, map[int64]float64{1: 100})
@@ -612,7 +626,7 @@ func TestPostCount_HighValueNeedsManager(t *testing.T) {
 func TestPostCount_Validation(t *testing.T) {
 	h := newHarness(t)
 	h.stdMaster()
-	ctx := context.Background()
+	ctx := whCtx(10)
 
 	t.Run("incomplete count rejected", func(t *testing.T) {
 		h.seedCount(document.StatusDraft, 5, map[int64]float64{1: 100})
@@ -643,12 +657,12 @@ func TestPostCount_ShortageRollback(t *testing.T) {
 	h.docs.lines[1][0].Variance = f64Ptr(-50)
 	h.stock.addBalance(&stock.StockBalance{ItemID: 1, LocationID: 101, Status: stock.StatusAvailable, QtyOnhand: 30})
 
-	_, err := h.uc.PostCount(context.Background(), 1, PostCountInput{ApproverID: 9})
+	_, err := h.uc.PostCount(whCtx(10), 1, PostCountInput{ApproverID: 9})
 	isAppErr(t, err, "ERR_STOCK_INSUFFICIENT")
 
 	// rollback: status unchanged, no movements
 	assert.Len(t, h.stock.movements, 0)
-	doc, _, _ := h.docs.GetByID(context.Background(), 1)
+	doc, _, _ := h.docs.GetByID(whCtx(10), 1)
 	assert.Equal(t, document.StatusDraft, doc.Status)
 }
 
@@ -662,7 +676,7 @@ func TestCreateAdjustment_Success(t *testing.T) {
 	h.stock.addBalance(&stock.StockBalance{ItemID: 1, LocationID: 101, Status: stock.StatusDamaged, QtyOnhand: 50})
 	h.stock.addBalance(&stock.StockBalance{ItemID: 2, LocationID: 102, Status: stock.StatusAvailable, QtyOnhand: 20})
 
-	doc, err := h.uc.CreateAdjustment(context.Background(), CreateAdjustmentInput{
+	doc, err := h.uc.CreateAdjustment(whCtx(10), CreateAdjustmentInput{
 		WarehouseID: 10,
 		ReasonCode:  "RUSAK",
 		Notes:       "Barang rusak ditemukan di rak A-1 saat inspeksi harian",
@@ -695,7 +709,7 @@ func TestPostCount_WrongDocType(t *testing.T) {
 	do := &document.Document{DocType: document.DocTypeAdjust, Status: document.StatusDraft, WarehouseID: 10, CreatedBy: 5}
 	h.docs.seed(do, nil)
 
-	_, err := h.uc.PostCount(context.Background(), do.ID, PostCountInput{ApproverID: 9})
+	_, err := h.uc.PostCount(whCtx(10), do.ID, PostCountInput{ApproverID: 9})
 	isAppErr(t, err, "ERR_NOT_FOUND")
 }
 
@@ -711,7 +725,7 @@ func TestPostCount_UnneededManagerApprovalAccepted(t *testing.T) {
 
 	// Manager ikut diisi meski tidak wajib → tetap divalidasi (harus beda dari
 	// maker dan approver) dan sesi tetap diposting.
-	result, err := h.uc.PostCount(context.Background(), 1, PostCountInput{ApproverID: 9, ManagerApproverID: &manager})
+	result, err := h.uc.PostCount(whCtx(10), 1, PostCountInput{ApproverID: 9, ManagerApproverID: &manager})
 	require.NoError(t, err)
 	assert.False(t, result.NeedsManagerApproval)
 	assert.Equal(t, document.StatusCompleted, result.Status)
@@ -725,7 +739,7 @@ func TestPostCount_ZeroVariancePostsNothing(t *testing.T) {
 	h.docs.lines[1][0].QtyCounted = f64Ptr(100)
 	h.docs.lines[1][0].Variance = f64Ptr(0)
 
-	result, err := h.uc.PostCount(context.Background(), 1, PostCountInput{ApproverID: 9})
+	result, err := h.uc.PostCount(whCtx(10), 1, PostCountInput{ApproverID: 9})
 	require.NoError(t, err)
 	assert.Equal(t, document.StatusCompleted, result.Status)
 	assert.Equal(t, 0, result.PostedAdjustmentLines)
@@ -735,7 +749,7 @@ func TestPostCount_ZeroVariancePostsNothing(t *testing.T) {
 func TestCreateAdjustment_ExtraValidation(t *testing.T) {
 	h := newHarness(t)
 	h.stdMaster()
-	ctx := context.Background()
+	ctx := whCtx(10)
 	base := CreateAdjustmentInput{
 		WarehouseID: 10,
 		ReasonCode:  "RUSAK",
@@ -776,7 +790,7 @@ func TestCreateAdjustment_Validation(t *testing.T) {
 	h := newHarness(t)
 	h.stdMaster()
 	h.stock.addBalance(&stock.StockBalance{ItemID: 1, LocationID: 101, Status: stock.StatusAvailable, QtyOnhand: 50})
-	ctx := context.Background()
+	ctx := whCtx(10)
 	base := CreateAdjustmentInput{
 		WarehouseID: 10,
 		ReasonCode:  "RUSAK",
@@ -825,4 +839,11 @@ func TestCreateAdjustment_Validation(t *testing.T) {
 		assert.Equal(t, first.ID, replay.ID)
 		assert.Len(t, h.docs.createdDoc, 1, "no second document must be created")
 	})
+}
+
+// whCtx attaches a warehouse scope to a bare context so transition methods
+// pass the C-02 cross-warehouse guard (authz.AssertDocInWarehouse). Every count
+// session / adjustment seeded by these tests lives in warehouse 10.
+func whCtx(whID int64) context.Context {
+	return authz.WithWarehouseID(context.Background(), whID)
 }

@@ -19,6 +19,7 @@ import (
 
 	"inventory/internal/domain/stock"
 	"inventory/internal/pkg/apperr"
+	"inventory/internal/pkg/authz"
 	"inventory/internal/pkg/docnum"
 	"inventory/internal/repository/postgres"
 	inbounduc "inventory/internal/usecase/inbound"
@@ -301,6 +302,98 @@ func TestMakerChecker_DBConstraint(t *testing.T) {
 	assert.Contains(t, err.Error(), "chk_maker_checker")
 }
 
+// TestDocumentStatusChange_IsAudited pins the H-12 fix: a DB trigger writes an
+// audit row inside the same transaction as every doc.documents status change —
+// covering approve/ship/post/receive/count/adjust/transfer without touching a
+// usecase — and the row commits or rolls back WITH the state change.
+func TestDocumentStatusChange_IsAudited(t *testing.T) {
+	f := startDB(t)
+	whID := f.whID("WH01")
+
+	// Insert a document already at 'submitted' (INSERT does not fire the
+	// AFTER UPDATE trigger — only the transition below is audited).
+	_, err := f.pool.Exec(f.ctx, `
+		INSERT INTO doc.documents (doc_no, doc_type, doc_date, status, warehouse_id, created_by, submitted_at)
+		VALUES ('IT/AUDIT-1', 'GRN', CURRENT_DATE, 'submitted', $1, 1, NOW())`, whID)
+	require.NoError(t, err)
+
+	var docID int64
+	require.NoError(t, f.pool.QueryRow(f.ctx,
+		`SELECT id FROM doc.documents WHERE doc_no = 'IT/AUDIT-1'`).Scan(&docID))
+
+	// Transition submitted → approved, actor = approver (maker-checker: != creator).
+	_, err = f.pool.Exec(f.ctx, `
+		UPDATE doc.documents SET status = 'approved', approved_at = NOW(), approved_by = 2
+		WHERE id = $1`, docID)
+	require.NoError(t, err)
+
+	// The audit row carries old/new status, entity + id, and the acting user.
+	var action, entity string
+	var entityID int64
+	var userID, oldStatus, newStatus, docNo, docType string
+	require.NoError(t, f.pool.QueryRow(f.ctx, `
+		SELECT al.action, al.entity, al.entity_id, al.user_id,
+		       al.old_value->>'status', al.new_value->>'status',
+		       al.new_value->>'doc_no', al.new_value->>'doc_type'
+		FROM aud.audit_logs al
+		WHERE al.entity = 'document' AND al.entity_id = $1
+		ORDER BY al.id DESC LIMIT 1`, docID).Scan(
+		&action, &entity, &entityID, &userID, &oldStatus, &newStatus, &docNo, &docType))
+	require.NoError(t, err)
+	assert.Equal(t, "document.status_change", action)
+	assert.Equal(t, "document", entity)
+	assert.Equal(t, docID, entityID)
+	assert.Equal(t, "2", userID, "actor must be the approver, not the creator")
+	assert.Equal(t, "submitted", oldStatus)
+	assert.Equal(t, "approved", newStatus)
+	assert.Equal(t, "IT/AUDIT-1", docNo)
+	assert.Equal(t, "GRN", docType)
+
+	// A no-op status update must NOT mint another audit row (WHEN clause).
+	_, err = f.pool.Exec(f.ctx,
+		`UPDATE doc.documents SET status = 'approved' WHERE id = $1`, docID)
+	require.NoError(t, err)
+	var auditCount int
+	require.NoError(t, f.pool.QueryRow(f.ctx,
+		`SELECT count(*) FROM aud.audit_logs WHERE entity = 'document' AND entity_id = $1`, docID).Scan(&auditCount))
+	assert.Equal(t, 1, auditCount, "no-op status update must not be audited")
+}
+
+// TestDocumentStatusChange_AuditRollsBackWithStateChange pins the in-transaction
+// requirement of H-12: an audit row for a transition that is rolled back must
+// not survive — the audit must be committed atomically with the state change.
+func TestDocumentStatusChange_AuditRollsBackWithStateChange(t *testing.T) {
+	f := startDB(t)
+	whID := f.whID("WH01")
+
+	_, err := f.pool.Exec(f.ctx, `
+		INSERT INTO doc.documents (doc_no, doc_type, doc_date, status, warehouse_id, created_by, submitted_at)
+		VALUES ('IT/AUDIT-RB', 'GRN', CURRENT_DATE, 'submitted', $1, 1, NOW())`, whID)
+	require.NoError(t, err)
+
+	var docID int64
+	require.NoError(t, f.pool.QueryRow(f.ctx,
+		`SELECT id FROM doc.documents WHERE doc_no = 'IT/AUDIT-RB'`).Scan(&docID))
+
+	tx, err := f.pool.Begin(f.ctx)
+	require.NoError(t, err)
+	_, err = tx.Exec(f.ctx, `
+		UPDATE doc.documents SET status = 'approved', approved_at = NOW(), approved_by = 2
+		WHERE id = $1`, docID)
+	require.NoError(t, err)
+	require.NoError(t, tx.Rollback(f.ctx)) // transition + its audit row vanish together
+
+	var auditCount int
+	require.NoError(t, f.pool.QueryRow(f.ctx,
+		`SELECT count(*) FROM aud.audit_logs WHERE entity = 'document' AND entity_id = $1`, docID).Scan(&auditCount))
+	assert.Zero(t, auditCount, "rolled-back transition must leave no audit row")
+
+	var status string
+	require.NoError(t, f.pool.QueryRow(f.ctx,
+		`SELECT status::text FROM doc.documents WHERE id = $1`, docID).Scan(&status))
+	assert.Equal(t, "submitted", status)
+}
+
 // TestMakerChecker_ReceiptFlowUsecase drives the full GRN lifecycle through
 // the real usecase + repository stack: create (maker) → submit →
 // approve-by-creator must fail, approve-by-another-user succeeds and posts
@@ -309,6 +402,10 @@ func TestMakerChecker_ReceiptFlowUsecase(t *testing.T) {
 	f := startDB(t)
 	whID := f.whID("WH01")
 	itemID := f.itemID("SKU-001") // batch + expiry managed
+
+	// C-02: transition methods require the authenticated warehouse scope that
+	// RBACMiddleware would normally inject; the usecase harness bypasses HTTP.
+	ctx := authz.WithWarehouseID(f.ctx, whID)
 
 	queries := postgres.New(f.pool)
 	txRunner := postgres.NewPostgresTxRunner(f.pool)
@@ -336,7 +433,7 @@ func TestMakerChecker_ReceiptFlowUsecase(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "draft", string(doc.Status))
 
-	require.NoError(t, receiptUC.Submit(f.ctx, doc.ID))
+	require.NoError(t, receiptUC.Submit(ctx, doc.ID))
 
 	// Re-read the document from the DB — the in-memory object is the draft.
 	var dbStatus string
@@ -345,13 +442,13 @@ func TestMakerChecker_ReceiptFlowUsecase(t *testing.T) {
 	assert.Equal(t, "submitted", dbStatus)
 
 	// Maker must not approve their own document (BR-05).
-	err = receiptUC.Approve(f.ctx, doc.ID, 1)
+	err = receiptUC.Approve(ctx, doc.ID, 1)
 	var ap *apperr.AppError
 	require.ErrorAs(t, err, &ap)
 	assert.Equal(t, "ERR_SELF_APPROVAL", ap.Code)
 
 	// A different user approves → document approved and stock posted.
-	require.NoError(t, receiptUC.Approve(f.ctx, doc.ID, 2))
+	require.NoError(t, receiptUC.Approve(ctx, doc.ID, 2))
 
 	var onhand float64
 	require.NoError(t, f.pool.QueryRow(f.ctx, `

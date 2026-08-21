@@ -8,6 +8,7 @@ import (
 
 	"inventory/internal/domain/document"
 	"inventory/internal/pkg/apperr"
+	"inventory/internal/pkg/authz"
 	"inventory/internal/pkg/docnum"
 	stockuc "inventory/internal/usecase/stock"
 
@@ -215,6 +216,10 @@ func (u *OutboundUsecase) SubmitRequest(ctx context.Context, id int64) error {
 	if err != nil {
 		return err
 	}
+	// C-02: the caller's warehouse must own the document before any state change.
+	if err := authz.AssertDocInWarehouse(ctx, doc.WarehouseID); err != nil {
+		return err
+	}
 	if doc.DocType != document.DocTypeRequest {
 		return apperr.New("ERR_NOT_FOUND", "request not found")
 	}
@@ -231,6 +236,10 @@ func (u *OutboundUsecase) SubmitRequest(ctx context.Context, id int64) error {
 func (u *OutboundUsecase) ApproveRequest(ctx context.Context, id, approverID int64) error {
 	doc, _, err := u.docs.GetByID(ctx, id)
 	if err != nil {
+		return err
+	}
+	// C-02: the caller's warehouse must own the document before any state change.
+	if err := authz.AssertDocInWarehouse(ctx, doc.WarehouseID); err != nil {
 		return err
 	}
 	if doc.DocType != document.DocTypeRequest {

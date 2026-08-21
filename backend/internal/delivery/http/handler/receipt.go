@@ -45,8 +45,15 @@ func (h *ReceiptHandler) CreateReceipt(c echo.Context) error {
 		}
 	}
 
+	// C-01: the body warehouse_id must be the authenticated warehouse. The
+	// header (resolved to a numeric ID by the RBAC middleware) is authoritative.
+	whID, ok := warehouseIDFromCtx(c)
+	if !ok || req.WarehouseID != whID {
+		return warehouseMismatch(c)
+	}
+
 	in := inbound.CreateInput{
-		WarehouseID:    req.WarehouseID,
+		WarehouseID:    whID,
 		PartnerID:      req.PartnerID,
 		IdempotencyKey: req.IdempotencyKey,
 		Notes:          req.Notes,
