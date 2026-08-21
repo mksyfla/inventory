@@ -11,6 +11,7 @@ import (
 	"inventory/internal/domain/document"
 	"inventory/internal/domain/stock"
 	"inventory/internal/pkg/apperr"
+	"inventory/internal/pkg/authz"
 	"inventory/internal/pkg/docnum"
 	stockuc "inventory/internal/usecase/stock"
 
@@ -99,6 +100,19 @@ func (m *mockDocs) UpdateStatus(ctx context.Context, id int64, status document.S
 	}
 	m.statuses = append(m.statuses, mockStatusUpdate{id: id, status: status, approvedBy: approvedBy})
 	return nil
+}
+
+func (m *mockDocs) TransitionStatus(ctx context.Context, id int64, expected, next document.Status, approvedBy *int64) (bool, error) {
+	doc := m.docs[id]
+	if doc.Status != expected {
+		return false, nil
+	}
+	doc.Status = next
+	if approvedBy != nil {
+		doc.ApprovedBy = approvedBy
+	}
+	m.statuses = append(m.statuses, mockStatusUpdate{id: id, status: next, approvedBy: approvedBy})
+	return true, nil
 }
 
 func (m *mockDocs) NextSequence(ctx context.Context, docType, period string) (int64, error) {
@@ -512,19 +526,19 @@ func TestSubmitTransfer(t *testing.T) {
 	h := newHarness(t)
 	dest := int64(20)
 	h.seedTransfer(document.StatusDraft, 5, &dest)
-	ctx := context.Background()
+	ctx := whCtx(10)
 
 	require.NoError(t, h.uc.SubmitTransfer(ctx, 1))
 	doc, _, _ := h.docs.GetByID(ctx, 1)
 	assert.Equal(t, document.StatusSubmitted, doc.Status)
 
 	// wrong doc type
-	other := &document.Document{DocType: document.DocTypeDO, Status: document.StatusDraft, CreatedBy: 5}
+	other := &document.Document{DocType: document.DocTypeDO, Status: document.StatusDraft, WarehouseID: 10, CreatedBy: 5}
 	h.docs.seed(other, nil)
 	isAppErr(t, h.uc.SubmitTransfer(ctx, other.ID), "ERR_NOT_FOUND")
 
 	// invalid transition (draft → submitted again is fine; completed is not reachable)
-	done := &document.Document{DocType: document.DocTypeTransfer, Status: document.StatusCompleted, CreatedBy: 5}
+	done := &document.Document{DocType: document.DocTypeTransfer, Status: document.StatusCompleted, WarehouseID: 10, CreatedBy: 5}
 	h.docs.seed(done, nil)
 	isAppErr(t, h.uc.SubmitTransfer(ctx, done.ID), "ERR_INVALID_STATE")
 }
@@ -533,7 +547,7 @@ func TestApproveTransfer_MakerChecker(t *testing.T) {
 	h := newHarness(t)
 	dest := int64(20)
 	h.seedTransfer(document.StatusSubmitted, 5, &dest)
-	ctx := context.Background()
+	ctx := whCtx(10)
 
 	// self-approval rejected (BR-05)
 	isAppErr(t, h.uc.ApproveTransfer(ctx, 1, 5), "ERR_SELF_APPROVAL")
@@ -558,7 +572,7 @@ func TestSendTransfer_Success(t *testing.T) {
 		{BalanceID: 1, ItemID: 1, LocationID: 100, QtyFree: 250},
 	}
 
-	status, err := h.uc.SendTransfer(context.Background(), 1, 7)
+	status, err := h.uc.SendTransfer(whCtx(10), 1, 7)
 	require.NoError(t, err)
 	assert.Equal(t, document.StatusInProgress, status)
 
@@ -599,7 +613,7 @@ func TestSendTransfer_InsufficientStock(t *testing.T) {
 		{BalanceID: 1, ItemID: 1, LocationID: 100, QtyFree: 40},
 	}
 
-	_, err := h.uc.SendTransfer(context.Background(), 1, 7)
+	_, err := h.uc.SendTransfer(whCtx(10), 1, 7)
 	isAppErr(t, err, "ERR_STOCK_INSUFFICIENT")
 
 	// all-or-nothing: no movements, no status change
@@ -611,7 +625,7 @@ func TestSendTransfer_InsufficientStock(t *testing.T) {
 func TestSendTransfer_StateAndConfig(t *testing.T) {
 	h := newHarness(t)
 	h.stdMaster()
-	ctx := context.Background()
+	ctx := whCtx(10)
 
 	t.Run("draft cannot be sent", func(t *testing.T) {
 		dest := int64(20)
@@ -650,7 +664,7 @@ func TestSendTransfer_BatchPreserved(t *testing.T) {
 		{BalanceID: 1, ItemID: 2, LocationID: 100, BatchID: &batch, QtyFree: 100},
 	}
 
-	status, err := h.uc.SendTransfer(context.Background(), doc.ID, 7)
+	status, err := h.uc.SendTransfer(whCtx(10), doc.ID, 7)
 	require.NoError(t, err)
 	assert.Equal(t, document.StatusInProgress, status)
 
@@ -683,7 +697,7 @@ func TestReceiveTransfer_BatchManaged(t *testing.T) {
 	h.docs.seed(doc, lines)
 	h.stock.addBalance(&stock.StockBalance{ItemID: 2, LocationID: 900, BatchID: &batch, Status: stock.StatusInTransit, QtyOnhand: 30})
 
-	result, err := h.uc.ReceiveTransfer(context.Background(), doc.ID, ReceiveInput{
+	result, err := h.uc.ReceiveTransfer(whCtx(20), doc.ID, ReceiveInput{
 		UserID: 7,
 		Lines: []ReceiveLineInput{
 			{LineID: lines[0].ID, QtyReceived: 30, LocationID: 901, BatchID: &batch},
@@ -712,7 +726,7 @@ func TestReceiveTransfer_Success(t *testing.T) {
 	// in_transit balance at WH02 transit loc (900)
 	h.stock.addBalance(&stock.StockBalance{ItemID: 1, LocationID: 900, Status: stock.StatusInTransit, QtyOnhand: 100})
 
-	result, err := h.uc.ReceiveTransfer(context.Background(), 1, ReceiveInput{
+	result, err := h.uc.ReceiveTransfer(whCtx(20), 1, ReceiveInput{
 		UserID: 7,
 		Lines: []ReceiveLineInput{
 			{LineID: 1, QtyReceived: 100, LocationID: 901}, // bin PK-20-01 di WH02
@@ -753,7 +767,7 @@ func TestReceiveTransfer_ShortageDiscrepancy(t *testing.T) {
 	h.seedTransfer(document.StatusInProgress, 5, &dest)
 	h.stock.addBalance(&stock.StockBalance{ItemID: 1, LocationID: 900, Status: stock.StatusInTransit, QtyOnhand: 100})
 
-	result, err := h.uc.ReceiveTransfer(context.Background(), 1, ReceiveInput{
+	result, err := h.uc.ReceiveTransfer(whCtx(20), 1, ReceiveInput{
 		UserID: 7,
 		Lines: []ReceiveLineInput{
 			{LineID: 1, QtyReceived: 80, LocationID: 901, Notes: "kurang 20 pcs"},
@@ -782,7 +796,7 @@ func TestReceiveTransfer_ShortageDiscrepancy(t *testing.T) {
 func TestReceiveTransfer_Validation(t *testing.T) {
 	h := newHarness(t)
 	h.stdMaster()
-	ctx := context.Background()
+	ctx := whCtx(20)
 	dest := int64(20)
 
 	t.Run("wrong status", func(t *testing.T) {
@@ -831,7 +845,7 @@ func TestReceiveTransfer_InsufficientInTransit(t *testing.T) {
 	dest := int64(20)
 	h.seedTransfer(document.StatusInProgress, 5, &dest)
 	// no in_transit balance at all → posting engine shortage
-	_, err := h.uc.ReceiveTransfer(context.Background(), 1, ReceiveInput{
+	_, err := h.uc.ReceiveTransfer(whCtx(20), 1, ReceiveInput{
 		UserID: 7,
 		Lines:  []ReceiveLineInput{{LineID: 1, QtyReceived: 10, LocationID: 901}},
 	}, &IP)
@@ -849,7 +863,7 @@ func TestSubmitTransfer_WrongDocType(t *testing.T) {
 	do := &document.Document{DocType: document.DocTypeDO, Status: document.StatusDraft, WarehouseID: 10, CreatedBy: 5}
 	h.docs.seed(do, nil)
 
-	err := h.uc.SubmitTransfer(context.Background(), do.ID)
+	err := h.uc.SubmitTransfer(whCtx(10), do.ID)
 	isAppErr(t, err, "ERR_NOT_FOUND")
 }
 
@@ -859,7 +873,7 @@ func TestApproveTransfer_WrongDocType(t *testing.T) {
 	do := &document.Document{DocType: document.DocTypeDO, Status: document.StatusSubmitted, WarehouseID: 10, CreatedBy: 5}
 	h.docs.seed(do, nil)
 
-	err := h.uc.ApproveTransfer(context.Background(), do.ID, 99)
+	err := h.uc.ApproveTransfer(whCtx(10), do.ID, 99)
 	isAppErr(t, err, "ERR_NOT_FOUND")
 }
 
@@ -870,14 +884,14 @@ func TestApproveTransfer_SelfApproval(t *testing.T) {
 	doc, lines := h.seedTransfer(document.StatusSubmitted, 5, &dest)
 	_ = lines
 
-	err := h.uc.ApproveTransfer(context.Background(), doc.ID, 5)
+	err := h.uc.ApproveTransfer(whCtx(10), doc.ID, 5)
 	isAppErr(t, err, "ERR_SELF_APPROVAL")
 }
 
 func TestReceiveTransfer_EdgeValidation(t *testing.T) {
 	h := newHarness(t)
 	h.stdMaster()
-	ctx := context.Background()
+	ctx := whCtx(20)
 	dest := int64(20)
 
 	t.Run("wrong doc type", func(t *testing.T) {
@@ -950,11 +964,19 @@ func TestReceiveTransfer_DiscrepancyWithoutAuditSink(t *testing.T) {
 		docnum.NewGenerator(&mockSeq{}), nil,
 		WithClock(func() time.Time { return testNow }))
 
-	result, err := h.uc.ReceiveTransfer(context.Background(), 1, ReceiveInput{
+	result, err := h.uc.ReceiveTransfer(whCtx(20), 1, ReceiveInput{
 		UserID: 7,
 		Lines:  []ReceiveLineInput{{LineID: 1, QtyReceived: 80, LocationID: 901}},
 	}, &IP)
 	require.NoError(t, err)
 	assert.True(t, result.HasDiscrepancy)
 	assert.Equal(t, document.StatusCompleted, result.Status)
+}
+
+// whCtx attaches a warehouse scope to a bare context so transition methods pass
+// the C-02 cross-warehouse guard (authz.AssertDocInWarehouse). Source-side
+// operations (submit/approve/send) run as warehouse 10; receiving runs as the
+// destination warehouse 20.
+func whCtx(whID int64) context.Context {
+	return authz.WithWarehouseID(context.Background(), whID)
 }

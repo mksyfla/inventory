@@ -41,8 +41,14 @@ func (h *OutboundHandler) CreateRequest(c echo.Context) error {
 		}
 	}
 
+	// C-01: body warehouse_id must match the authenticated warehouse.
+	whID, ok := warehouseIDFromCtx(c)
+	if !ok || req.WarehouseID != whID {
+		return warehouseMismatch(c)
+	}
+
 	in := outbounduc.CreateRequestInput{
-		WarehouseID:    req.WarehouseID,
+		WarehouseID:    whID,
 		PartnerID:      req.PartnerID,
 		IdempotencyKey: req.IdempotencyKey,
 		Notes:          req.Notes,
@@ -111,8 +117,14 @@ func (h *OutboundHandler) CreateDelivery(c echo.Context) error {
 		}
 	}
 
+	// C-01: body warehouse_id must match the authenticated warehouse.
+	whID, ok := warehouseIDFromCtx(c)
+	if !ok || req.WarehouseID != whID {
+		return warehouseMismatch(c)
+	}
+
 	doc, lines, err := h.uc.CreateDelivery(c.Request().Context(), outbounduc.CreateDeliveryInput{
-		WarehouseID:    req.WarehouseID,
+		WarehouseID:    whID,
 		RequestID:      req.RequestID,
 		PartnerID:      req.PartnerID,
 		IdempotencyKey: req.IdempotencyKey,

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"inventory/internal/delivery/http/dto"
+	"inventory/internal/delivery/http/middleware"
 	"inventory/internal/delivery/http/response"
 	"inventory/internal/pkg/auth"
 	redisclient "inventory/internal/pkg/redis"
@@ -106,6 +107,38 @@ func TestLogin_UnknownUser(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
+	_ = h.Login(e.NewContext(req, rec))
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+}
+
+// TestLogin_PerAccountRateLimit pins the H-02 per-(IP, username) login budget:
+// after the account budget is exhausted the handler returns 429, even though
+// the per-IP middleware limiter (not exercised here) would still allow it.
+func TestLogin_PerAccountRateLimit(t *testing.T) {
+	h, e, _ := setupHandler(t)
+
+	login := func() int {
+		body := `{"username":"alice","password":"wrongPassword"}`
+		req := httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.RemoteAddr = "10.0.0.99:5555"
+		rec := httptest.NewRecorder()
+		_ = h.Login(e.NewContext(req, rec))
+		return rec.Code
+	}
+
+	for i := 0; i < loginUsernameMaxReqs; i++ {
+		assert.Equal(t, http.StatusUnauthorized, login(), "attempt %d within budget", i+1)
+	}
+	// 6th attempt from the same IP+username is rejected.
+	assert.Equal(t, http.StatusTooManyRequests, login())
+
+	// A different account from the same IP is NOT throttled by this limiter.
+	body := `{"username":"bob","password":"wrongPassword"}`
+	req := httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "10.0.0.99:5555"
+	rec := httptest.NewRecorder()
 	_ = h.Login(e.NewContext(req, rec))
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
 }
@@ -236,6 +269,33 @@ func TestRefresh_InvalidToken(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
 }
 
+// TestRefresh_ReuseRevokesFamily pins the M-03 fix: replaying a consumed
+// refresh token is treated as compromise — the whole refresh family for that
+// user is purged, so every other active session is signed out too.
+func TestRefresh_ReuseRevokesFamily(t *testing.T) {
+	h, e, _ := setupHandler(t)
+
+	sessionA := loginAndGetTokens(t, h, e)
+	sessionB := loginAndGetTokens(t, h, e)
+
+	refresh := func(token string) int {
+		body := fmt.Sprintf(`{"refresh_token":"%s"}`, token)
+		req := httptest.NewRequest(http.MethodPost, "/auth/refresh", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		_ = h.Refresh(e.NewContext(req, rec))
+		return rec.Code
+	}
+
+	// First use of A consumes it and is fine.
+	require.Equal(t, http.StatusOK, refresh(sessionA.RefreshToken))
+	// Second use of A is a replay → family revoked.
+	require.Equal(t, http.StatusUnauthorized, refresh(sessionA.RefreshToken))
+	// Session B's refresh token must now be dead too.
+	assert.Equal(t, http.StatusUnauthorized, refresh(sessionB.RefreshToken),
+		"reuse must revoke the entire refresh family, not just the replayed token")
+}
+
 // ─── Logout Tests ─────────────────────────────────────────────────────────────
 
 func TestLogout_Success(t *testing.T) {
@@ -257,6 +317,35 @@ func TestLogout_Success(t *testing.T) {
 	rec2 := httptest.NewRecorder()
 	_ = h.Refresh(e.NewContext(req2, rec2))
 	assert.Equal(t, http.StatusUnauthorized, rec2.Code, "refresh after logout must fail")
+}
+
+// TestLogout_DenylistsAccessToken pins the H-03 fix: logout also denylists the
+// access token's JTI, so the protected middleware chain rejects it immediately
+// instead of leaving it valid for its remaining ~15 minutes.
+func TestLogout_DenylistsAccessToken(t *testing.T) {
+	h, e, store := setupHandler(t)
+	tokens := loginAndGetTokens(t, h, e)
+
+	body := fmt.Sprintf(`{"refresh_token":"%s"}`, tokens.RefreshToken)
+	req := httptest.NewRequest(http.MethodPost, "/auth/logout", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+tokens.AccessToken)
+	rec := httptest.NewRecorder()
+	require.NoError(t, h.Logout(e.NewContext(req, rec)))
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	// The access token must now be denylisted — replay it through the
+	// protected chain (JWTAuth → RevokedToken) and expect 401.
+	req2 := httptest.NewRequest(http.MethodGet, "/", nil)
+	req2.Header.Set("Authorization", "Bearer "+tokens.AccessToken)
+	rec2 := httptest.NewRecorder()
+	c2 := e.NewContext(req2, rec2)
+	_ = middleware.JWTAuthMiddleware(testSecret)(func(c echo.Context) error {
+		return middleware.RevokedTokenMiddleware(store)(func(c echo.Context) error {
+			return c.NoContent(http.StatusOK)
+		})(c)
+	})(c2)
+	assert.Equal(t, http.StatusUnauthorized, rec2.Code, "access token must be rejected after logout")
 }
 
 // ─── Register Tests ────────────────────────────────────────────────────────────

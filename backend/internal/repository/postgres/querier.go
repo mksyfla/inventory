@@ -21,6 +21,7 @@ type Querier interface {
 	CreateCountLine(ctx context.Context, arg CreateCountLineParams) (DocCountLines, error)
 	CreateDocument(ctx context.Context, arg CreateDocumentParams) (CreateDocumentRow, error)
 	CreateDocumentLine(ctx context.Context, arg CreateDocumentLineParams) (DocDocumentLines, error)
+	// H-08: server-side cap for unbounded list endpoints
 	// ============ ITEMS & UOMS ============
 	CreateItem(ctx context.Context, arg CreateItemParams) (CreateItemRow, error)
 	CreateItemUoM(ctx context.Context, arg CreateItemUoMParams) (MasterItemUoms, error)
@@ -34,6 +35,7 @@ type Querier interface {
 	CreateUser(ctx context.Context, arg CreateUserParams) (CreateUserRow, error)
 	// ============ ADMIN WRITE (users / roles / settings) ============
 	CreateUserFull(ctx context.Context, arg CreateUserFullParams) (CreateUserFullRow, error)
+	// H-08: server-side cap for unbounded list endpoints
 	CreateWarehouse(ctx context.Context, arg CreateWarehouseParams) (MasterWarehouses, error)
 	DeleteAttachmentByID(ctx context.Context, id int64) error
 	DeleteItemUoMs(ctx context.Context, itemID int64) error
@@ -60,10 +62,12 @@ type Querier interface {
 	GetDashboardSummary(ctx context.Context) (GetDashboardSummaryRow, error)
 	GetDeliveryByDocument(ctx context.Context, documentID int64) (DocDeliveries, error)
 	GetDocumentByID(ctx context.Context, id int64) (DocDocuments, error)
+	GetDocumentByIDInWarehouse(ctx context.Context, arg GetDocumentByIDInWarehouseParams) (DocDocuments, error)
 	GetDocumentByIDempotencyKey(ctx context.Context, idempotencyKey pgtype.Text) (DocDocuments, error)
 	GetDocumentLinesWithItem(ctx context.Context, documentID int64) ([]GetDocumentLinesWithItemRow, error)
 	GetDocumentPartner(ctx context.Context, id int64) (GetDocumentPartnerRow, error)
 	GetDocumentWarehouse(ctx context.Context, id int64) (GetDocumentWarehouseRow, error)
+	// H-08: server-side cap for unbounded list endpoints
 	// ============ REPORTS ============
 	// Classifies items by velocity from the movement ledger (Fase 10.x):
 	//   fast_moving  : last movement within the last 30 days
@@ -108,6 +112,7 @@ type Querier interface {
 	ListAllocationsByDocument(ctx context.Context, documentID int64) ([]ListAllocationsByDocumentRow, error)
 	// ============ Lampiran Dokumen / GRN attachments (Fase 6 lampiran GRN) ============
 	ListAttachmentsByDocument(ctx context.Context, documentID int64) ([]DocAttachments, error)
+	// H-08: server-side cap for unbounded list endpoints
 	ListAuditLogs(ctx context.Context, arg ListAuditLogsParams) ([]ListAuditLogsRow, error)
 	ListBatchTrace(ctx context.Context, dollar_1 interface{}) ([]ListBatchTraceRow, error)
 	ListCategories(ctx context.Context) ([]MasterCategories, error)
@@ -129,6 +134,7 @@ type Querier interface {
 	ListPutawayCandidates(ctx context.Context, warehouseID int64) ([]ListPutawayCandidatesRow, error)
 	// ============ RBAC (Fase 2.4) ============
 	ListRolePermissions(ctx context.Context) ([]ListRolePermissionsRow, error)
+	// H-08: server-side cap for unbounded list endpoints
 	ListRoles(ctx context.Context) ([]ListRolesRow, error)
 	ListSettings(ctx context.Context) ([]SecSettings, error)
 	// ============ STOCK (balances / batch trace) ============
@@ -147,7 +153,9 @@ type Querier interface {
 	ListUsers(ctx context.Context) ([]ListUsersRow, error)
 	ListWarehouseCodes(ctx context.Context) ([]string, error)
 	ListWarehouses(ctx context.Context) ([]MasterWarehouses, error)
+	// H-08: server-side cap for unbounded list endpoints
 	SoftDeleteItem(ctx context.Context, arg SoftDeleteItemParams) (SoftDeleteItemRow, error)
+	TransitionDocumentStatus(ctx context.Context, arg TransitionDocumentStatusParams) (int64, error)
 	UpdateAllocationPicked(ctx context.Context, arg UpdateAllocationPickedParams) error
 	UpdateBalanceReserved(ctx context.Context, arg UpdateBalanceReservedParams) error
 	UpdateCountLineCounted(ctx context.Context, arg UpdateCountLineCountedParams) error
@@ -157,7 +165,9 @@ type Querier interface {
 	UpdateDocumentReasonCode(ctx context.Context, arg UpdateDocumentReasonCodeParams) error
 	UpdateDocumentStatus(ctx context.Context, arg UpdateDocumentStatusParams) error
 	UpdateItem(ctx context.Context, arg UpdateItemParams) (UpdateItemRow, error)
+	// H-08: server-side cap for unbounded list endpoints
 	UpdateLocation(ctx context.Context, arg UpdateLocationParams) (MasterLocations, error)
+	// H-08: server-side cap for unbounded list endpoints
 	UpdatePartner(ctx context.Context, arg UpdatePartnerParams) (MasterPartners, error)
 	UpdateRole(ctx context.Context, arg UpdateRoleParams) (SecRoles, error)
 	UpdateStockBalanceQty(ctx context.Context, arg UpdateStockBalanceQtyParams) (UpdateStockBalanceQtyRow, error)
@@ -170,6 +180,7 @@ type Querier interface {
 	// Period is computed by the application from the same clock as the document
 	// number so the sequence and the formatted number can never diverge.
 	UpsertDocumentNumber(ctx context.Context, arg UpsertDocumentNumberParams) (int32, error)
+	// H-08: server-side cap for unbounded list endpoints
 	UpsertSetting(ctx context.Context, arg UpsertSettingParams) (SecSettings, error)
 	// ============ STOCK BALANCES & MOVEMENTS ============
 	UpsertStockBalance(ctx context.Context, arg UpsertStockBalanceParams) (UpsertStockBalanceRow, error)

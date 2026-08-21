@@ -15,6 +15,7 @@ import (
 	"inventory/internal/delivery/http/dto"
 	"inventory/internal/domain/document"
 	"inventory/internal/domain/stock"
+	"inventory/internal/pkg/authz"
 	"inventory/internal/pkg/docnum"
 	"inventory/internal/pkg/validation"
 	countinguc "inventory/internal/usecase/counting"
@@ -65,6 +66,15 @@ func (m *tDocs) UpdateStatus(ctx context.Context, id int64, status document.Stat
 		d.Status = status
 	}
 	return nil
+}
+
+func (m *tDocs) TransitionStatus(ctx context.Context, id int64, expected, next document.Status, approvedBy *int64) (bool, error) {
+	d, ok := m.docs[id]
+	if !ok || d.Status != expected {
+		return false, nil
+	}
+	d.Status = next
+	return true, nil
 }
 
 func (m *tDocs) GetByIDempotencyKey(ctx context.Context, key string) (*document.Document, error) {
@@ -195,6 +205,12 @@ func serveTransfer(t *testing.T, h *TransferHandler, method, path string, body a
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 	c.Set("user_id", userID)
+	// RBACMiddleware normally injects the authenticated warehouse here (C-01
+	// handler check + C-02 usecase guards). The harness bypasses middleware, so
+	// seed warehouse 10 — every document these tests touch lives there.
+	c.Set("warehouse_id", int64(10))
+	ctx := authz.WithWarehouseID(c.Request().Context(), 10)
+	c.SetRequest(c.Request().WithContext(ctx))
 	if strings.Contains(path, "/transfers/") {
 		c.SetParamNames("id")
 		c.SetParamValues(strings.Split(path, "/")[4])
@@ -393,6 +409,12 @@ func serveCounting(t *testing.T, h *CountingHandler, method, path string, body a
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 	c.Set("user_id", userID)
+	// RBACMiddleware normally injects the authenticated warehouse here (C-01
+	// handler check + C-02 usecase guards). The harness bypasses middleware, so
+	// seed warehouse 10 — every document these tests touch lives there.
+	c.Set("warehouse_id", int64(10))
+	ctx := authz.WithWarehouseID(c.Request().Context(), 10)
+	c.SetRequest(c.Request().WithContext(ctx))
 	if strings.Contains(path, "/counts/") {
 		c.SetParamNames("id")
 		c.SetParamValues(strings.Split(path, "/")[4])

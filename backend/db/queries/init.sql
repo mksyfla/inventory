@@ -4,7 +4,8 @@ WHERE code = $1 LIMIT 1;
 
 -- name: ListWarehouses :many
 SELECT id, code, name, address, is_active FROM master.warehouses
-ORDER BY code;
+ORDER BY code
+LIMIT 1000; -- H-08: server-side cap for unbounded list endpoints
 
 -- name: CreateWarehouse :one
 INSERT INTO master.warehouses (code, name, address, is_active)
@@ -56,7 +57,8 @@ RETURNING id, code, name, is_active;
 SELECT id, code, name, is_active
 FROM master.categories
 WHERE is_active = TRUE
-ORDER BY name;
+ORDER BY name
+LIMIT 1000; -- H-08: server-side cap for unbounded list endpoints
 
 -- ============ ITEMS & UOMS ============
 
@@ -84,7 +86,8 @@ WHERE id = $1 LIMIT 1;
 -- name: ListItems :many
 SELECT id, public_id, sku, name, category_id, base_uom, is_batch, is_expiry, is_serial, min_qty, max_qty, safety_stock, lead_time_days, abc_class, is_active
 FROM master.items
-ORDER BY sku;
+ORDER BY sku
+LIMIT 1000; -- H-08: server-side cap for unbounded list endpoints
 
 -- name: SoftDeleteItem :one
 UPDATE master.items
@@ -123,7 +126,8 @@ WHERE id = $1 LIMIT 1;
 SELECT id, warehouse_id, code, zone, rack, level, loc_type, pick_seq, capacity, is_active
 FROM master.locations
 WHERE warehouse_id = $1
-ORDER BY code;
+ORDER BY code
+LIMIT 1000; -- H-08: server-side cap for unbounded list endpoints
 
 -- name: UpdateLocation :one
 UPDATE master.locations
@@ -150,7 +154,8 @@ WHERE id = $1 LIMIT 1;
 -- name: ListPartners :many
 SELECT id, code, partner_type, name, address, contact_name, contact_phone, is_active
 FROM master.partners
-ORDER BY code;
+ORDER BY code
+LIMIT 1000; -- H-08: server-side cap for unbounded list endpoints
 
 -- name: UpdatePartner :one
 UPDATE master.partners
@@ -277,6 +282,12 @@ SELECT id, public_id, doc_no, doc_type, doc_date, status, warehouse_id, dest_war
 FROM doc.documents
 WHERE id = $1;
 
+-- name: GetDocumentByIDInWarehouse :one
+SELECT id, public_id, doc_no, doc_type, doc_date, status, warehouse_id, dest_warehouse_id, partner_id, ref_doc_id, reason_code, notes, idempotency_key, created_at, created_by, submitted_at, approved_at, approved_by, completed_at, manager_approved_by, manager_approved_at
+FROM doc.documents
+WHERE id = $1
+  AND (warehouse_id = $2 OR dest_warehouse_id = $2);
+
 -- name: GetDocumentByIDempotencyKey :one
 SELECT id, public_id, doc_no, doc_type, doc_date, status, warehouse_id, dest_warehouse_id, partner_id, ref_doc_id, reason_code, notes, idempotency_key, created_at, created_by, submitted_at, approved_at, approved_by, completed_at, manager_approved_by, manager_approved_at
 FROM doc.documents
@@ -296,6 +307,15 @@ SET status = $2::doc.doc_status,
     approved_by  = CASE WHEN $2::doc.doc_status = 'approved' THEN $3 ELSE approved_by END,
     completed_at = CASE WHEN $2::doc.doc_status = 'completed' THEN NOW() ELSE completed_at END
 WHERE id = $1;
+
+-- name: TransitionDocumentStatus :execrows
+UPDATE doc.documents
+SET status = $3::doc.doc_status,
+    submitted_at = CASE WHEN $3::doc.doc_status = 'submitted' THEN NOW() ELSE submitted_at END,
+    approved_at  = CASE WHEN $3::doc.doc_status = 'approved' THEN NOW() ELSE approved_at END,
+    approved_by  = CASE WHEN $3::doc.doc_status = 'approved' THEN $4 ELSE approved_by END,
+    completed_at = CASE WHEN $3::doc.doc_status = 'completed' THEN NOW() ELSE completed_at END
+WHERE id = $1 AND status = $2::doc.doc_status;
 
 -- name: UpdateDocumentLinePutaway :exec
 UPDATE doc.document_lines
@@ -640,7 +660,8 @@ LEFT JOIN sec.user_roles ur ON ur.user_id = u.id
 LEFT JOIN sec.roles r ON r.id = ur.role_id
 LEFT JOIN master.warehouses w ON w.id = ur.warehouse_id
 GROUP BY u.id
-ORDER BY u.id;
+ORDER BY u.id
+LIMIT 1000; -- H-08: server-side cap for unbounded list endpoints
 
 -- name: ListRoles :many
 SELECT r.id, r.code, r.name, r.description,
@@ -649,7 +670,8 @@ FROM sec.roles r
 LEFT JOIN sec.role_permissions rp ON rp.role_id = r.id
 LEFT JOIN sec.permissions p ON p.id = rp.permission_id
 GROUP BY r.id
-ORDER BY r.code;
+ORDER BY r.code
+LIMIT 1000; -- H-08: server-side cap for unbounded list endpoints
 
 -- name: ListAuditLogs :many
 SELECT al.id, al.occurred_at, al.user_id, u.username AS actor_username,
@@ -707,7 +729,8 @@ RETURNING role_id, permission_id;
 SELECT id, code FROM sec.permissions WHERE code = $1 LIMIT 1;
 
 -- name: ListPermissions :many
-SELECT id, code FROM sec.permissions ORDER BY code;
+SELECT id, code FROM sec.permissions ORDER BY code
+LIMIT 1000; -- H-08: server-side cap for unbounded list endpoints
 
 -- name: UpsertSetting :one
 INSERT INTO sec.settings (key, value, updated_by, updated_at)
@@ -716,7 +739,8 @@ ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_by = EXCLUDED.up
 RETURNING key, value, updated_by, updated_at;
 
 -- name: ListSettings :many
-SELECT key, value, updated_by, updated_at FROM sec.settings ORDER BY key;
+SELECT key, value, updated_by, updated_at FROM sec.settings ORDER BY key
+LIMIT 1000; -- H-08: server-side cap for unbounded list endpoints
 
 -- ============ REPORTS ============
 

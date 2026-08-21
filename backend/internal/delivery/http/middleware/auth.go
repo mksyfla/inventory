@@ -7,6 +7,7 @@ import (
 
 	"inventory/internal/delivery/http/response"
 	"inventory/internal/pkg/auth"
+	"inventory/internal/pkg/authz"
 	"inventory/internal/pkg/logger"
 
 	"github.com/casbin/casbin/v2"
@@ -22,7 +23,17 @@ const (
 	UserIDKey authContextKey = "user_id"
 	// WarehouseCodeKey is the context key for the active warehouse code.
 	WarehouseCodeKey authContextKey = "warehouse_code"
+	// WarehouseIDKey is the context key for the numeric warehouse ID resolved
+	// from the active warehouse code. It is the authoritative warehouse scope
+	// for the data layer (C-01): handlers must use it instead of trusting a
+	// client-supplied body/query warehouse_id.
+	WarehouseIDKey authContextKey = "warehouse_id"
 )
+
+// WarehouseResolver maps an active warehouse code (e.g. "WH01") to its numeric
+// primary key, so the data layer can scope by the ID it stores. It is injected
+// from the composition root; nil skips resolution (test-only routers).
+type WarehouseResolver func(ctx context.Context, code string) (int64, error)
 
 // JWTAuthMiddleware validates the Bearer token from the Authorization header,
 // falling back to the access_token cookie set on login (browser clients).
@@ -65,13 +76,15 @@ func JWTAuthMiddleware(jwtSecret string) echo.MiddlewareFunc {
 	}
 }
 
-// RBACMiddleware authorizes the authenticated user against Casbin for a given resource and action.
-// The active warehouse is extracted from the mandatory X-Warehouse-Id request header.
-func RBACMiddleware(enforcer *casbin.Enforcer, resource, action string) echo.MiddlewareFunc {
+// RBACMiddleware authorizes the authenticated user against Casbin for a given
+// resource and action. The active warehouse is extracted from the mandatory
+// X-Warehouse-Id request header; its numeric ID is resolved once here and made
+// the authoritative scope for the data layer (C-01).
+func RBACMiddleware(enforcer *casbin.Enforcer, resource, action string, resolve WarehouseResolver) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
-			warehouseID := c.Request().Header.Get("X-Warehouse-Id")
-			if warehouseID == "" {
+			warehouseCode := c.Request().Header.Get("X-Warehouse-Id")
+			if warehouseCode == "" {
 				return response.Error(c, http.StatusBadRequest,
 					"ERR_MISSING_WAREHOUSE", "X-Warehouse-Id header is required", nil,
 					reqID(c))
@@ -88,7 +101,7 @@ func RBACMiddleware(enforcer *casbin.Enforcer, resource, action string) echo.Mid
 			// policies alone are role-level and do not encode per-user assignments.
 			assigned := false
 			for _, w := range claims.Warehouses {
-				if w == warehouseID {
+				if w == warehouseCode {
 					assigned = true
 					break
 				}
@@ -102,7 +115,7 @@ func RBACMiddleware(enforcer *casbin.Enforcer, resource, action string) echo.Mid
 			// Check each role the user holds for this warehouse
 			allowed := false
 			for _, role := range claims.Roles {
-				ok, err := enforcer.Enforce(role, warehouseID, resource, action)
+				ok, err := enforcer.Enforce(role, warehouseCode, resource, action)
 				if err != nil {
 					return response.Error(c, http.StatusInternalServerError,
 						"ERR_INTERNAL", "Authorization check failed", nil, reqID(c))
@@ -120,11 +133,24 @@ func RBACMiddleware(enforcer *casbin.Enforcer, resource, action string) echo.Mid
 			}
 
 			// Inject active warehouse code into Echo and request context
-			c.Set(string(WarehouseCodeKey), warehouseID)
+			c.Set(string(WarehouseCodeKey), warehouseCode)
 			ctx := c.Request().Context()
-			ctx = context.WithValue(ctx, WarehouseCodeKey, warehouseID)
-			c.SetRequest(c.Request().WithContext(ctx))
+			ctx = context.WithValue(ctx, WarehouseCodeKey, warehouseCode)
 
+			// Resolve the numeric warehouse ID from the code. Handlers use this
+			// ID (not a client-supplied body/query warehouse_id) for every write.
+			if resolve != nil {
+				whID, err := resolve(ctx, warehouseCode)
+				if err != nil {
+					return response.Error(c, http.StatusInternalServerError,
+						"ERR_INTERNAL", "Failed to resolve active warehouse", nil, reqID(c))
+				}
+				c.Set(string(WarehouseIDKey), whID)
+				// Same value, authz-owned key, so usecase guards (C-02) can read it.
+				ctx = authz.WithWarehouseID(ctx, whID)
+			}
+
+			c.SetRequest(c.Request().WithContext(ctx))
 			return next(c)
 		}
 	}

@@ -8,14 +8,24 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"inventory/internal/delivery/http/dto"
+	"inventory/internal/delivery/http/middleware"
 	"inventory/internal/delivery/http/response"
 	"inventory/internal/pkg/auth"
 	redisclient "inventory/internal/pkg/redis"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/labstack/echo/v4"
+)
+
+// Per-account login budget (H-02): complements the per-IP middleware limiter
+// so an attacker who rotates source IPs still cannot brute-force one account.
+// Stricter than the IP budget (25/15min) by design.
+const (
+	loginUsernameMaxReqs = 5
+	loginUsernameWindow  = 15 * time.Minute
 )
 
 // dummyArgon2idHash is a valid Argon2id hash used to equalize execution time on unknown usernames.
@@ -66,6 +76,9 @@ func (h *AuthHandler) Register(c echo.Context) error {
 
 	passwordHash, err := auth.HashPassword(req.Password)
 	if err != nil {
+		if errors.Is(err, auth.ErrPasswordHashBusy) {
+			return response.Error(c, http.StatusServiceUnavailable, "ERR_SERVICE_UNAVAILABLE", "Registration is busy, try again", nil, reqID(c))
+		}
 		return response.Error(c, http.StatusInternalServerError, "ERR_INTERNAL", "Failed to hash password", nil, reqID(c))
 	}
 
@@ -93,18 +106,30 @@ func (h *AuthHandler) Login(c echo.Context) error {
 		return nil
 	}
 
+	// H-02: per-(IP, username) budget on top of the per-IP middleware limiter.
+	// Runs before the lookup so unknown usernames also consume the budget.
+	if err := h.checkLoginUserRateLimit(c, req.Username); err != nil {
+		return err
+	}
+
 	if h.lookupUser == nil {
 		return response.Error(c, http.StatusInternalServerError, "ERR_INTERNAL", "Auth lookup service is not initialized", nil, reqID(c))
 	}
 
 	userID, passwordHash, roles, warehouses, err := h.lookupUser(c.Request().Context(), req.Username)
 	if err != nil {
-		// Timing attack mitigation (H-11): perform dummy password verification
-		_, _ = auth.VerifyPassword(req.Password, dummyArgon2idHash)
+		// Timing attack mitigation (H-11): perform dummy password verification so
+		// an unknown username costs the same Argon2 derivation as a known one.
+		if _, derr := auth.VerifyPassword(req.Password, dummyArgon2idHash); errors.Is(derr, auth.ErrPasswordHashBusy) {
+			return response.Error(c, http.StatusServiceUnavailable, "ERR_SERVICE_UNAVAILABLE", "Login is busy, try again", nil, reqID(c))
+		}
 		return response.Error(c, http.StatusUnauthorized, "ERR_UNAUTHENTICATED", "Invalid credentials", nil, reqID(c))
 	}
 
 	match, err := auth.VerifyPassword(req.Password, passwordHash)
+	if errors.Is(err, auth.ErrPasswordHashBusy) {
+		return response.Error(c, http.StatusServiceUnavailable, "ERR_SERVICE_UNAVAILABLE", "Login is busy, try again", nil, reqID(c))
+	}
 	if err != nil || !match {
 		return response.Error(c, http.StatusUnauthorized, "ERR_UNAUTHENTICATED", "Invalid credentials", nil, reqID(c))
 	}
@@ -162,7 +187,14 @@ func (h *AuthHandler) Refresh(c echo.Context) error {
 	hashedJTI := hashJTI(claims.ID)
 	redisKey := refreshKey(userID, hashedJTI)
 	exists, err := h.store.Exists(c.Request().Context(), redisKey)
-	if err != nil || !exists {
+	if err != nil {
+		return response.Error(c, http.StatusUnauthorized, "ERR_UNAUTHENTICATED", "Refresh token has been revoked", nil, reqID(c))
+	}
+	if !exists {
+		// M-03: a valid-but-consumed refresh token is the signature of reuse.
+		// Treat it as compromise and revoke the whole family — all active
+		// sessions for this user — rather than just 401-ing the one token.
+		_ = h.store.DelPattern(c.Request().Context(), fmt.Sprintf("refresh:%d:*", userID))
 		return response.Error(c, http.StatusUnauthorized, "ERR_UNAUTHENTICATED", "Refresh token has been revoked", nil, reqID(c))
 	}
 
@@ -222,10 +254,60 @@ func (h *AuthHandler) Logout(c echo.Context) error {
 		}
 	}
 
+	// H-03: denylist the access token's JTI so it stops working immediately
+	// (RevokedTokenMiddleware checks the denylist on every protected request)
+	// instead of remaining valid for its full 15 minutes.
+	if accessToken := accessTokenFromRequest(c); accessToken != "" {
+		if claims, err := auth.ParseAccessToken(accessToken, h.jwtSecret); err == nil {
+			ttl := auth.AccessTokenTTL
+			if claims.ExpiresAt != nil {
+				ttl = time.Until(claims.ExpiresAt.Time)
+			}
+			_ = middleware.DenyAccessToken(c.Request().Context(), h.store, claims.UserID, claims.ID, ttl)
+		}
+	}
+
 	// Expire the auth cookies on the client across all paths
 	clearAuthCookies(c)
 
 	return response.Success(c, http.StatusOK, "logged out", nil)
+}
+
+// accessTokenFromRequest extracts the access token from the Authorization
+// header, falling back to the access_token cookie set on login.
+func accessTokenFromRequest(c echo.Context) string {
+	authHeader := c.Request().Header.Get("Authorization")
+	if strings.HasPrefix(authHeader, "Bearer ") {
+		return strings.TrimPrefix(authHeader, "Bearer ")
+	}
+	if cookie, err := c.Cookie(auth.AccessTokenCookieName); err == nil {
+		return cookie.Value
+	}
+	return ""
+}
+
+// checkLoginUserRateLimit enforces the per-(IP, username) login budget (H-02).
+// It lives in the handler because the username is only known after the body is
+// decoded. Fail-closed: a store outage returns 503 rather than silently
+// disabling brute-force protection. Same fixed-window semantics as the
+// middleware limiter — the TTL is armed once per window, never re-armed.
+func (h *AuthHandler) checkLoginUserRateLimit(c echo.Context, username string) error {
+	key := fmt.Sprintf("login-user:%s:%s", c.RealIP(), strings.ToLower(strings.TrimSpace(username)))
+	ctx := c.Request().Context()
+
+	count, err := h.store.IncrBy(ctx, key, 1)
+	if err != nil {
+		return response.Error(c, http.StatusServiceUnavailable, "ERR_SERVICE_UNAVAILABLE", "Login temporarily unavailable", nil, reqID(c))
+	}
+	if count == 1 {
+		if err := h.store.ExpireNX(ctx, key, loginUsernameWindow); err != nil {
+			return response.Error(c, http.StatusServiceUnavailable, "ERR_SERVICE_UNAVAILABLE", "Login temporarily unavailable", nil, reqID(c))
+		}
+	}
+	if count > loginUsernameMaxReqs {
+		return response.Error(c, http.StatusTooManyRequests, "ERR_RATE_LIMIT", "Too many login attempts, try again later", nil, reqID(c))
+	}
+	return nil
 }
 
 // hashJTI creates a SHA-256 hex digest of a JTI to avoid storing the raw token value.

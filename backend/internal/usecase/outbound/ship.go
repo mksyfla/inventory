@@ -8,6 +8,7 @@ import (
 	"inventory/internal/domain/document"
 	"inventory/internal/domain/stock"
 	"inventory/internal/pkg/apperr"
+	"inventory/internal/pkg/authz"
 )
 
 // ShipInput carries the shipping/surat jalan data (FR-4.5).
@@ -23,6 +24,10 @@ type ShipInput struct {
 func (u *OutboundUsecase) Ship(ctx context.Context, id int64, in ShipInput) (document.Status, error) {
 	doc, _, err := u.docs.GetByID(ctx, id)
 	if err != nil {
+		return "", err
+	}
+	// C-02: the caller's warehouse must own the document before posting the issue.
+	if err := authz.AssertDocInWarehouse(ctx, doc.WarehouseID); err != nil {
 		return "", err
 	}
 	if doc.DocType != document.DocTypeDO {
@@ -132,7 +137,17 @@ func (u *OutboundUsecase) Ship(ctx context.Context, id int64, in ShipInput) (doc
 		}); err != nil {
 			return err
 		}
-		return u.docs.UpdateStatus(txCtx, id, next, nil)
+		// H-04: only one ship may issue the stock — a concurrent ship that
+		// already moved the doc to in_progress wins; the loser rolls back so
+		// it never double-posts the issue ledger rows above.
+		ok, err := u.docs.TransitionStatus(txCtx, id, doc.Status, next, nil)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return apperr.New("ERR_CONFLICT", "delivery order was already shipped")
+		}
+		return nil
 	})
 	return next, err
 }

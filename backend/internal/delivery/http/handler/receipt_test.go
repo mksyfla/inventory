@@ -14,6 +14,7 @@ import (
 	"inventory/internal/delivery/http/response"
 	"inventory/internal/domain/document"
 	"inventory/internal/domain/stock"
+	"inventory/internal/pkg/authz"
 	"inventory/internal/pkg/docnum"
 	"inventory/internal/pkg/validation"
 	inbounduc "inventory/internal/usecase/inbound"
@@ -79,6 +80,15 @@ func (m *hDocRepo) UpdateStatus(ctx context.Context, id int64, status document.S
 	m.docs[id].Status = status
 	m.lastStatus = status
 	return nil
+}
+
+func (m *hDocRepo) TransitionStatus(ctx context.Context, id int64, expected, next document.Status, approvedBy *int64) (bool, error) {
+	if m.docs[id].Status != expected {
+		return false, nil
+	}
+	m.docs[id].Status = next
+	m.lastStatus = next
+	return true, nil
 }
 
 func (m *hDocRepo) UpdateLinePutaway(ctx context.Context, lineID int64, qtyProcessed float64, locationID int64) error {
@@ -269,6 +279,12 @@ func serveReceipt(t *testing.T, h *ReceiptHandler, method, path string, body any
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 	c.Set("user_id", userID)
+	// RBACMiddleware normally injects the authenticated warehouse here (C-01
+	// handler check + C-02 usecase guards). The harness bypasses middleware, so
+	// seed warehouse 10 — every document these tests touch lives there.
+	c.Set("warehouse_id", int64(10))
+	ctx := authz.WithWarehouseID(c.Request().Context(), 10)
+	c.SetRequest(c.Request().WithContext(ctx))
 	// extract :id between "receipts/" and the next "/" ("" for the create route)
 	rest := strings.TrimPrefix(path, "/api/v1/receipts")
 	rest = strings.TrimPrefix(rest, "/")
@@ -348,6 +364,9 @@ func TestCreateReceipt_Handler_HeaderIdempotencyKey(t *testing.T) {
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 	c.Set("user_id", int64(7))
+	// RBACMiddleware normally injects the authenticated warehouse (C-01);
+	// harness bypasses middleware, so seed the matching warehouse_id.
+	c.Set("warehouse_id", int64(10))
 	require.NoError(t, h.CreateReceipt(c))
 	assert.Equal(t, http.StatusCreated, rec.Code)
 	require.Equal(t, "6f1e9b2a-3c4d-4e5f-8a9b-0c1d2e3f4a5b", *docs.docs[1].IdempotencyKey)
@@ -359,6 +378,7 @@ func TestCreateReceipt_Handler_HeaderIdempotencyKey(t *testing.T) {
 	rec2 := httptest.NewRecorder()
 	c2 := e.NewContext(req2, rec2)
 	c2.Set("user_id", int64(7))
+	c2.Set("warehouse_id", int64(10))
 	require.NoError(t, h.CreateReceipt(c2))
 	assert.Equal(t, http.StatusCreated, rec2.Code)
 	resp := decodeEnvelope(t, rec2)

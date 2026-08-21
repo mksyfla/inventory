@@ -35,17 +35,29 @@ func RateLimitMiddlewareWithOptions(store redisclient.KVStore, opts RateLimitOpt
 			ctx := c.Request().Context()
 			key := "rate:" + opts.KeyFn(c)
 
+			// H-02: true fixed window. The TTL is armed exactly once per window —
+			// only the request that opens a fresh window (INCR returns 1) sets it,
+			// via EXPIRE NX. Sustained traffic past the limit never re-arms the
+			// expiry, so a blocked client recovers `window` after the burst began
+			// (the old code re-armed on every request and locked such clients out
+			// permanently). INCR + EXPIRE NX is atomic in the sense that exactly
+			// one request sees count==1 per window and that request owns the NX.
 			count, err := store.IncrBy(ctx, key, 1)
 			if err != nil {
 				if opts.FailClosed {
+					// A Redis outage must not disable brute-force protection.
 					return echo.NewHTTPError(http.StatusServiceUnavailable, "Rate limiter unavailable")
 				}
 				// On non-critical endpoints, fail-open
 				return next(c)
 			}
-
-			// Re-arm or set TTL on initial count
-			_ = store.Expire(ctx, key, opts.Window)
+			if count == 1 {
+				if err := store.ExpireNX(ctx, key, opts.Window); err != nil {
+					if opts.FailClosed {
+						return echo.NewHTTPError(http.StatusServiceUnavailable, "Rate limiter unavailable")
+					}
+				}
+			}
 
 			remaining := opts.MaxReqs - count
 			if remaining < 0 {
@@ -54,6 +66,7 @@ func RateLimitMiddlewareWithOptions(store redisclient.KVStore, opts RateLimitOpt
 
 			c.Response().Header().Set("X-RateLimit-Limit", fmt.Sprintf("%d", opts.MaxReqs))
 			c.Response().Header().Set("X-RateLimit-Remaining", fmt.Sprintf("%d", remaining))
+			c.Response().Header().Set("X-RateLimit-Reset", fmt.Sprintf("%d", int(opts.Window.Seconds())))
 
 			if count > opts.MaxReqs {
 				c.Response().Header().Set("Retry-After", fmt.Sprintf("%d", int(opts.Window.Seconds())))

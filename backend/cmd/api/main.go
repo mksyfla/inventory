@@ -49,14 +49,25 @@ func main() {
 		slog.String("port", cfg.Port),
 	)
 
-	if cfg.JWTSecret == "super-secret-key" {
-		log.Warn("using default JWT secret — set JWT_SECRET before any non-development deployment")
-	}
+	// C-06: config.Load now hard-fails when secrets are absent or known
+	// constants, so no default-secret warning is needed here.
 
 	ctx := context.Background()
 
-	// 3. Init Redis store
-	store := redisclient.New(cfg.RedisAddr)
+	// 3. Init Redis store. Redis holds refresh sessions and rate-limit state,
+	// so auth, DB select and pool sizing are wired from config (M-05), not a
+	// bare address. TLS is intentionally left nil: use `rediss://` in the
+	// REDIS_ADDR for TLS-terminated connections.
+	store := redisclient.NewWithOptions(redisclient.Options{
+		Addr:        cfg.RedisAddr,
+		Username:    cfg.RedisUser,
+		Password:    cfg.RedisPassword,
+		DB:          cfg.RedisDB,
+		PoolSize:    cfg.RedisPoolSize,
+		DialTimeout: 5 * time.Second,
+		ReadTimeout: 3 * time.Second,
+		WriteTimeout: 3 * time.Second,
+	})
 
 	// 4. Init PostgreSQL connection pool with capacity knobs and sqlc queries
 	poolCfg, err := pgxpool.ParseConfig(cfg.DBConnString)
@@ -341,8 +352,18 @@ func main() {
 		AppEnv:          cfg.AppEnv,
 		Enforcer:        enforcer,
 		Store:           store,
-		LookupUser:      lookupUserByUsername,
-		LookupUserByID:  lookupUserByID,
+		LookupUser: lookupUserByUsername,
+		// Resolve the active warehouse code (header) to its numeric ID once per
+		// request so handlers can scope writes by the authoritative warehouse
+		// instead of trusting a client-supplied body/query warehouse_id (C-01).
+		ResolveWarehouseID: func(ctx context.Context, code string) (int64, error) {
+			wh, err := queries.GetWarehouseByCode(ctx, code)
+			if err != nil {
+				return 0, err
+			}
+			return wh.ID, nil
+		},
+		LookupUserByID: lookupUserByID,
 		CreateUser:      createUser,
 		ItemUsecase:     itemUsecase,
 		StockUsecase:    stockUsecase,

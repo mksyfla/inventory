@@ -15,6 +15,7 @@ import (
 	"inventory/internal/delivery/http/response"
 	"inventory/internal/domain/document"
 	"inventory/internal/domain/stock"
+	"inventory/internal/pkg/authz"
 	"inventory/internal/pkg/docnum"
 	"inventory/internal/pkg/validation"
 	outbounduc "inventory/internal/usecase/outbound"
@@ -93,6 +94,17 @@ func (m *oDocs) UpdateStatus(ctx context.Context, id int64, status document.Stat
 		m.docs[id].ApprovedBy = approvedBy
 	}
 	return nil
+}
+
+func (m *oDocs) TransitionStatus(ctx context.Context, id int64, expected, next document.Status, approvedBy *int64) (bool, error) {
+	if m.docs[id].Status != expected {
+		return false, nil
+	}
+	m.docs[id].Status = next
+	if approvedBy != nil {
+		m.docs[id].ApprovedBy = approvedBy
+	}
+	return true, nil
 }
 
 func (m *oDocs) UpdateLinePutaway(ctx context.Context, lineID int64, qtyProcessed float64, locationID int64) error {
@@ -277,6 +289,13 @@ func serveOutbound(t *testing.T, h *OutboundHandler, method, path string, body a
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 	c.Set("user_id", userID)
+
+	// RBACMiddleware normally injects the authenticated warehouse here (C-01
+	// handler check + C-02 usecase guards). The harness bypasses middleware, so
+	// seed warehouse 10 — every document these tests touch lives there.
+	c.Set("warehouse_id", int64(10))
+	ctx := authz.WithWarehouseID(c.Request().Context(), 10)
+	c.SetRequest(c.Request().WithContext(ctx))
 
 	// extract {id} from the path (empty for collection POST routes)
 	segments := strings.Split(path, "/")

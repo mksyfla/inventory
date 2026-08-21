@@ -41,8 +41,15 @@ func (h *TransferHandler) CreateTransfer(c echo.Context) error {
 		}
 	}
 
+	// C-01: the SOURCE warehouse (body warehouse_id) must be the authenticated
+	// warehouse; the destination is a separate, intentionally different scope.
+	whID, ok := warehouseIDFromCtx(c)
+	if !ok || req.WarehouseID != whID {
+		return warehouseMismatch(c)
+	}
+
 	in := transferuc.CreateTransferInput{
-		WarehouseID:     req.WarehouseID,
+		WarehouseID:     whID,
 		DestWarehouseID: req.DestWarehouseID,
 		IdempotencyKey:  req.IdempotencyKey,
 		Notes:           req.Notes,

@@ -8,6 +8,7 @@ import (
 
 	"inventory/internal/domain/document"
 	"inventory/internal/pkg/apperr"
+	"inventory/internal/pkg/authz"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -37,6 +38,11 @@ type PickingListItem struct {
 func (u *OutboundUsecase) PickingList(ctx context.Context, id int64) ([]PickingListItem, error) {
 	doc, _, err := u.docs.GetByID(ctx, id)
 	if err != nil {
+		return nil, err
+	}
+	// C-02: picking data is warehouse-scoped — never reveal another warehouse's
+	// allocations (C-04).
+	if err := authz.AssertDocInWarehouse(ctx, doc.WarehouseID); err != nil {
 		return nil, err
 	}
 	if doc.DocType != document.DocTypeDO {
@@ -95,6 +101,10 @@ func (u *OutboundUsecase) Pick(ctx context.Context, id int64, in PickInput) erro
 	}
 	doc, lines, err := u.docs.GetByID(ctx, id)
 	if err != nil {
+		return err
+	}
+	// C-02: the caller's warehouse must own the document before confirming picks.
+	if err := authz.AssertDocInWarehouse(ctx, doc.WarehouseID); err != nil {
 		return err
 	}
 	if doc.DocType != document.DocTypeDO {

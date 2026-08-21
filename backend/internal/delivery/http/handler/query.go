@@ -28,32 +28,39 @@ func NewQueryHandler(uc *queryuc.ReadUsecase) *QueryHandler {
 	return &QueryHandler{uc: uc}
 }
 
-// warehouseCode returns the active warehouse code: always prioritizes the
-// mandatory X-Warehouse-Id header verified by RBAC middleware.
+// warehouseCode returns the active warehouse code. C-04: the value set by RBAC
+// middleware (from the validated X-Warehouse-Id header) is authoritative — a
+// client-supplied ?warehouse_code= query param can never override it.
 func warehouseCode(c echo.Context) string {
-	headerCode := c.Request().Header.Get("X-Warehouse-Id")
-	if headerCode != "" {
-		return headerCode
-	}
 	if ctxCode, ok := c.Get("warehouse_code").(string); ok && ctxCode != "" {
 		return ctxCode
 	}
-	return c.QueryParam("warehouse_code")
+	// Fallback only for direct handler invocations that bypass middleware.
+	return c.Request().Header.Get("X-Warehouse-Id")
 }
 
 // ListDocuments handles GET /api/v1/documents.
 func (h *QueryHandler) ListDocuments(c echo.Context) error {
+	// C-04: the filter defaults to the authenticated warehouse. A client
+	// ?warehouse_id= may only repeat that same value (narrow-only) — it can
+	// never widen to other warehouses, and omitting it must never mean "all".
+	whID, ok := warehouseIDFromCtx(c)
+	if !ok {
+		return response.Error(c, http.StatusForbidden, "ERR_WAREHOUSE_MISMATCH",
+			"warehouse scope is required to list documents", nil, reqID(c))
+	}
+
 	f := query.DocumentFilter{
 		DocType:     c.QueryParam("doc_type"),
 		Status:      c.QueryParam("status"),
 		Limit:       queryDefaultLimit,
-		WarehouseID: 0,
+		WarehouseID: whID,
 	}
 
 	if whStr := c.QueryParam("warehouse_id"); whStr != "" {
 		id, err := strconv.ParseInt(whStr, 10, 64)
-		if err != nil || id < 0 {
-			return queryValidationError(c, "warehouse_id", "must be a non-negative integer")
+		if err != nil || id != whID {
+			return warehouseMismatch(c)
 		}
 		f.WarehouseID = id
 	}
@@ -81,15 +88,16 @@ func (h *QueryHandler) GetDocumentDetail(c echo.Context) error {
 	if !ok {
 		return nil
 	}
-	doc, err := h.uc.GetDocumentDetail(c.Request().Context(), id)
+	// C-03: the warehouse predicate is pushed into the SQL lookup. When the
+	// middleware has not established a warehouse scope, fail closed with 404 so
+	// the endpoint never confirms a document's existence.
+	whID, ok := warehouseIDFromCtx(c)
+	if !ok {
+		return response.Error(c, http.StatusNotFound, "ERR_NOT_FOUND", "Document not found", nil, reqID(c))
+	}
+	doc, err := h.uc.GetDocumentDetail(c.Request().Context(), id, whID)
 	if err != nil {
 		return writeUsecaseError(c, err, "Document not found")
-	}
-
-	// C-03 IDOR protection: verify document warehouse against caller's warehouse header
-	headerWh := c.Request().Header.Get("X-Warehouse-Id")
-	if headerWh != "" && doc.WarehouseCode != headerWh && doc.DestWarehouseCode != headerWh {
-		return response.Error(c, http.StatusNotFound, "ERR_NOT_FOUND", "Document not found", nil, reqID(c))
 	}
 
 	return response.Success(c, http.StatusOK, doc, nil)
@@ -105,15 +113,15 @@ func (h *QueryHandler) GetCountDocumentDetail(c echo.Context) error {
 	if !ok {
 		return nil
 	}
+	// C-03: same warehouse-scoped lookup as GetDocumentDetail; fail closed 404.
+	whID, ok := warehouseIDFromCtx(c)
+	if !ok {
+		return response.Error(c, http.StatusNotFound, "ERR_NOT_FOUND", "Count session not found", nil, reqID(c))
+	}
 	blind := c.QueryParam("blind") == "1" || c.QueryParam("blind") == "true"
-	doc, err := h.uc.GetCountDocumentDetail(c.Request().Context(), id, blind)
+	doc, err := h.uc.GetCountDocumentDetail(c.Request().Context(), id, whID, blind)
 	if err != nil {
 		return writeUsecaseError(c, err, "Count session not found")
-	}
-
-	headerWh := c.Request().Header.Get("X-Warehouse-Id")
-	if headerWh != "" && doc.WarehouseCode != headerWh {
-		return response.Error(c, http.StatusNotFound, "ERR_NOT_FOUND", "Count session not found", nil, reqID(c))
 	}
 
 	return response.Success(c, http.StatusOK, doc, nil)

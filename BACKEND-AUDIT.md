@@ -13,7 +13,7 @@ The architecture is genuinely good. Clean layering (`domain` → `usecase` → `
 
 The problems are concentrated in one place: **authorization is enforced on a request header that the data layer never uses.**
 
-The `X-Warehouse-Id` header is checked against the caller's JWT claims by `RBACMiddleware` — correctly. But every handler downstream then takes the warehouse from the **request body** or a **query parameter**, and no usecase ever re-checks it. The header and the body aren't even the same type (the header carries a warehouse *code*, the body carries a numeric *id*), so they were never going to reconcile. The result is that the entire access-control model is decorative: it validates a value, then discards it and acts on a different attacker-controlled value.
+The `X-Warehouse-Id` header is checked against the caller's JWT claims by `RBACMiddleware` — correctly. But every handler downstream then takes the warehouse from the **request body** or a **query parameter**, and no usecase ever re-checks it. The header and the body aren't even the same type (the header carries a warehouse _code_, the body carries a numeric _id_), so they were never going to reconcile. The result is that the entire access-control model is decorative: it validates a value, then discards it and acts on a different attacker-controlled value.
 
 The repo's own `vapt.md` already identifies part of this as SEC-02 (read-side IDOR). It is broader than documented — it extends to **writes and to stock-posting approvals**, which is the difference between an information disclosure and an inventory-integrity compromise.
 
@@ -25,9 +25,51 @@ Separately: **there is no multi-tenancy.** Zero occurrences of `tenant`, `org_id
 
 ---
 
+## 0.5 Fix status (2026-08-20)
+
+All findings in the agreed scope (Critical + High + Medium, excluding the
+multi-tenancy / infra roadmap items H-01, H-05, H-09, M-07, M-08) have been
+addressed. The FE↔BE contract — DTO field names, payload shapes, route paths,
+headers — was preserved throughout; every change is server-side.
+
+| Finding | Status | What was done |
+| --- | --- | --- |
+| C-01 | ✅ Fixed | Warehouse resolved once per request from the JWT-scoped `X-Warehouse-Id`; body `warehouse_id` is validated against the authenticated warehouse on every create |
+| C-02 | ✅ Fixed | `AssertDocInWarehouse` on approve / ship / post / receive / transfer paths |
+| C-03 | ✅ Fixed | Document-detail endpoints assert the document's warehouse before returning it |
+| C-04 | ✅ Fixed | Query params are narrow-only; the enforced header is authoritative |
+| C-05 | ✅ Fixed | AES key must come from env; known dev key rejected in production (`config/config.go`) |
+| C-06 | ✅ Fixed | Config hard-fails on missing / known-default secrets, in every env |
+| C-07 | ✅ Fixed | Public registration is env-gated: works in `development`, 403 in `staging`/`production` |
+| H-02 | ✅ Fixed | Fixed-window rate limiter; fail-closed on auth; trusted-proxy IP extractor; per-(IP,username) login budget |
+| H-03 | ✅ Fixed | Access-token JTI denylist in Redis, checked by middleware; populated on logout |
+| H-04 | ✅ Fixed | Status transitions are compare-and-set (`TransitionDocumentStatus :execrows`); loser rolls back stock posting |
+| H-06 | ✅ Fixed | `DB_POOL_MAX`/`DB_POOL_MIN`/lifetimes are wired into the pgx pool |
+| H-07 | ✅ Fixed | Graceful shutdown with drain window (`cmd/api/main.go`) |
+| H-08 | ✅ Fixed | Server-side `LIMIT 1000` on unbounded `:many` list queries |
+| H-10 | ✅ Fixed | Deterministic lock ordering in allocation (sort by item/balance id before locking) |
+| H-11 | ✅ Fixed | Dummy-Argon2 verification on unknown usernames + Argon2 concurrency cap (memory-budget-derived semaphore, 503 on saturation) |
+| H-12 | ✅ Fixed | DB trigger `aud.log_document_status_change` audits every `doc.documents` status transition inside the same transaction (commit or rollback together) |
+| M-01 | 🟡 Partial | `IdempotencyFilter` is wired on the protected group (UUIDv4 validation) and creates dedupe via the UNIQUE `idempotency_key`; transitions are replay-safe via H-04 CAS. Redis response-caching on replay is a UX enhancement, not a security gap — deferred |
+| M-02 | ✅ Fixed | `clearAuthCookies` expires both cookie names across both paths; `Refresh`/`Logout` accept the cookie (verified) |
+| M-03 | ✅ Fixed | Replaying a consumed refresh token revokes the whole `refresh:<userID>:*` family |
+| M-04 | ✅ Fixed | `rbacMW` panics at startup if the enforcer is nil outside `test` (verified) |
+| M-05 | ✅ Fixed | Redis client wired with username/password/DB/pool/timeouts from config |
+| M-06 | ✅ Fixed | Migration `000013` adds `(warehouse_id, doc_type, status, doc_date DESC)` + FK indexes |
+| M-09 | ✅ Fixed | `/metrics` and Swagger/OpenAPI are not registered in `production` (metrics middleware still runs) |
+| M-10 | ✅ Fixed | Compose flagged development-only; loopback bindings; resource limits; log rotation; secrets required from env |
+| M-11 | ✅ Fixed | Decrypt failure returns a redacted placeholder (`***`) and logs at ERROR instead of leaking ciphertext |
+| M-12 | ✅ Fixed | Root `.gitignore` ignores `*.exe` and `.env`; no binary tracked (verified) |
+| M-13 | ✅ Fixed | Request-scoped `ContextTimeout` (25s) on the protected group cancels the request context so pgx queries don't outlive the client |
+| M-14 | 🟡 Accepted | Seeded demo credentials remain dev-only per `SECURITY.md`; forcing a first-login password change was deferred because it changes the login contract (FE↔BE constraint). Startup guard in `config.go` rejects known secrets in production |
+| H-01, H-05, H-09, M-07, M-08 | ⛔ Deferred | Multi-tenancy, Casbin pgx adapter, N+1 rewrite, partitioning, scheduler HA — roadmap (Section 6) |
+
+---
+
 ## 1. Critical findings
 
 ### C-01 — Cross-warehouse write escalation via request body
+
 `internal/delivery/http/handler/{receipt,outbound,transfer,counting,item}.go`
 
 Every create handler reads the warehouse from the body:
@@ -39,7 +81,7 @@ in := inbound.CreateInput{
 }
 ```
 
-The usecase only confirms the warehouse *exists*:
+The usecase only confirms the warehouse _exists_:
 
 ```go
 wh, err := u.warehouses.GetWarehouseByID(ctx, in.WarehouseID)  // existence, not authorization
@@ -49,7 +91,7 @@ wh, err := u.warehouses.GetWarehouseByID(ctx, in.WarehouseID)  // existence, not
 
 Affects `POST /receipts`, `/requests`, `/deliveries`, `/transfers`, `/counts`, `/adjustments`, `/locations`.
 
-**Fix.** Resolve the warehouse once in middleware, put the resolved numeric ID in the request context, and make it the *only* source. Delete `warehouse_id` from every request DTO — a field the client shouldn't control shouldn't be in the contract.
+**Fix.** Resolve the warehouse once in middleware, put the resolved numeric ID in the request context, and make it the _only_ source. Delete `warehouse_id` from every request DTO — a field the client shouldn't control shouldn't be in the contract.
 
 ```go
 // middleware, after the assignment check
@@ -63,6 +105,7 @@ in := inbound.CreateInput{ WarehouseID: warehouseIDFromCtx(c), ... }
 ---
 
 ### C-02 — Cross-warehouse approval and stock posting
+
 `internal/usecase/inbound/receipt.go:257` and equivalents in `outbound`, `transfer`, `counting`
 
 ```go
@@ -75,7 +118,7 @@ func (u *ReceiptUsecase) Approve(ctx context.Context, id, approverID int64) erro
 
 The maker-checker rule is enforced. Warehouse ownership is not.
 
-**Exploit.** Any user holding `grn.approve` in *their own* warehouse can approve a GRN belonging to *any* warehouse — which posts real stock movements into a warehouse they have no relationship with. Same shape on `/deliveries/:id/ship`, `/counts/:id/post`, `/transfers/:id/receive`.
+**Exploit.** Any user holding `grn.approve` in _their own_ warehouse can approve a GRN belonging to _any_ warehouse — which posts real stock movements into a warehouse they have no relationship with. Same shape on `/deliveries/:id/ship`, `/counts/:id/post`, `/transfers/:id/receive`.
 
 This is the most damaging finding: it's not read-only, it mutates the ledger, and `stock_movements` is append-only by design, so the damage isn't cleanly reversible.
 
@@ -92,6 +135,7 @@ func (u *ReceiptUsecase) Approve(ctx context.Context, id, approverID int64) erro
 ---
 
 ### C-03 — IDOR on document detail
+
 `internal/delivery/http/handler/query.go:73`
 
 ```go
@@ -107,6 +151,7 @@ Any authenticated user with `stock.read` in any single warehouse can enumerate `
 ---
 
 ### C-04 — Query parameters override the enforced header
+
 `internal/delivery/http/handler/query.go:32-54`
 
 ```go
@@ -125,13 +170,14 @@ f := query.DocumentFilter{ ..., WarehouseID: 0 }        // 0 == all warehouses
 if whStr := c.QueryParam("warehouse_id"); whStr != "" { ... }
 ```
 
-Two bypasses in one function. `?warehouse_code=WH99` overrides the header the middleware just validated. And **omitting `warehouse_id` entirely defaults to `0`, which means no filter** — so the *default* behaviour of `GET /api/v1/documents` is to return documents from every warehouse.
+Two bypasses in one function. `?warehouse_code=WH99` overrides the header the middleware just validated. And **omitting `warehouse_id` entirely defaults to `0`, which means no filter** — so the _default_ behaviour of `GET /api/v1/documents` is to return documents from every warehouse.
 
-**Fix.** Query params may *narrow* within the authorized warehouse; they must never widen. Default must be the context warehouse, never `0`. If a genuine cross-warehouse view is needed (regional manager), model it as an explicit permission and intersect the requested set with `claims.Warehouses`.
+**Fix.** Query params may _narrow_ within the authorized warehouse; they must never widen. Default must be the context warehouse, never `0`. If a genuine cross-warehouse view is needed (regional manager), model it as an explicit permission and intersect the requested set with `claims.Warehouses`.
 
 ---
 
 ### C-05 — Hardcoded AES-256 key for PII encryption
+
 `internal/usecase/item/item_usecase.go:17`
 
 ```go
@@ -151,6 +197,7 @@ gcm.Seal(nonce, nonce, plaintext, []byte(fmt.Sprintf("partner:%d", partnerID)))
 ---
 
 ### C-06 — Default JWT secret, and a production guard that doesn't guard
+
 `internal/config/config.go`
 
 ```go
@@ -171,6 +218,7 @@ Three issues. The DB check can never fire, because `getEnv` returns a non-empty 
 ---
 
 ### C-07 — Public self-registration grants a real warehouse role
+
 `cmd/api/main.go:150-190`, `router.go` (`POST /api/v1/auth/register` is unauthenticated)
 
 ```go
@@ -181,7 +229,7 @@ txQueries.AssignUserRole(ctx, ...)
 
 Anyone who can reach the API creates an account that is immediately authorized to create requests in `WH01`. Rate-limited to 10/15min per IP — which limits the rate, not the outcome.
 
-Combined with C-01/C-02, a self-registered anonymous user reaches a role that can then act against *other* warehouses.
+Combined with C-01/C-02, a self-registered anonymous user reaches a role that can then act against _other_ warehouses.
 
 **Fix.** For an enterprise WMS, remove public registration entirely; users are provisioned by an admin or via SSO/SCIM. If self-service is required, register into a pending state with no role until approved.
 
@@ -190,11 +238,13 @@ Combined with C-01/C-02, a self-registered anonymous user reaches a role that ca
 ## 2. High findings
 
 ### H-01 — No multi-tenancy exists
+
 Zero occurrences of `tenant`, `org_id`, `company_id`, `organization` across all `.go` and `.sql`. Every table is globally scoped; the only isolation dimension is `warehouse_id`, and per C-01–C-04 that dimension is not enforced in the data layer.
 
 This is a single-tenant application. Treating warehouses as tenants is possible but is a schema and enforcement project, not a config change. See §6.
 
 ### H-02 — Rate limiter: permanent lockout, fail-open, spoofable, non-atomic
+
 `internal/delivery/http/middleware/rate_limit.go`
 
 ```go
@@ -208,23 +258,25 @@ if count > maxReqs { ... 429 }
 
 Four distinct problems:
 
-1. **Permanent lockout.** Re-arming the TTL on every request means the counter only expires after `window` of *complete silence*. A client that keeps retrying keeps pushing the expiry out and stays blocked forever. `SECURITY.md` claims this design prevents permanent lockout — it is precisely what causes it. Under high traffic a busy legitimate client that trips 100 req/min never recovers.
+1. **Permanent lockout.** Re-arming the TTL on every request means the counter only expires after `window` of _complete silence_. A client that keeps retrying keeps pushing the expiry out and stays blocked forever. `SECURITY.md` claims this design prevents permanent lockout — it is precisely what causes it. Under high traffic a busy legitimate client that trips 100 req/min never recovers.
 2. **Fail-open on Redis error.** A Redis outage disables login brute-force protection entirely.
 3. **`c.RealIP()` is spoofable.** Echo trusts `X-Forwarded-For` unless `e.IPExtractor` is configured with a trusted-proxy list. It isn't. An attacker rotates the header and gets unlimited login attempts.
 4. **Non-atomic** `INCR` + `EXPIRE` (two round trips), and `context.Background()` instead of the request context, so no cancellation.
 
-**Fix.** One Lua script (or `INCR` + `EXPIRE NX`) for a true fixed window, or a sliding window over a sorted set. Fail *closed* on auth endpoints, open elsewhere. Configure `e.IPExtractor = echo.ExtractIPFromXFFHeader(echo.TrustLinkLocal(false), echo.TrustPrivateNet(true))`. Emit `X-RateLimit-*` headers. Key login limits on `(IP, username)` as well as IP.
+**Fix.** One Lua script (or `INCR` + `EXPIRE NX`) for a true fixed window, or a sliding window over a sorted set. Fail _closed_ on auth endpoints, open elsewhere. Configure `e.IPExtractor = echo.ExtractIPFromXFFHeader(echo.TrustLinkLocal(false), echo.TrustPrivateNet(true))`. Emit `X-RateLimit-*` headers. Key login limits on `(IP, username)` as well as IP.
 
 Also: the comments say 5/15min for login; the code says 25.
 
 ### H-03 — Access tokens cannot be revoked
-`middleware/auth.go` parses and trusts the token. There is no JTI denylist check. `Logout` only deletes the *refresh* JTI. `roles` and `warehouses` are baked into the access token at issue time.
+
+`middleware/auth.go` parses and trusts the token. There is no JTI denylist check. `Logout` only deletes the _refresh_ JTI. `roles` and `warehouses` are baked into the access token at issue time.
 
 So for up to 15 minutes after logout, deactivation, role revocation, or warehouse un-assignment, the old token keeps working with the old privileges. For an enterprise system with SoD requirements, a 15-minute window on "revoke this user's access to WH02 immediately" is not acceptable.
 
 **Fix.** Redis denylist keyed on access-token JTI, checked in middleware (one `EXISTS`, ~0.2ms); populate on logout/deactivation. Or a per-user `token_version` counter in the claims, bumped on any privilege change. Fail closed if Redis is unavailable on this path.
 
 ### H-04 — Double-approve race double-posts stock
+
 `internal/usecase/inbound/receipt.go:257` + `db/queries` → `UpdateDocumentStatus`
 
 ```go
@@ -260,6 +312,7 @@ if n == 0 { return apperr.New("ERR_CONFLICT", "document status changed concurren
 Move `GetByID` inside the transaction with `SELECT ... FOR UPDATE`.
 
 ### H-05 — Casbin policies are frozen at startup
+
 `cmd/api/main.go:230-260`; `internal/usecase/admin/admin_usecase.go` contains no enforcer reference at all.
 
 Policies are loaded from `sec.role_permissions × master.warehouses` once during boot. The admin API can create and update roles — and those writes never reach the in-memory enforcer. **Revoking a permission has no effect until every replica restarts.** Under multiple replicas, different pods enforce different policy sets.
@@ -276,9 +329,10 @@ for _, rp := range rolePerms {
 
 50 roles × 200 permissions × 500 warehouses = 5M policy tuples in RAM per replica, rebuilt on every boot. This does not scale to a tenant-per-warehouse model.
 
-**Fix.** Use Casbin's `pgx` adapter with `SyncedEnforcer` + `EnableAutoNotifyWatcher` (Redis watcher) so policy writes propagate to all replicas within milliseconds. Restructure the model so the domain is a *pattern* rather than an enumerated row — `keyMatch`-style domain matching, or a `g2` grouping of warehouses into domains — so policy count is O(roles × permissions), independent of warehouse count.
+**Fix.** Use Casbin's `pgx` adapter with `SyncedEnforcer` + `EnableAutoNotifyWatcher` (Redis watcher) so policy writes propagate to all replicas within milliseconds. Restructure the model so the domain is a _pattern_ rather than an enumerated row — `keyMatch`-style domain matching, or a `g2` grouping of warehouses into domains — so policy count is O(roles × permissions), independent of warehouse count.
 
 ### H-06 — `DB_POOL_MAX` is loaded and then ignored
+
 `cmd/api/main.go:73`
 
 ```go
@@ -302,6 +356,7 @@ pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 Add a startup log of the effective values. Note `MaxConns × replicas` must stay under Postgres `max_connections`; at high replica counts put PgBouncer in transaction mode in front.
 
 ### H-07 — No graceful shutdown
+
 `cmd/api/main.go` ends with a blocking `router.StartServer(srv)` and no signal handling. `defer pool.Close()` and `defer asynqClient.Close()` never execute. On every deploy, rolling restart, or pod eviction, in-flight requests are cut mid-transaction.
 
 **Fix.**
@@ -318,9 +373,10 @@ defer cancel()
 _ = srv.Shutdown(shutdownCtx)
 ```
 
-Also flip `/readyz` to unhealthy *before* shutdown begins so the load balancer drains first.
+Also flip `/readyz` to unhealthy _before_ shutdown begins so the load balancer drains first.
 
 ### H-08 — Unbounded list endpoints
+
 `init.sql.go` — `listItems`, `listPartners`, `listLocations`, `listWarehouses`, `listRoles`, `listPermissions`, `listCategories`, `listSettings` have **no `LIMIT`**.
 
 ```sql
@@ -339,6 +395,7 @@ The codebase already has a well-built keyset `pagination` package — used by ex
 **Fix.** Mandatory `LIMIT` with a server-side maximum on every `:many` query. Extend the existing keyset cursor to all list endpoints; avoid `OFFSET` for deep pages.
 
 ### H-09 — N+1 queries inside open transactions
+
 Two hot paths, both holding row locks while doing per-item round trips.
 
 `repository/postgres/stock.go:94` — `GetBalancesForUpdate` loops per key:
@@ -384,11 +441,13 @@ FOR UPDATE;
 Accumulate allocations and flush with one multi-row `INSERT` and one `UPDATE ... FROM unnest(...)`.
 
 ### H-10 — Deadlock risk in allocation
+
 `posting.go` sorts balance keys deterministically before locking, with a comment explaining why. `allocate.go` does not — it locks candidates in request-line order. Two concurrent allocations whose lines reference overlapping items in different orders will deadlock.
 
 **Fix.** Sort `items` by `ItemID` before the loop, and add `ORDER BY` to `LockAllocationCandidates`. Better: pre-collect all candidate balance IDs, sort globally, lock once.
 
 ### H-11 — Login: timing oracle and Argon2 memory DoS
+
 `handler/auth.go:96`
 
 ```go
@@ -406,6 +465,7 @@ Second issue: Argon2id at 64MB with no concurrency cap. 200 concurrent logins = 
 **Fix.** Always run a verification against a fixed dummy hash when the user isn't found. Gate password hashing behind a weighted semaphore (`golang.org/x/sync/semaphore`) sized from available memory, returning 503 when saturated. Add per-account lockout with exponential backoff on top of the IP limit.
 
 ### H-12 — Audit trail covers admin CRUD only
+
 `InsertAuditLog` is called from `admin_usecase.go` (user/role/settings) and one transfer-discrepancy event. It is **not** called for GRN approval, delivery shipment, stock posting, count posting, adjustments, or allocation overrides — the operations that change inventory value. Login/logout aren't audited either (acknowledged as backlog in `SECURITY.md`).
 
 For a WMS with maker-checker and SoD requirements, "who moved this stock and when" is the core audit question, and it isn't answered.
@@ -416,7 +476,7 @@ For a WMS with maker-checker and SoD requirements, "who moved this stock and whe
 
 ## 3. Medium findings
 
-**M-01 — Idempotency middleware is dead code.** `middleware/idempotency.go` defines `IdempotencyFilter()`; it is never registered in `router.go`. Idempotency relies on the `documents.idempotency_key` UNIQUE column, is *optional* (only if the client sends a key), and covers creates only. `POST /receipts/:id/approve`, `/ship`, `/post` have no replay protection at all — a client retry after a gateway timeout double-posts stock. Combine with H-04 and this is a live inventory-integrity risk. Fix: require `Idempotency-Key` on all state-changing POSTs; cache `(key → status, body)` in Redis; return the cached response on replay.
+**M-01 — Idempotency middleware is dead code.** `middleware/idempotency.go` defines `IdempotencyFilter()`; it is never registered in `router.go`. Idempotency relies on the `documents.idempotency_key` UNIQUE column, is _optional_ (only if the client sends a key), and covers creates only. `POST /receipts/:id/approve`, `/ship`, `/post` have no replay protection at all — a client retry after a gateway timeout double-posts stock. Combine with H-04 and this is a live inventory-integrity risk. Fix: require `Idempotency-Key` on all state-changing POSTs; cache `(key → status, body)` in Redis; return the cached response on replay.
 
 **M-02 — Refresh cookie survives logout.** `setAuthCookies` writes the refresh cookie with `Path: "/api/v1/auth"`; `clearAuthCookies` expires both with `Path: "/"`. Cookie identity includes path, so the refresh cookie is never cleared and persists in the browser for 7 days. Related: `Refresh` and `Logout` read the token only from the JSON body (`dto.RefreshRequest`, `validate:"required"`) and never from the cookie — so the cookie flow the code sets up is unusable end to end.
 
@@ -437,7 +497,7 @@ Convenient for tests, dangerous in production: a nil enforcer yields a fully-fun
 
 **M-07 — Partitioning has no partitions.** `stock_movements` is `PARTITION BY RANGE (moved_at)` but migration 000001 creates only `stock_movements_default`. Every row lands in the default partition, so partition pruning never happens and detaching old data requires rewriting the default. A `partition.maintain` job is registered in the worker but the migration ships no monthly partitions. Fix: pre-create rolling monthly partitions; verify the maintenance job actually creates ahead of time; consider `pg_partman`.
 
-**M-08 — Worker scheduler duplicates under replication.** `cmd/worker/main.go` calls `scheduler.Start()` unconditionally. asynq's scheduler has no leader election, so N worker replicas enqueue N copies of every cron job — N expiry alert batches, N reorder calculations, N ledger reconciliations. Fix: split the scheduler into its own single-replica deployment, or add a Redis leader lock. Separately, `Location: nil` means UTC, but the comment says local server time — cron jobs will fire at the wrong wall-clock hour for WIB. And the queue weights `{"default": 10, "critical": 5}` give *lower* priority to critical.
+**M-08 — Worker scheduler duplicates under replication.** `cmd/worker/main.go` calls `scheduler.Start()` unconditionally. asynq's scheduler has no leader election, so N worker replicas enqueue N copies of every cron job — N expiry alert batches, N reorder calculations, N ledger reconciliations. Fix: split the scheduler into its own single-replica deployment, or add a Redis leader lock. Separately, `Location: nil` means UTC, but the comment says local server time — cron jobs will fire at the wrong wall-clock hour for WIB. And the queue weights `{"default": 10, "critical": 5}` give _lower_ priority to critical.
 
 **M-09 — `/metrics` and Swagger UI are public.** `e.GET("/metrics", ...)` and `registerOpenAPI(e, v1)` sit outside the auth group. Prometheus metrics expose route inventory, traffic volume, error rates, and DB pool state; the OpenAPI spec hands an attacker the full API surface. Fix: bind `/metrics` to an internal port or require auth; gate Swagger on non-production.
 
@@ -467,14 +527,14 @@ The codebase is disciplined overall — consistent error wrapping via `apperr`, 
 
 **Documentation contradicts code in several places.** This matters more than usual because `SECURITY.md` is written as an assurance artifact:
 
-| Claim | Reality |
-|---|---|
-| `SECURITY.md` A04: "window rate-limit di-refresh tiap request sehingga tidak ada lockout permanen" | Re-arming on every request is what *causes* permanent lockout (H-02) |
-| `SECURITY.md` A07: "pesan login generik (tanpa enumerasi)" | Message is generic; timing is not (H-11) |
-| `SECURITY.md` A01: warehouse membership check "cegah eskalasi lintas gudang" | The check is real but the value is discarded downstream (C-01–C-04) |
-| `rate_limit.go`: "login 5/15 mnt" | Code says 25 |
-| `redis.go`: `IncrBy` "sets TTL only on creation" | It sets no TTL at all |
-| `worker/main.go`: `Location: nil` "timezone lokal server" | asynq treats nil as UTC |
+| Claim                                                                                              | Reality                                                              |
+| -------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| `SECURITY.md` A04: "window rate-limit di-refresh tiap request sehingga tidak ada lockout permanen" | Re-arming on every request is what _causes_ permanent lockout (H-02) |
+| `SECURITY.md` A07: "pesan login generik (tanpa enumerasi)"                                         | Message is generic; timing is not (H-11)                             |
+| `SECURITY.md` A01: warehouse membership check "cegah eskalasi lintas gudang"                       | The check is real but the value is discarded downstream (C-01–C-04)  |
+| `rate_limit.go`: "login 5/15 mnt"                                                                  | Code says 25                                                         |
+| `redis.go`: `IncrBy` "sets TTL only on creation"                                                   | It sets no TTL at all                                                |
+| `worker/main.go`: `Location: nil` "timezone lokal server"                                          | asynq treats nil as UTC                                              |
 
 Fix the code where the doc describes the right behaviour; fix the doc where the code is right. A security document that overstates coverage is worse than no document — it stops people looking.
 
@@ -507,17 +567,20 @@ Worth stating explicitly, because it's what makes the rest fixable:
 ## 6. Roadmap to enterprise multi-tenant, high traffic
 
 ### Phase 0 — Stop the bleeding (1–2 weeks)
+
 Close C-01 through C-07. Concretely: resolve warehouse in middleware into request context; delete `warehouse_id` from all request DTOs; add `AssertDocInWarehouse` to every usecase that loads a document by ID; make query params narrow-only; secrets from env with hard-fail; remove public registration. Add integration tests that assert 403/404 for every cross-warehouse access path — one test per endpoint, driven by a table, so new endpoints can't regress silently.
 
 ### Phase 1 — Correctness under concurrency (1–2 weeks)
+
 H-04 (status CAS), M-01 (idempotency on all state-changing POSTs), H-10 (lock ordering in allocation), H-12 (audit rows in-transaction). These are what stand between you and a stock ledger you can't reconcile.
 
 ### Phase 2 — Introduce tenancy (3–5 weeks)
+
 The decision to make first: **shared schema with a `tenant_id` column, or schema-per-tenant.** For a WMS with a moderate tenant count (tens to low hundreds) and strict isolation expectations, schema-per-tenant is defensible and gives hard isolation with simple per-tenant restore. Beyond that, shared-schema with Postgres Row-Level Security scales better operationally.
 
 If shared schema:
 
-1. `tenant_id BIGINT NOT NULL` on every business table; `warehouse_id` becomes a scope *within* a tenant.
+1. `tenant_id BIGINT NOT NULL` on every business table; `warehouse_id` becomes a scope _within_ a tenant.
 2. Every unique constraint becomes tenant-scoped: `UNIQUE (tenant_id, doc_no)`, `UNIQUE (tenant_id, sku)`. Global uniques are the classic multi-tenant migration bug.
 3. Every index leads with `tenant_id`.
 4. **Enforce with RLS, not application code** — this is the lesson from C-01 through C-04. A forgotten `WHERE` clause becomes a non-event:
@@ -536,47 +599,49 @@ Set `app.tenant_id` on connection acquisition via `pgxpool.Config.AfterAcquire` 
 7. Per-tenant rate limits and connection quotas so one tenant can't starve the rest.
 
 ### Phase 3 — Scale-out (2–4 weeks)
+
 H-06 (pool config + PgBouncer transaction mode), H-07 (graceful shutdown + readiness draining), H-05 (Casbin pgx adapter + Redis watcher + non-cartesian policy model), H-08 (pagination everywhere), H-09 (set-based queries), M-08 (singleton scheduler), M-07 (real partitions), M-13 (request timeouts). Wire OpenTelemetry — the dependencies are already there.
 
 ### Phase 4 — Enterprise controls (ongoing)
+
 SSO/OIDC with SCIM provisioning (which retires C-07 permanently); MFA for approver roles; H-03 (revocable access tokens); KMS-backed key management with rotation (C-05); complete audit coverage with tamper-evident storage; per-tenant data export and deletion for UU PDP; `govulncheck` and Trivy in CI; load testing at target concurrency before, not after.
 
 ---
 
 ## Appendix — Findings index
 
-| ID | Severity | Finding | Primary location |
-|---|---|---|---|
-| C-01 | Critical | Cross-warehouse write via body `warehouse_id` | `handler/{receipt,outbound,transfer,counting,item}.go` |
-| C-02 | Critical | Cross-warehouse approve / stock post | `usecase/inbound/receipt.go:257` + peers |
-| C-03 | Critical | IDOR on document detail | `handler/query.go:73` |
-| C-04 | Critical | Query params override enforced header | `handler/query.go:32-54` |
-| C-05 | Critical | Hardcoded AES-256 key for PII | `usecase/item/item_usecase.go:17` |
-| C-06 | Critical | Default JWT secret; dead prod guard | `config/config.go` |
-| C-07 | Critical | Public registration grants WH01 role | `cmd/api/main.go:150` |
-| H-01 | High | No multi-tenancy exists | codebase-wide |
-| H-02 | High | Rate limiter: lockout, fail-open, spoofable | `middleware/rate_limit.go` |
-| H-03 | High | Access tokens not revocable | `middleware/auth.go` |
-| H-04 | High | Double-approve race double-posts stock | `usecase/*/`, `UpdateDocumentStatus` |
-| H-05 | High | Casbin policies frozen; cartesian blowup | `cmd/api/main.go:230`, `pkg/auth/rbac.go` |
-| H-06 | High | `DB_POOL_MAX` ignored | `cmd/api/main.go:73` |
-| H-07 | High | No graceful shutdown | `cmd/api/main.go` |
-| H-08 | High | Unbounded list endpoints | `init.sql.go`, `handler/item.go` |
-| H-09 | High | N+1 inside transactions | `stock.go:94`, `allocate.go:108` |
-| H-10 | High | Deadlock risk in allocation | `usecase/outbound/allocate.go` |
-| H-11 | High | Login timing oracle; Argon2 DoS | `handler/auth.go:96` |
-| H-12 | High | Audit trail covers admin CRUD only | `usecase/*/` |
-| M-01 | Medium | Idempotency middleware unwired | `middleware/idempotency.go` |
-| M-02 | Medium | Refresh cookie survives logout | `handler/auth.go` |
-| M-03 | Medium | No refresh reuse detection | `handler/auth.go` |
-| M-04 | Medium | Authorization fails open if enforcer nil | `router.go` |
-| M-05 | Medium | Redis unconfigured (auth/TLS/pool) | `pkg/redis/redis.go` |
-| M-06 | Medium | No index on `documents.warehouse_id`; unindexed FKs | `000001_init.up.sql` |
-| M-07 | Medium | Partitioning has only a default partition | `000001_init.up.sql:206` |
-| M-08 | Medium | Scheduler duplicates per worker replica | `cmd/worker/main.go` |
-| M-09 | Medium | `/metrics` and Swagger public | `router.go` |
-| M-10 | Medium | Compose secrets, no TLS, no limits | `docker-compose.yml` |
-| M-11 | Medium | Decrypt failure returns ciphertext | `usecase/item/item_usecase.go:365` |
-| M-12 | Medium | 37MB `api.exe` committed; no root `.gitignore` | repo root |
-| M-13 | Medium | No request-scoped timeouts | `cmd/api/main.go` |
-| M-14 | Medium | Seeded default credentials in migrations | `000002`, `000003` |
+| ID   | Severity | Finding                                             | Primary location                                       | Status                      |
+| ---- | -------- | --------------------------------------------------- | ------------------------------------------------------ | --------------------------- |
+| C-01 | Critical | Cross-warehouse write via body `warehouse_id`       | `handler/{receipt,outbound,transfer,counting,item}.go` | ✅ Fixed                    |
+| C-02 | Critical | Cross-warehouse approve / stock post                | `usecase/inbound/receipt.go:257` + peers               | ✅ Fixed                    |
+| C-03 | Critical | IDOR on document detail                             | `handler/query.go:73`                                  | ✅ Fixed                    |
+| C-04 | Critical | Query params override enforced header               | `handler/query.go:32-54`                               | ✅ Fixed                    |
+| C-05 | Critical | Hardcoded AES-256 key for PII                       | `usecase/item/item_usecase.go:17`                      | ✅ Fixed                    |
+| C-06 | Critical | Default JWT secret; dead prod guard                 | `config/config.go`                                     | ✅ Fixed                    |
+| C-07 | Critical | Public registration grants WH01 role                | `cmd/api/main.go:150`                                  | ✅ Fixed (env-gated)         |
+| H-01 | High     | No multi-tenancy exists                             | codebase-wide                                          | ⛔ Deferred (roadmap)         |
+| H-02 | High     | Rate limiter: lockout, fail-open, spoofable         | `middleware/rate_limit.go`                             | ✅ Fixed                    |
+| H-03 | High     | Access tokens not revocable                         | `middleware/auth.go`                                   | ✅ Fixed                    |
+| H-04 | High     | Double-approve race double-posts stock              | `usecase/*/`, `UpdateDocumentStatus`                   | ✅ Fixed                    |
+| H-05 | High     | Casbin policies frozen; cartesian blowup            | `cmd/api/main.go:230`, `pkg/auth/rbac.go`              | ⛔ Deferred (roadmap)         |
+| H-06 | High     | `DB_POOL_MAX` ignored                               | `cmd/api/main.go:73`                                   | ✅ Fixed                    |
+| H-07 | High     | No graceful shutdown                                | `cmd/api/main.go`                                      | ✅ Fixed                    |
+| H-08 | High     | Unbounded list endpoints                            | `init.sql.go`, `handler/item.go`                       | ✅ Fixed                    |
+| H-09 | High     | N+1 inside transactions                             | `stock.go:94`, `allocate.go:108`                       | ⛔ Deferred (roadmap)         |
+| H-10 | High     | Deadlock risk in allocation                         | `usecase/outbound/allocate.go`                         | ✅ Fixed                    |
+| H-11 | High     | Login timing oracle; Argon2 DoS                     | `handler/auth.go:96`                                   | ✅ Fixed                    |
+| H-12 | High     | Audit trail covers admin CRUD only                  | `usecase/*/`                                           | ✅ Fixed                    |
+| M-01 | Medium   | Idempotency middleware unwired                      | `middleware/idempotency.go`                            | 🟡 Partial (see §0.5)        |
+| M-02 | Medium   | Refresh cookie survives logout                      | `handler/auth.go`                                      | ✅ Fixed                    |
+| M-03 | Medium   | No refresh reuse detection                          | `handler/auth.go`                                      | ✅ Fixed                    |
+| M-04 | Medium   | Authorization fails open if enforcer nil            | `router.go`                                            | ✅ Fixed                    |
+| M-05 | Medium   | Redis unconfigured (auth/TLS/pool)                  | `pkg/redis/redis.go`                                   | ✅ Fixed                    |
+| M-06 | Medium   | No index on `documents.warehouse_id`; unindexed FKs | `000001_init.up.sql`                                   | ✅ Fixed                    |
+| M-07 | Medium   | Partitioning has only a default partition           | `000001_init.up.sql:206`                               | ⛔ Deferred (roadmap)         |
+| M-08 | Medium   | Scheduler duplicates per worker replica             | `cmd/worker/main.go`                                   | ⛔ Deferred (roadmap)         |
+| M-09 | Medium   | `/metrics` and Swagger public                       | `router.go`                                            | ✅ Fixed                    |
+| M-10 | Medium   | Compose secrets, no TLS, no limits                  | `docker-compose.yml`                                   | ✅ Fixed (dev-only banner)  |
+| M-11 | Medium   | Decrypt failure returns ciphertext                  | `usecase/item/item_usecase.go:365`                     | ✅ Fixed                    |
+| M-12 | Medium   | 37MB `api.exe` committed; no root `.gitignore`      | repo root                                              | ✅ Fixed                    |
+| M-13 | Medium   | No request-scoped timeouts                          | `cmd/api/main.go`                                      | ✅ Fixed                    |
+| M-14 | Medium   | Seeded default credentials in migrations            | `000002`, `000003`                                     | 🟡 Accepted (see §0.5)       |

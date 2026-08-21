@@ -2,7 +2,9 @@ package redisclient
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
+	"path"
 	"sync"
 	"time"
 
@@ -14,10 +16,40 @@ type Client struct {
 	rdb *redis.Client
 }
 
-// New creates a Redis client connected to the given address.
+// Options configures the go-redis connection (M-05). Zero values fall back to
+// the go-redis defaults (DialTimeout 5s, Read/Write 3s, MaxRetries 3), so a
+// caller that only sets Addr gets a sane, retrying client — not a bare socket.
+type Options struct {
+	Addr         string
+	Username     string
+	Password     string
+	DB           int
+	PoolSize     int
+	DialTimeout  time.Duration
+	ReadTimeout  time.Duration
+	WriteTimeout time.Duration
+	TLSConfig    *tls.Config
+}
+
+// New creates a Redis client connected to the given address with safe defaults.
 func New(addr string) *Client {
+	return NewWithOptions(Options{Addr: addr})
+}
+
+// NewWithOptions creates a Redis client with explicit connection options. Redis
+// holds refresh sessions and rate-limit state, so auth, pool sizing and timeouts
+// are wired here instead of a bare Addr (M-05).
+func NewWithOptions(o Options) *Client {
 	rdb := redis.NewClient(&redis.Options{
-		Addr: addr,
+		Addr:         o.Addr,
+		Username:     o.Username,
+		Password:     o.Password,
+		DB:           o.DB,
+		PoolSize:     o.PoolSize,
+		DialTimeout:  o.DialTimeout,
+		ReadTimeout:  o.ReadTimeout,
+		WriteTimeout: o.WriteTimeout,
+		TLSConfig:    o.TLSConfig,
 	})
 	return &Client{rdb: rdb}
 }
@@ -37,6 +69,25 @@ func (c *Client) Del(ctx context.Context, keys ...string) error {
 	return c.rdb.Del(ctx, keys...).Err()
 }
 
+// DelPattern deletes every key matching a glob pattern. Used for refresh-token
+// family revocation (M-03): when a consumed token is replayed, the whole
+// `refresh:<userID>:*` family is purged. Scans with the cursor API rather than
+// KEYS so the call is O(N) without blocking the event loop.
+func (c *Client) DelPattern(ctx context.Context, pattern string) error {
+	var keys []string
+	iter := c.rdb.Scan(ctx, 0, pattern, 0).Iterator()
+	for iter.Next(ctx) {
+		keys = append(keys, iter.Val())
+	}
+	if err := iter.Err(); err != nil {
+		return err
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	return c.rdb.Del(ctx, keys...).Err()
+}
+
 // Exists checks whether a key exists in Redis.
 func (c *Client) Exists(ctx context.Context, key string) (bool, error) {
 	n, err := c.rdb.Exists(ctx, key).Result()
@@ -51,6 +102,13 @@ func (c *Client) IncrBy(ctx context.Context, key string, val int64) (int64, erro
 // Expire sets an expiration on an existing key.
 func (c *Client) Expire(ctx context.Context, key string, ttl time.Duration) error {
 	return c.rdb.Expire(ctx, key, ttl).Err()
+}
+
+// ExpireNX sets an expiration on a key only when it currently has none. The
+// rate limiter uses this to arm a fixed-window TTL exactly once per window
+// (H-02): sustained traffic past the limit never re-arms the expiry.
+func (c *Client) ExpireNX(ctx context.Context, key string, ttl time.Duration) error {
+	return c.rdb.ExpireNX(ctx, key, ttl).Err()
 }
 
 // Ping checks the Redis connection health.
@@ -109,6 +167,17 @@ func (s *InMemoryStore) Del(_ context.Context, keys ...string) error {
 	return nil
 }
 
+func (s *InMemoryStore) DelPattern(_ context.Context, pattern string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for k := range s.data {
+		if ok, _ := path.Match(pattern, k); ok {
+			delete(s.data, k)
+		}
+	}
+	return nil
+}
+
 func (s *InMemoryStore) Exists(_ context.Context, key string) (bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -143,6 +212,24 @@ func (s *InMemoryStore) Expire(_ context.Context, key string, ttl time.Duration)
 	return nil
 }
 
+func (s *InMemoryStore) ExpireNX(_ context.Context, key string, ttl time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.data[key]
+	if !ok {
+		return nil
+	}
+	// Only arm the TTL when the key is not already expiring (fixed-window
+	// semantics: the counter resets `ttl` after its first request, not after
+	// its last).
+	if !e.expiry.IsZero() && time.Now().Before(e.expiry) {
+		return nil
+	}
+	e.expiry = time.Now().Add(ttl)
+	s.data[key] = e
+	return nil
+}
+
 func (s *InMemoryStore) Ping(_ context.Context) error { return nil }
 
 // KVStore is the interface both Client and InMemoryStore satisfy.
@@ -150,9 +237,15 @@ type KVStore interface {
 	Set(ctx context.Context, key, value string, ttl time.Duration) error
 	Get(ctx context.Context, key string) (string, error)
 	Del(ctx context.Context, keys ...string) error
+	// DelPattern deletes every key matching a glob pattern (M-03: refresh-token
+	// family revocation on reuse).
+	DelPattern(ctx context.Context, pattern string) error
 	Exists(ctx context.Context, key string) (bool, error)
 	IncrBy(ctx context.Context, key string, val int64) (int64, error)
 	Expire(ctx context.Context, key string, ttl time.Duration) error
+	// ExpireNX sets a TTL only when the key has no TTL yet (fixed-window rate
+	// limiting; H-02).
+	ExpireNX(ctx context.Context, key string, ttl time.Duration) error
 	Ping(ctx context.Context) error
 }
 

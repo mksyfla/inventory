@@ -24,12 +24,15 @@ func (u *ReadUsecase) ListDocuments(ctx context.Context, f query.DocumentFilter)
 	return u.repo.ListDocuments(ctx, f)
 }
 
-func (u *ReadUsecase) GetDocumentDetail(ctx context.Context, id int64) (*query.DocumentDetail, error) {
-	return u.repo.GetDocumentDetail(ctx, id)
+// GetDocumentDetail scopes the lookup to the caller's warehouse so a user with
+// stock.read in one warehouse cannot enumerate documents in others (C-03).
+func (u *ReadUsecase) GetDocumentDetail(ctx context.Context, id, warehouseID int64) (*query.DocumentDetail, error) {
+	return u.repo.GetDocumentDetail(ctx, id, warehouseID)
 }
 
-func (u *ReadUsecase) GetCountDocumentDetail(ctx context.Context, id int64, blind bool) (*query.CountDocumentDetail, error) {
-	return u.repo.GetCountDocumentDetail(ctx, id, blind)
+// GetCountDocumentDetail scopes the CNT lookup to the caller's warehouse (C-03).
+func (u *ReadUsecase) GetCountDocumentDetail(ctx context.Context, id, warehouseID int64, blind bool) (*query.CountDocumentDetail, error) {
+	return u.repo.GetCountDocumentDetail(ctx, id, warehouseID, blind)
 }
 
 func (u *ReadUsecase) ListStockBalances(ctx context.Context, f query.StockBalanceFilter) ([]query.StockBalance, error) {

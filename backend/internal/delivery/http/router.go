@@ -1,8 +1,10 @@
 package http
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"inventory/internal/delivery/http/handler"
 	"inventory/internal/delivery/http/middleware"
@@ -27,12 +29,16 @@ import (
 
 // RouterConfig holds dependencies required to configure the Echo router.
 type RouterConfig struct {
-	JWTSecret       string
-	AppEnv          string
-	Enforcer        *casbin.Enforcer
-	Store           redisclient.KVStore
-	LookupUser      handler.UserLookup
-	LookupUserByID  handler.UserLookupByID
+	JWTSecret  string
+	AppEnv     string
+	Enforcer   *casbin.Enforcer
+	Store      redisclient.KVStore
+	LookupUser handler.UserLookup
+	// ResolveWarehouseID maps an active warehouse code to its numeric ID so the
+	// RBAC middleware can publish the authoritative warehouse scope to handlers
+	// (C-01). Nil in unit tests only.
+	ResolveWarehouseID func(ctx context.Context, code string) (int64, error)
+	LookupUserByID     handler.UserLookupByID
 	ItemUsecase     *itemuc.Usecase
 	StockUsecase    *stockuc.PostingUsecase
 	ReceiptUsecase  *inbounduc.ReceiptUsecase
@@ -55,6 +61,20 @@ type RouterConfig struct {
 // NewRouter initializes an Echo instance, registers global middlewares, and configures route mapping.
 func NewRouter(cfg ...RouterConfig) *echo.Echo {
 	e := echo.New()
+
+	appEnv := ""
+	if len(cfg) > 0 {
+		appEnv = cfg[0].AppEnv
+	}
+
+	// H-02: resolve c.RealIP() from X-Forwarded-For only when the request
+	// arrived via a trusted (private/link-local) proxy. Without this, Echo
+	// trusts a client-supplied XFF header verbatim and an attacker can rotate
+	// it to defeat per-IP rate limiting.
+	e.IPExtractor = echo.ExtractIPFromXFFHeader(
+		echo.TrustLinkLocal(false),
+		echo.TrustPrivateNet(true),
+	)
 
 	// Register custom global error handler
 	e.HTTPErrorHandler = middleware.HTTPErrorHandler
@@ -82,10 +102,15 @@ func NewRouter(cfg ...RouterConfig) *echo.Echo {
 
 	// ─── Observability (FSD 10.5) ───────────────────────────────────────
 	// Prometheus metrics middleware runs before everything else so latency
-	// covers the full middleware chain.
+	// covers the full middleware chain. The /metrics endpoint itself is dev
+	// tooling (route inventory, traffic, error rates, DB pool state): it is
+	// only public outside production (M-09). Production should expose
+	// Prometheus on an internal port instead.
 	if len(cfg) > 0 && cfg[0].Metrics != nil {
 		e.Use(cfg[0].Metrics.Middleware())
-		e.GET("/metrics", echo.WrapHandler(cfg[0].Metrics.Handler()))
+		if appEnv != "production" {
+			e.GET("/metrics", echo.WrapHandler(cfg[0].Metrics.Handler()))
+		}
 	}
 
 	// Health probes (public, k8s-style): /healthz liveness, /readyz
@@ -122,10 +147,24 @@ func NewRouter(cfg ...RouterConfig) *echo.Echo {
 		auth.POST("/refresh", authHandler.Refresh, echoMiddleware.BodyLimit("1M"))
 		auth.POST("/logout", authHandler.Logout, echoMiddleware.BodyLimit("1M"))
 
-		// ─── Protected endpoints (JWT + rate limit + idempotency) ──────────
-		protected := v1.Group("", middleware.JWTAuthMiddleware(c.JWTSecret))
+		// ─── Protected endpoints (JWT + revocation + rate limit + idempotency) ─
+		// H-03: RevokedTokenMiddleware denylists access-token JTIs (populated on
+		// logout), so a logged-out token stops working immediately instead of for
+		// its remaining 15 minutes.
+		protected := v1.Group("",
+			middleware.JWTAuthMiddleware(c.JWTSecret),
+			middleware.RevokedTokenMiddleware(store),
+		)
 		protected.Use(middleware.UserRateLimiter(store))
 		protected.Use(middleware.IdempotencyFilter())
+		// M-13: cancel the request context on slow handlers so a query is not
+		// left running against the pool after the client gave up. The request
+		// context is threaded into pgx by every usecase, so the cancellation
+		// propagates. Set below the server WriteTimeout (30s) and comfortably
+		// above any single Argon2/import operation.
+		protected.Use(echoMiddleware.ContextTimeoutWithConfig(echoMiddleware.ContextTimeoutConfig{
+			Timeout: 25 * time.Second,
+		}))
 
 		// ─── Master Data endpoints (Phase 3) ────────────────────────────
 		if c.ItemUsecase != nil {
@@ -270,8 +309,12 @@ func NewRouter(cfg ...RouterConfig) *echo.Echo {
 		}
 	}
 
-	// ─── OpenAPI spec + embedded Swagger UI (public) ───────────────────
-	registerOpenAPI(e, v1)
+	// ─── OpenAPI spec + embedded Swagger UI ────────────────────────────
+	// Dev tooling only: the spec hands an attacker the full API surface, so it
+	// is not registered in production (M-09).
+	if appEnv != "production" {
+		registerOpenAPI(e, v1)
+	}
 
 	return e
 }
@@ -285,5 +328,5 @@ func rbacMW(c RouterConfig, resource, action string) []echo.MiddlewareFunc {
 		}
 		return nil
 	}
-	return []echo.MiddlewareFunc{middleware.RBACMiddleware(c.Enforcer, resource, action)}
+	return []echo.MiddlewareFunc{middleware.RBACMiddleware(c.Enforcer, resource, action, c.ResolveWarehouseID)}
 }

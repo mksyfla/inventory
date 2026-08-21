@@ -10,6 +10,7 @@ import (
 	"inventory/internal/domain/document"
 	"inventory/internal/domain/stock"
 	"inventory/internal/pkg/apperr"
+	"inventory/internal/pkg/authz"
 	"inventory/internal/pkg/docnum"
 	stockuc "inventory/internal/usecase/stock"
 
@@ -21,6 +22,7 @@ type countDocStore interface {
 	GetByID(ctx context.Context, id int64) (*document.Document, []*document.DocumentLine, error)
 	Create(ctx context.Context, doc *document.Document, lines []*document.DocumentLine) error
 	UpdateStatus(ctx context.Context, id int64, status document.Status, approvedBy *int64) error
+	TransitionStatus(ctx context.Context, id int64, expected, next document.Status, approvedBy *int64) (bool, error)
 	GetByIDempotencyKey(ctx context.Context, key string) (*document.Document, error)
 	NextSequence(ctx context.Context, docType, period string) (int64, error)
 	CreateCountLines(ctx context.Context, lines []*document.CountLine) error
@@ -221,6 +223,10 @@ func (u *CountingUsecase) InputCountLines(ctx context.Context, id int64, in Inpu
 	if err != nil {
 		return nil, err
 	}
+	// C-02: the caller's warehouse must own the count session before recording lines.
+	if err := authz.AssertDocInWarehouse(ctx, doc.WarehouseID); err != nil {
+		return nil, err
+	}
 	if doc.DocType != document.DocTypeCount {
 		return nil, apperr.New("ERR_NOT_FOUND", "count session not found")
 	}
@@ -289,6 +295,11 @@ type PostCountResult struct {
 func (u *CountingUsecase) PostCount(ctx context.Context, id int64, in PostCountInput) (*PostCountResult, error) {
 	doc, _, err := u.docs.GetByID(ctx, id)
 	if err != nil {
+		return nil, err
+	}
+	// C-02: the caller's warehouse must own the count session before posting
+	// its adjustment movements to stock.
+	if err := authz.AssertDocInWarehouse(ctx, doc.WarehouseID); err != nil {
 		return nil, err
 	}
 	if doc.DocType != document.DocTypeCount {
@@ -371,8 +382,15 @@ func (u *CountingUsecase) PostCount(ctx context.Context, id int64, in PostCountI
 		return nil, err
 	}
 	err = u.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
-		if err := u.docs.UpdateStatus(txCtx, id, document.StatusApproved, &in.ApproverID); err != nil {
+		// H-04: only one posting may approve+complete the session — a
+		// concurrent post that already moved the doc wins; the loser rolls
+		// back so its adjustment movements never hit the ledger.
+		ok, err := u.docs.TransitionStatus(txCtx, id, doc.Status, document.StatusApproved, &in.ApproverID)
+		if err != nil {
 			return err
+		}
+		if !ok {
+			return apperr.New("ERR_CONFLICT", "count session was already posted")
 		}
 		if needsManager {
 			if err := u.docs.UpdateManagerApproval(txCtx, id, *in.ManagerApproverID); err != nil {

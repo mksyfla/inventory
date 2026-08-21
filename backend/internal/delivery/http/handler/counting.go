@@ -42,8 +42,14 @@ func (h *CountingHandler) CreateCount(c echo.Context) error {
 		}
 	}
 
+	// C-01: body warehouse_id must match the authenticated warehouse.
+	whID, ok := warehouseIDFromCtx(c)
+	if !ok || req.WarehouseID != whID {
+		return warehouseMismatch(c)
+	}
+
 	doc, lines, err := h.uc.CreateCount(c.Request().Context(), countinguc.CreateCountInput{
-		WarehouseID:    req.WarehouseID,
+		WarehouseID:    whID,
 		Zone:           req.Zone,
 		ItemIDs:        req.ItemIDs,
 		IdempotencyKey: req.IdempotencyKey,
@@ -130,8 +136,14 @@ func (h *CountingHandler) CreateAdjustment(c echo.Context) error {
 		}
 	}
 
+	// C-01: body warehouse_id must match the authenticated warehouse.
+	whID, ok := warehouseIDFromCtx(c)
+	if !ok || req.WarehouseID != whID {
+		return warehouseMismatch(c)
+	}
+
 	in := countinguc.CreateAdjustmentInput{
-		WarehouseID:    req.WarehouseID,
+		WarehouseID:    whID,
 		ReasonCode:     req.ReasonCode,
 		Notes:          req.Notes,
 		IdempotencyKey: req.IdempotencyKey,

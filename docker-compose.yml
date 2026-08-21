@@ -1,29 +1,45 @@
+# ⚠️ DEVELOPMENT-ONLY COMPOSE (M-10)
+# This file is a local development harness — APP_ENV=development, no TLS
+# between services, secrets interpolated from .env with known dev defaults.
+# It is NOT the production deployment path. Production requires: TLS-terminated
+# Postgres/Redis (or rediss://), an internal metrics port, a separate seed
+# target, and resource sizing reviewed for the actual workload.
+
 services:
     # PostgreSQL Database
     db:
         container_name: inventory_postgres
         environment:
-            - POSTGRES_USER=user
-            - POSTGRES_PASSWORD=password
-            - POSTGRES_DB=dbname
+            - POSTGRES_USER=${POSTGRES_USER:-user}
+            - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-password}
+            - POSTGRES_DB=${POSTGRES_DB:-dbname}
         image: postgres:16
+        # M-10: bound to the loopback interface only — the DB is for the compose
+        # network and host-side debugging, not for the LAN.
         ports:
-            - 5432:5432
+            - 127.0.0.1:5432:5432
         volumes:
             - postgres_data:/var/lib/postgresql/data
         healthcheck:
-            test: ["CMD-SHELL", "pg_isready -U user -d dbname"]
+            test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-user} -d ${POSTGRES_DB:-dbname}"]
             interval: 5s
             timeout: 3s
             retries: 10
             start_period: 10s
+        deploy:
+            resources:
+                limits:
+                    memory: 512M
+                    cpus: "1.0"
 
     # Redis Cache
     redis:
         container_name: inventory_redis
         image: redis:8
+        # M-10: not published to the host at all — only the compose network
+        # needs it. Local `go run` flows may use their own instance.
         ports:
-            - 6379:6379
+            - "127.0.0.1:6379:6379"
         volumes:
             - redis_data:/data
         healthcheck:
@@ -31,6 +47,11 @@ services:
             interval: 5s
             timeout: 3s
             retries: 10
+        deploy:
+            resources:
+                limits:
+                    memory: 256M
+                    cpus: "0.5"
 
     # One-shot migrator: menunggu Postgres naik, lalu menerapkan
     # db/migrations/*.up.sql secara berurutan (idempotent — skrip
@@ -43,9 +64,9 @@ services:
                 condition: service_healthy
         environment:
             - PGHOST=db
-            - PGUSER=user
-            - PGPASSWORD=password
-            - PGDATABASE=dbname
+            - PGUSER=${POSTGRES_USER:-user}
+            - PGPASSWORD=${POSTGRES_PASSWORD:-password}
+            - PGDATABASE=${POSTGRES_DB:-dbname}
         volumes:
             - ./backend/db/migrations:/migrations:ro
             - ./backend/db/migrate.sh:/migrate.sh:ro
@@ -70,12 +91,17 @@ services:
         environment:
             - APP_ENV=development
             - PORT=8080
-            - DB_CONN_STRING=postgres://user:password@db:5432/dbname?sslmode=disable
+            - DB_CONN_STRING=postgres://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD:-password}@db:5432/${POSTGRES_DB:-dbname}?sslmode=disable
             - REDIS_ADDR=redis:6379
-            - JWT_SECRET=dev-only-jwt-secret-change-me-0123456789
+            - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+            - JWT_SECRET=${JWT_SECRET:?set JWT_SECRET in .env (see .env.example)}
+            - AES_ENCRYPTION_KEY=${AES_ENCRYPTION_KEY:?set AES_ENCRYPTION_KEY in .env (see .env.example)}
             - DB_POOL_MAX=10
+            - DB_POOL_MIN=2
         ports:
-            - 8080:8080
+            # Loopback only — the frontend reaches the API over the compose
+            # network; the host binding is for curl/debug, not for the LAN.
+            - 127.0.0.1:8080:8080
         healthcheck:
             test:
                 [
@@ -86,6 +112,16 @@ services:
             timeout: 3s
             retries: 3
             start_period: 15s
+        logging:
+            driver: json-file
+            options:
+                max-size: "10m"
+                max-file: "3"
+        deploy:
+            resources:
+                limits:
+                    memory: 512M
+                    cpus: "1.0"
 
     # Asynq worker (job planner: expiry alert, reorder calc, dll)
     # Dibangun dari Dockerfile yang sama dengan `api` (layer-cache membuat
@@ -116,11 +152,23 @@ services:
                 condition: service_completed_successfully
         environment:
             - APP_ENV=development
-            - DB_CONN_STRING=postgres://user:password@db:5432/dbname?sslmode=disable
+            - DB_CONN_STRING=postgres://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD:-password}@db:5432/${POSTGRES_DB:-dbname}?sslmode=disable
             - REDIS_ADDR=redis:6379
-            - JWT_SECRET=dev-only-jwt-secret-change-me-0123456789
+            - JWT_SECRET=${JWT_SECRET:?set JWT_SECRET in .env (see .env.example)}
+            - AES_ENCRYPTION_KEY=${AES_ENCRYPTION_KEY:?set AES_ENCRYPTION_KEY in .env (see .env.example)}
             - DB_POOL_MAX=10
+            - DB_POOL_MIN=2
         command: ["/app/worker"]
+        logging:
+            driver: json-file
+            options:
+                max-size: "10m"
+                max-file: "3"
+        deploy:
+            resources:
+                limits:
+                    memory: 512M
+                    cpus: "1.0"
 
     # Frontend SPA (React + Vite) — image produksi: nginx statik + proxy /api
     # ke service `api`. Bundle dibangun di build-stage Dockerfile (VITE_API_BASE_URL
@@ -140,6 +188,11 @@ services:
                 condition: service_healthy
         ports:
             - 5173:80
+        deploy:
+            resources:
+                limits:
+                    memory: 512M
+                    cpus: "1.0"
 
 volumes:
     postgres_data:
